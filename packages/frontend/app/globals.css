@@ -1,6 +1,25 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Inter Variable", Inter, Arial, Helvetica, sans-serif;
+  --color-border: rgb(var(--border));
+  --color-panel: rgb(var(--panel));
+  --color-ink: rgb(var(--ink));
+  --color-muted: rgb(var(--muted));
+  --color-accent: rgb(var(--accent));
+  --color-accent-strong: rgb(var(--accent-strong));
+  --color-accent-soft: rgb(var(--accent-soft));
+  --color-ok: rgb(var(--ok));
+  --color-ok-soft: rgb(var(--ok-soft));
+  --color-warn: rgb(var(--warn));
+  --color-warn-soft: rgb(var(--warn-soft));
+  --color-risk: rgb(var(--risk));
+  --color-risk-soft: rgb(var(--risk-soft));
+  --color-info: rgb(var(--info));
+  --color-info-soft: rgb(var(--info-soft));
+  --color-app: rgb(var(--app));
+  --shadow-soft: 0 10px 30px rgb(15 23 42 / 0.08);
+}
 
 :root {
   --border: 218 224 232;

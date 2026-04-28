@@ -18,7 +18,8 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
 - The state-service now exposes endpoints for company state, model routing state, cost records, and
   audit logs, but those endpoints still use in-memory stores.
 - PostgreSQL schema coverage has started in `packages/state-service/migrations/0001_initial.sql`.
-- A static Next.js dashboard exists with sample data, but it is not yet connected to backend APIs.
+- A static Next.js 16 / Tailwind CSS 4 dashboard exists with sample data, but it is not yet
+  connected to backend APIs.
 - `make PYTHON=.venv\Scripts\python.exe verify` passes locally on Windows.
 
 The product is therefore testable through code and APIs today. It is not yet visually meaningful
@@ -74,7 +75,8 @@ Done already:
 - Monorepo layout exists.
 - CI exists for backend and frontend.
 - Backend `make verify` passes when `PYTHON` points to the local Windows venv.
-- Frontend typecheck script exists.
+- Frontend scripts exist for lint, route type generation, TypeScript checking, and production build.
+- Frontend stack is on Next.js 16, React 19.2, Tailwind CSS 4, and ESLint flat config.
 
 Remaining:
 
@@ -86,6 +88,7 @@ Definition of done:
 
 - A fresh clone can run backend verification with one documented command per OS.
 - Frontend install/typecheck is documented and verified.
+- Frontend `npm run lint`, `npm run typecheck`, and `npm run build` pass locally.
 - README points to roadmap, quality gates, and local development.
 
 ### M1. Durable Company State
@@ -374,7 +377,9 @@ Use this map to know which test proves which layer.
 | State-service tests | Company state endpoints behave consistently. | `make PYTHON=.venv\Scripts\python.exe test-unit` |
 | Cross-service integration | Current goal -> world view -> memory -> runtime -> event slice works. | `make PYTHON=.venv\Scripts\python.exe test-integration` |
 | Full backend verification | Lint and all backend tests pass. | `make PYTHON=.venv\Scripts\python.exe verify` |
-| Frontend typecheck | Dashboard TypeScript remains valid. | `cd packages/frontend && npm run typecheck` |
+| Frontend lint | Dashboard code follows the Next.js ESLint flat config. | `cd packages/frontend && npm run lint` |
+| Frontend typecheck | Dashboard TypeScript and generated route types remain valid. | `cd packages/frontend && npm run typecheck` |
+| Frontend build | Next.js production build succeeds with Turbopack. | `cd packages/frontend && npm run build` |
 
 ## Decision Log To Keep Updated
 
