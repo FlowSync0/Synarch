@@ -19,6 +19,16 @@ export type ProjectRecord = {
   created_at: string;
 };
 
+export type EventRecord = {
+  id: string;
+  type: string;
+  source_agent_id?: string | null;
+  target?: string | null;
+  payload: Record<string, unknown>;
+  timestamp: string;
+  trace_id?: string | null;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -46,4 +56,11 @@ export async function listProjects(): Promise<ProjectRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<ProjectRecord[]>(response);
+}
+
+export async function listEvents(): Promise<EventRecord[]> {
+  const response = await fetch("/api/state-service/events", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<EventRecord[]>(response);
 }

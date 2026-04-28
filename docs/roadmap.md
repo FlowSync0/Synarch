@@ -18,14 +18,14 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
 - The state-service now exposes endpoints for company state, model routing state, cost records, and
   audit logs, but those endpoints still use in-memory stores.
 - PostgreSQL schema coverage has started in `packages/state-service/migrations/0001_initial.sql`.
-- A Next.js 16 / Tailwind CSS 4 dashboard exists. Projects, agents, and lifecycle approvals now
-  read backend APIs through TanStack Query and Next API proxies, with sample fallbacks when services
-  are offline.
+- A Next.js 16 / Tailwind CSS 4 dashboard exists. Projects, agents, lifecycle approvals, and
+  timeline events now read backend APIs through TanStack Query and Next API proxies, with sample
+  fallbacks when services are offline.
 - `make PYTHON=.venv\Scripts\python.exe verify` passes locally on Windows.
 
 The product is therefore testable through code, APIs, and the first live UI slices. It is not yet a
-complete live interface because timeline, cost, health, and goal submission flows are still mostly
-sample data or absent.
+complete live interface because cost, health, and goal submission flows are still mostly sample data
+or absent.
 
 ## Status Legend
 
@@ -39,7 +39,7 @@ sample data or absent.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface with live projects, live control-plane agents, live lifecycle approvals, and sample metrics/timeline. | No timeline/cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
+| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, and timeline events, plus sample metrics. | No cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope` and returns deterministic `RoutingDecision`. | Gateway does not yet create project/tasks/events across services. Routing is keyword-based only. | Submit goal -> persisted project/tasks -> event timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`. | No persistent agent workers, no model gateway, no real execution loop, no approvals. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
@@ -171,7 +171,8 @@ Progress:
   Query, with sample fallback when backend services are offline.
 - Done: frontend agent organization panel reads control-plane through the same live/fallback path.
 - Done: frontend project panel reads state-service through the same live/fallback path.
-- Next: connect timeline, costs, and service health to live APIs.
+- Done: frontend timeline panel reads state-service events through the same live/fallback path.
+- Next: connect costs and service health to live APIs.
 
 Definition of done:
 

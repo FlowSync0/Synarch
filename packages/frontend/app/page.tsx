@@ -4,6 +4,8 @@ import { prepareWithSegments, layoutWithLines } from "@chenglou/pretext";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import {
+  Activity,
+  AlertTriangle,
   ArrowUpRight,
   Check,
   ChevronRight,
@@ -11,16 +13,20 @@ import {
   Clock3,
   Code2,
   Command,
+  Database,
   FileText,
   GitBranch,
   Layers3,
   Menu,
   Network,
   Plus,
+  RadioTower,
   Search,
   Settings2,
+  ShieldCheck,
   UserRoundPlus,
   UserRoundX,
+  Workflow,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -32,7 +38,12 @@ import {
   type AgentDefinition,
   type AgentLifecycleRequest
 } from "../lib/control-plane-api";
-import { listProjects, type ProjectRecord } from "../lib/state-service-api";
+import {
+  listEvents,
+  listProjects,
+  type EventRecord,
+  type ProjectRecord
+} from "../lib/state-service-api";
 import {
   agents,
   approvals,
@@ -261,6 +272,16 @@ type ProjectViewModel = {
   source: "api" | "sample";
 };
 
+type TimelineViewModel = {
+  id: string;
+  time: string;
+  label: string;
+  target: string;
+  tone: Tone;
+  icon: typeof Activity;
+  source: "api" | "sample";
+};
+
 function formatLifecycleAge(createdAt: string): string {
   const timestamp = new Date(createdAt).getTime();
   if (Number.isNaN(timestamp)) {
@@ -404,8 +425,60 @@ function projectRow(project: ProjectRecord): ProjectViewModel {
   };
 }
 
+function eventTone(event: EventRecord): Tone {
+  if (event.type.includes("failed")) {
+    return "risk";
+  }
+  if (event.type.includes("blocked") || event.type.includes("requested")) {
+    return "warn";
+  }
+  if (event.type.includes("completed") || event.type.includes("created")) {
+    return "ok";
+  }
+  if (event.type.includes("approval")) {
+    return "accent";
+  }
+  return "info";
+}
+
+function eventIcon(event: EventRecord): typeof Activity {
+  if (event.type.startsWith("approval")) {
+    return ShieldCheck;
+  }
+  if (event.type.startsWith("project") || event.type.startsWith("task")) {
+    return Workflow;
+  }
+  if (event.type.startsWith("cost") || event.type.startsWith("model_call")) {
+    return RadioTower;
+  }
+  if (event.type.includes("failed") || event.type.includes("blocked")) {
+    return AlertTriangle;
+  }
+  if (event.type.startsWith("agent")) {
+    return UserRoundPlus;
+  }
+  return Database;
+}
+
+function eventRow(event: EventRecord): TimelineViewModel {
+  return {
+    id: event.id,
+    time: formatLifecycleAge(event.timestamp),
+    label: event.type,
+    target: event.target ?? event.source_agent_id ?? event.trace_id ?? "system",
+    tone: eventTone(event),
+    icon: eventIcon(event),
+    source: "api"
+  };
+}
+
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const eventsQuery = useQuery({
+    queryKey: ["events"],
+    queryFn: listEvents,
+    refetchInterval: 15_000
+  });
   const projectsQuery = useQuery({
     queryKey: ["projects"],
     queryFn: listProjects,
@@ -510,6 +583,39 @@ export default function DashboardPage() {
       : projectMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing roadmap projects";
+  const timelineRows = useMemo<TimelineViewModel[]>(() => {
+    if (eventsQuery.isSuccess) {
+      return [...eventsQuery.data]
+        .sort(
+          (left, right) =>
+            new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+        )
+        .map(eventRow)
+        .slice(0, 8);
+    }
+
+    return timeline.map((event) => ({
+      ...event,
+      id: `${event.time}-${event.label}`,
+      source: "sample" as const
+    }));
+  }, [eventsQuery.data, eventsQuery.isSuccess]);
+  const timelineMode = eventsQuery.isLoading
+    ? "syncing"
+    : eventsQuery.isError
+      ? "sample"
+      : "live";
+  const timelineModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "Sample fallback"
+  }[timelineMode];
+  const timelineModeDetail =
+    timelineMode === "live"
+      ? `${timelineRows.length} events from state-service`
+      : timelineMode === "syncing"
+        ? "Connecting to state-service"
+        : "State-service unavailable, showing sample timeline";
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -869,11 +975,25 @@ export default function DashboardPage() {
 
           <section className="rounded-md border border-border bg-panel">
             <SectionHeader eyebrow="Timeline" title="Signaux recents" action="Voir timeline" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{timelineModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[timelineMode]}`}
+              >
+                {timelineModeLabel}
+              </span>
+            </div>
             <div className="divide-y divide-border">
-              {timeline.map((event) => {
+              {timelineRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucun event disponible</p>
+                  <p className="mt-1 text-xs text-muted">Le state-service ne retourne aucun event.</p>
+                </article>
+              ) : null}
+              {timelineRows.map((event) => {
                 const Icon = event.icon;
                 return (
-                  <article key={`${event.time}-${event.label}`} className="flex gap-3 px-4 py-3">
+                  <article key={event.id} className="flex gap-3 px-4 py-3">
                     <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-md ring-1 ${toneSurface[event.tone]}`}>
                       <Icon size={16} />
                     </div>
