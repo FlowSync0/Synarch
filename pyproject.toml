@@ -8,8 +8,13 @@ pythonpath = [
   "packages/event-service",
   "packages/agent-runtime"
 ]
-testpaths = ["shared/models/tests", "packages"]
+testpaths = ["shared/models/tests", "packages", "tests"]
 addopts = "-q"
+markers = [
+  "contract: shared schema and serialization compatibility tests",
+  "integration: cross-service slice tests that verify layer boundaries",
+  "eval: behavioral evals for non-deterministic AI components"
+]
 
 [tool.ruff]
 target-version = "py312"

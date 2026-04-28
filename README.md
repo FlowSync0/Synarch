@@ -301,6 +301,15 @@ Services locaux :
 - Agent Runtime : `http://localhost:8050`
 - Frontend : `packages/frontend` puis `npm install && npm run dev`
 
+## Suivi de développement
+
+Le développement se fait par quality gates vérifiables : une capacité, un test, puis seulement la
+couche suivante. Voir `docs/development-quality-gates.md`.
+
+Commandes de base :
+- `make verify` : lint + tests backend.
+- `make test-integration` : scénario transverse actuel `goal -> agent result -> event`.
+
 ---
 
 ## Résumé en une phrase

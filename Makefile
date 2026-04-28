@@ -1,4 +1,4 @@
-.PHONY: install-backend test lint dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval lint verify dev-infra dev-backend
 
 PYTHON ?= python3
 
@@ -16,8 +16,19 @@ install-backend:
 test:
 	$(PYTHON) -m pytest
 
+test-unit:
+	$(PYTHON) -m pytest -m "not integration and not eval"
+
+test-integration:
+	$(PYTHON) -m pytest -m integration
+
+test-eval:
+	$(PYTHON) -m pytest -m eval
+
 lint:
 	$(PYTHON) -m ruff check .
+
+verify: lint test
 
 dev-infra:
 	docker compose up postgres redis nats otel-collector prometheus grafana
