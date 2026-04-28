@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synarch-models"
+version = "0.1.0"
+description = "Shared Pydantic contracts for the Synarch platform."
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.7,<3"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["synarch_models*"]
