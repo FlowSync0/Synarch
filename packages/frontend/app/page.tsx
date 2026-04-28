@@ -1,6 +1,7 @@
 "use client";
 
 import { prepareWithSegments, layoutWithLines } from "@chenglou/pretext";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import {
   ArrowUpRight,
@@ -13,10 +14,17 @@ import {
   Plus,
   Search,
   Settings2,
+  UserRoundPlus,
+  UserRoundX,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  decideAgentLifecycleRequest,
+  listAgentLifecycleRequests,
+  type AgentLifecycleRequest
+} from "../lib/control-plane-api";
 import {
   agents,
   approvals,
@@ -75,8 +83,15 @@ const projectStatusClass: Record<string, string> = {
 
 const approvalStatusClass: Record<string, string> = {
   requested: "bg-warn-soft text-warn ring-warn/15",
+  approved: "bg-info-soft text-info ring-info/15",
   applied: "bg-ok-soft text-ok ring-ok/15",
   rejected: "bg-risk-soft text-risk ring-risk/15"
+};
+
+const approvalModeClass: Record<string, string> = {
+  live: "bg-ok-soft text-ok ring-ok/15",
+  syncing: "bg-info-soft text-info ring-info/15",
+  sample: "bg-warn-soft text-warn ring-warn/15"
 };
 
 type BalancedTextProps = {
@@ -188,7 +203,91 @@ function ProgressBar({ value, tone = "accent" }: { value: number; tone?: Tone })
   );
 }
 
+type ApprovalViewModel = {
+  id: string;
+  title: string;
+  action: string;
+  requester: string;
+  division: string;
+  status: string;
+  age: string;
+  tone: Tone;
+  icon: typeof UserRoundPlus;
+  impact: string;
+  source: "api" | "sample";
+};
+
+function formatLifecycleAge(createdAt: string): string {
+  const timestamp = new Date(createdAt).getTime();
+  if (Number.isNaN(timestamp)) {
+    return "now";
+  }
+
+  const minutes = Math.max(0, Math.round((Date.now() - timestamp) / 60_000));
+  if (minutes < 1) {
+    return "now";
+  }
+  if (minutes < 60) {
+    return `${minutes} min`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) {
+    return `${hours} h`;
+  }
+
+  return `${Math.round(hours / 24)} d`;
+}
+
+function lifecycleTone(request: AgentLifecycleRequest): Tone {
+  if (request.status === "applied") {
+    return "ok";
+  }
+  if (request.status === "rejected") {
+    return "risk";
+  }
+  if (request.action === "deactivate_agent") {
+    return "warn";
+  }
+  return "accent";
+}
+
+function lifecycleIcon(request: AgentLifecycleRequest): typeof UserRoundPlus {
+  if (request.action === "deactivate_agent") {
+    return UserRoundX;
+  }
+  return UserRoundPlus;
+}
+
+function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel {
+  return {
+    id: request.id,
+    title: request.proposed_agent?.name ?? request.target_agent_id ?? request.id,
+    action: request.action,
+    requester: request.requested_by_id,
+    division: request.proposed_agent?.division ?? "Org",
+    status: request.status,
+    age: formatLifecycleAge(request.created_at),
+    tone: lifecycleTone(request),
+    icon: lifecycleIcon(request),
+    impact: request.reason,
+    source: "api"
+  };
+}
+
 export default function DashboardPage() {
+  const queryClient = useQueryClient();
+  const lifecycleQuery = useQuery({
+    queryKey: ["agent-lifecycle-requests"],
+    queryFn: listAgentLifecycleRequests,
+    refetchInterval: 15_000
+  });
+  const decisionMutation = useMutation({
+    mutationFn: decideAgentLifecycleRequest,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+    }
+  });
   const layerStats = useMemo(
     () => ({
       next: layers.filter((layer) => layer.status === "next").length,
@@ -197,6 +296,32 @@ export default function DashboardPage() {
     }),
     []
   );
+  const approvalRows = useMemo<ApprovalViewModel[]>(() => {
+    if (lifecycleQuery.isSuccess) {
+      return lifecycleQuery.data.map(lifecycleApprovalRow);
+    }
+
+    return approvals.map((approval) => ({
+      ...approval,
+      source: "sample" as const
+    }));
+  }, [lifecycleQuery.data, lifecycleQuery.isSuccess]);
+  const approvalMode = lifecycleQuery.isLoading
+    ? "syncing"
+    : lifecycleQuery.isError
+      ? "sample"
+      : "live";
+  const approvalModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "Sample fallback"
+  }[approvalMode];
+  const approvalModeDetail =
+    approvalMode === "live"
+      ? `${approvalRows.length} lifecycle records from control-plane`
+      : approvalMode === "syncing"
+        ? "Connecting to control-plane"
+        : "Control-plane unavailable, showing sample lifecycle records";
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -430,10 +555,27 @@ export default function DashboardPage() {
 
           <section className="rounded-md border border-border bg-panel">
             <SectionHeader eyebrow="Approvals" title="Lifecycle queue" action="Voir approvals" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{approvalModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${approvalModeClass[approvalMode]}`}
+              >
+                {approvalModeLabel}
+              </span>
+            </div>
             <div className="divide-y divide-border">
-              {approvals.map((approval) => {
+              {approvalRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucune demande lifecycle</p>
+                  <p className="mt-1 text-xs text-muted">La queue control-plane est vide.</p>
+                </article>
+              ) : null}
+              {approvalRows.map((approval) => {
                 const Icon = approval.icon;
-                const isPending = approval.status === "requested";
+                const isPending = approval.status === "requested" && approval.source === "api";
+                const isMutatingThisApproval =
+                  decisionMutation.isPending &&
+                  decisionMutation.variables?.requestId === approval.id;
                 return (
                   <article key={approval.id} className="px-4 py-3">
                     <div className="flex items-start gap-3">
@@ -466,7 +608,13 @@ export default function DashboardPage() {
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Approve ${approval.title}`}
                               title={`Approve ${approval.title}`}
-                              disabled={!isPending}
+                              disabled={!isPending || decisionMutation.isPending}
+                              onClick={() =>
+                                decisionMutation.mutate({
+                                  requestId: approval.id,
+                                  status: "approved"
+                                })
+                              }
                             >
                               <Check size={15} />
                             </button>
@@ -474,12 +622,21 @@ export default function DashboardPage() {
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Reject ${approval.title}`}
                               title={`Reject ${approval.title}`}
-                              disabled={!isPending}
+                              disabled={!isPending || decisionMutation.isPending}
+                              onClick={() =>
+                                decisionMutation.mutate({
+                                  requestId: approval.id,
+                                  status: "rejected"
+                                })
+                              }
                             >
                               <X size={15} />
                             </button>
                           </div>
                         </div>
+                        {isMutatingThisApproval ? (
+                          <p className="mt-2 text-xs font-medium text-accent">Decision pending...</p>
+                        ) : null}
                       </div>
                     </div>
                   </article>

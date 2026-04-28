@@ -2,6 +2,8 @@ import "./globals.css";
 import "@fontsource-variable/inter";
 import type { Metadata } from "next";
 
+import { Providers } from "./providers";
+
 export const metadata: Metadata = {
   title: "Synarch",
   description: "AI company control surface"
@@ -10,7 +12,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="fr">
-      <body>{children}</body>
+      <body>
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }
