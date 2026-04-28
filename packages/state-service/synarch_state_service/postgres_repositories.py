@@ -40,8 +40,16 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
     jsonb_columns: frozenset[str] = frozenset()
 
     def create(self, record_id: str, record: RecordT) -> RecordT:
-        data = record.model_dump(mode="python")
-        values = [self._adapt_value(column, data.get(column)) for column in self.columns]
+        python_data = record.model_dump(mode="python")
+        json_data = record.model_dump(mode="json")
+        values = [
+            self._adapt_value(
+                column,
+                python_data.get(column),
+                json_data.get(column),
+            )
+            for column in self.columns
+        ]
         query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
             sql.Identifier(self.table_name),
             self._column_list(self.columns),
@@ -90,10 +98,10 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
             records = connection.execute(query).fetchall()
         return [self.model.model_validate(record) for record in records]
 
-    def _adapt_value(self, column: str, value: Any) -> Any:
-        if column in self.jsonb_columns and value is not None:
-            return Jsonb(value)
-        return value
+    def _adapt_value(self, column: str, python_value: Any, json_value: Any) -> Any:
+        if column in self.jsonb_columns and python_value is not None:
+            return Jsonb(json_value)
+        return python_value
 
     @staticmethod
     def _column_list(columns: tuple[str, ...]) -> sql.Composed:

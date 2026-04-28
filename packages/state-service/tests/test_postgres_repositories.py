@@ -1,3 +1,6 @@
+from psycopg.types.json import Jsonb
+
+from synarch_models import AgentDefinition, AgentLifecycleRequest
 from synarch_state_service.postgres_repositories import (
     PostgresRecordRepository,
     normalize_postgres_dsn,
@@ -19,3 +22,38 @@ def test_postgres_repository_factory_builds_all_state_stores() -> None:
     assert isinstance(repositories.audit_logs, PostgresRecordRepository)
     assert repositories.projects.table_name == "projects"
     assert repositories.audit_logs.table_name == "audit_logs"
+
+
+def test_postgres_repository_adapts_jsonb_with_json_serializable_values() -> None:
+    proposed_agent = AgentDefinition(
+        id="agent-seed-review",
+        name="IA Seed Review",
+        role="Review proposed seed data",
+        division="admin-knowledge",
+        manager_id="agent-direction",
+    )
+    lifecycle_request = AgentLifecycleRequest(
+        action="create_agent",
+        requested_by_type="agent",
+        requested_by_id="agent-direction",
+        reason="Need a reviewer for seed data changes.",
+        proposed_agent=proposed_agent,
+    )
+    repository = PostgresRecordRepository(
+        "postgresql://synarch:synarch@localhost:5432/synarch",
+        "agent_lifecycle_requests",
+        AgentLifecycleRequest,
+        ("proposed_agent",),
+        frozenset({"proposed_agent"}),
+    )
+    python_data = lifecycle_request.model_dump(mode="python")
+    json_data = lifecycle_request.model_dump(mode="json")
+
+    adapted = repository._adapt_value(
+        "proposed_agent",
+        python_data["proposed_agent"],
+        json_data["proposed_agent"],
+    )
+
+    assert isinstance(adapted, Jsonb)
+    assert isinstance(adapted.obj["created_at"], str)
