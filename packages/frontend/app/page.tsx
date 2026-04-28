@@ -32,6 +32,7 @@ import {
   type AgentDefinition,
   type AgentLifecycleRequest
 } from "../lib/control-plane-api";
+import { listProjects, type ProjectRecord } from "../lib/state-service-api";
 import {
   agents,
   approvals,
@@ -85,7 +86,13 @@ const projectStatusClass: Record<string, string> = {
   next: "text-accent",
   later: "text-muted",
   done: "text-ok",
-  blocked: "text-risk"
+  blocked: "text-risk",
+  draft: "text-muted",
+  queued: "text-accent",
+  running: "text-info",
+  completed: "text-ok",
+  failed: "text-risk",
+  needs_review: "text-warn"
 };
 
 const approvalStatusClass: Record<string, string> = {
@@ -243,6 +250,17 @@ type AgentViewModel = {
   source: "api" | "sample";
 };
 
+type ProjectViewModel = {
+  id: string;
+  title: string;
+  owner: string;
+  status: string;
+  priority: string;
+  progress: number;
+  summary: string;
+  source: "api" | "sample";
+};
+
 function formatLifecycleAge(createdAt: string): string {
   const timestamp = new Date(createdAt).getTime();
   if (Number.isNaN(timestamp)) {
@@ -344,8 +362,55 @@ function agentRow(agent: AgentDefinition): AgentViewModel {
   };
 }
 
+function projectProgress(project: ProjectRecord): number {
+  const progressByStatus: Record<string, number> = {
+    draft: 8,
+    queued: 18,
+    running: 52,
+    needs_review: 68,
+    blocked: 64,
+    failed: 100,
+    completed: 100
+  };
+  return progressByStatus[project.status] ?? 15;
+}
+
+function projectProgressTone(status: string): Tone {
+  if (status === "completed") {
+    return "ok";
+  }
+  if (status === "blocked" || status === "failed") {
+    return "risk";
+  }
+  if (status === "needs_review") {
+    return "warn";
+  }
+  if (status === "running") {
+    return "info";
+  }
+  return "accent";
+}
+
+function projectRow(project: ProjectRecord): ProjectViewModel {
+  return {
+    id: project.id,
+    title: project.title,
+    owner: project.owner_agent_id,
+    status: project.status,
+    priority: project.priority,
+    progress: projectProgress(project),
+    summary: project.goal,
+    source: "api"
+  };
+}
+
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const projectsQuery = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+    refetchInterval: 30_000
+  });
   const agentsQuery = useQuery({
     queryKey: ["agents"],
     queryFn: listAgents,
@@ -418,6 +483,33 @@ export default function DashboardPage() {
       : agentMode === "syncing"
         ? "Connecting to control-plane"
         : "Control-plane unavailable, showing seeded agents";
+  const projectRows = useMemo<ProjectViewModel[]>(() => {
+    if (projectsQuery.isSuccess) {
+      return projectsQuery.data.map(projectRow);
+    }
+
+    return projects.map((project) => ({
+      ...project,
+      id: project.title,
+      source: "sample" as const
+    }));
+  }, [projectsQuery.data, projectsQuery.isSuccess]);
+  const projectMode = projectsQuery.isLoading
+    ? "syncing"
+    : projectsQuery.isError
+      ? "sample"
+      : "live";
+  const projectModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "Sample fallback"
+  }[projectMode];
+  const projectModeDetail =
+    projectMode === "live"
+      ? `${projectRows.length} projects from state-service`
+      : projectMode === "syncing"
+        ? "Connecting to state-service"
+        : "State-service unavailable, showing roadmap projects";
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -545,10 +637,24 @@ export default function DashboardPage() {
 
           <section className="rounded-md border border-border bg-panel">
             <SectionHeader eyebrow="Execution" title="Chantiers produit" action="Voir les projets" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{projectModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[projectMode]}`}
+              >
+                {projectModeLabel}
+              </span>
+            </div>
             <div className="divide-y divide-border">
-              {projects.map((project) => (
+              {projectRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucun projet disponible</p>
+                  <p className="mt-1 text-xs text-muted">Le state-service ne retourne aucun projet.</p>
+                </article>
+              ) : null}
+              {projectRows.map((project) => (
                 <article
-                  key={project.title}
+                  key={project.id}
                   className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_112px_150px]"
                 >
                   <div className="min-w-0">
@@ -570,7 +676,7 @@ export default function DashboardPage() {
                     <p className="mt-1 text-xs text-muted">roadmap</p>
                   </div>
                   <div className="space-y-2">
-                    <ProgressBar value={project.progress} tone={project.status === "next" ? "accent" : "info"} />
+                    <ProgressBar value={project.progress} tone={projectProgressTone(project.status)} />
                     <p className="text-right text-xs text-muted">{project.progress}%</p>
                   </div>
                 </article>

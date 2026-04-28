@@ -96,10 +96,12 @@ npm run dev
 
 The dashboard starts on `http://localhost:3000`.
 
-The frontend proxies control-plane calls through same-origin Next.js API routes. It uses
-`http://127.0.0.1:8010` by default. Override it when needed:
+The frontend proxies backend calls through same-origin Next.js API routes. It uses
+`http://127.0.0.1:8010` for control-plane and `http://127.0.0.1:8020` for state-service by default.
+Override them when needed:
 
 ```powershell
 $env:CONTROL_PLANE_URL = "http://127.0.0.1:8010"
+$env:STATE_SERVICE_URL = "http://127.0.0.1:8020"
 npm run dev
 ```
