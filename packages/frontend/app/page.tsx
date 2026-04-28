@@ -12,12 +12,14 @@ import {
   Menu,
   Plus,
   Search,
-  Settings2
+  Settings2,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   agents,
+  approvals,
   backlog,
   currentFocus,
   layers,
@@ -69,6 +71,12 @@ const projectStatusClass: Record<string, string> = {
   later: "text-muted",
   done: "text-ok",
   blocked: "text-risk"
+};
+
+const approvalStatusClass: Record<string, string> = {
+  requested: "bg-warn-soft text-warn ring-warn/15",
+  applied: "bg-ok-soft text-ok ring-ok/15",
+  rejected: "bg-risk-soft text-risk ring-risk/15"
 };
 
 type BalancedTextProps = {
@@ -413,6 +421,66 @@ export default function DashboardPage() {
                     <div className="mt-3 grid grid-cols-[1fr_40px] items-center gap-3">
                       <ProgressBar value={agent.load} tone="warn" />
                       <span className="text-right text-xs text-muted">{agent.load}%</span>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Approvals" title="Lifecycle queue" action="Voir approvals" />
+            <div className="divide-y divide-border">
+              {approvals.map((approval) => {
+                const Icon = approval.icon;
+                const isPending = approval.status === "requested";
+                return (
+                  <article key={approval.id} className="px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ring-1 ${toneSurface[approval.tone]}`}>
+                        <Icon size={18} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-semibold">{approval.title}</h3>
+                            <p className="mt-0.5 truncate text-xs text-muted">
+                              {approval.action} / {approval.division}
+                            </p>
+                          </div>
+                          <span
+                            className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${approvalStatusClass[approval.status]}`}
+                          >
+                            {approval.status}
+                          </span>
+                        </div>
+                        <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                          {approval.impact}
+                        </BalancedText>
+                        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                          <p className="min-w-0 truncate text-xs text-muted">
+                            {approval.requester} / {approval.age}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Approve ${approval.title}`}
+                              title={`Approve ${approval.title}`}
+                              disabled={!isPending}
+                            >
+                              <Check size={15} />
+                            </button>
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Reject ${approval.title}`}
+                              title={`Reject ${approval.title}`}
+                              disabled={!isPending}
+                            >
+                              <X size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </article>
                 );

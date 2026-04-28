@@ -8,13 +8,14 @@ import {
   Code2,
   Database,
   FileText,
-  Fingerprint,
   GitBranch,
   Network,
   PlugZap,
   RadioTower,
   ShieldCheck,
   Sparkles,
+  UserRoundPlus,
+  UserRoundX,
   Workflow
 } from "lucide-react";
 
@@ -24,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M1",
-    detail: "Durable Company State",
+    value: "M2",
+    detail: "Control Plane From State",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "12",
+    value: "35",
     detail: "passing",
     tone: "ok" as Tone
   },
@@ -41,22 +42,22 @@ export const overview = [
     tone: "info" as Tone
   },
   {
-    label: "Dette critique",
-    value: "Postgres",
-    detail: "state encore memoire",
+    label: "Approvals",
+    value: "3",
+    detail: "lifecycle queue",
     tone: "warn" as Tone
   }
 ];
 
 export const currentFocus = {
-  title: "Rendre Synarch durable avant l'autonomie",
+  title: "Faire passer les agents par une gouvernance lisible",
   body:
-    "Le prochain passage transforme le state-service en source canonique PostgreSQL, tout en gardant des repositories memoire rapides pour les tests. Les agents et le frontend viendront lire cet etat au lieu de porter leur propre verite.",
+    "Le state-service sait maintenant appliquer les demandes de creation ou desactivation d'agents apres decision humaine. Le control-plane expose cette file pour que l'interface devienne le poste de validation sans devenir source de verite.",
   checks: [
-    "Repository interface pour company state",
-    "Persistence Postgres avec restart survival",
-    "Audit et couts lisibles par trace_id",
-    "Gateway pret a creer de vrais projets"
+    "Lifecycle request cree un event approval.requested",
+    "Decision approuvee applique agent.created ou agent.deactivated",
+    "Agents inactifs bloques a l'assignation",
+    "Control-plane relaie queue, creation et decision"
   ]
 };
 
@@ -64,20 +65,20 @@ export const projects = [
   {
     title: "Durable Company State",
     owner: "State Service",
-    status: "next",
+    status: "partial",
     priority: "critical",
-    progress: 34,
+    progress: 72,
     summary:
-      "Brancher divisions, agents, projects, tasks, events, model policies, costs et audit logs sur une couche repository testable."
+      "Repositories memoire et PostgreSQL, migrations, seeds, audit automatique et lifecycle decisions appliquees."
   },
   {
     title: "Control Plane from State",
     owner: "Control Plane",
-    status: "partial",
+    status: "next",
     priority: "high",
-    progress: 22,
+    progress: 58,
     summary:
-      "Remplacer les seeds Python par des vues deterministes construites depuis l'etat canonique et les permissions."
+      "Lire agents, services, policies et lifecycle approvals depuis l'etat canonique expose par state-service."
   },
   {
     title: "Goal to Project Slice",
@@ -93,9 +94,9 @@ export const projects = [
     owner: "Frontend",
     status: "partial",
     priority: "medium",
-    progress: 18,
+    progress: 26,
     summary:
-      "Connecter le dashboard aux APIs pour afficher projets, agents, timeline, couts et validations sans devenir source de verite."
+      "Afficher roadmap, agents, signaux, risques et file d'approbation avant branchement API live."
   }
 ];
 
@@ -160,8 +161,8 @@ export const layers = [
     name: "Control Plane",
     status: "partial" as Status,
     icon: ShieldCheck,
-    summary: "LocalWorldView et permissions existent, mais les agents sont encore seedes.",
-    next: "Lire agents, services et policies depuis state-service."
+    summary: "LocalWorldView, services, policies et lifecycle queue passent par state-service.",
+    next: "Brancher approval queue frontend sur control-plane."
   },
   {
     id: "D",
@@ -176,8 +177,8 @@ export const layers = [
     name: "Project / Workflow",
     status: "next" as Status,
     icon: Database,
-    summary: "Contrats et endpoints existent. La persistance durable est le chantier actif.",
-    next: "Repositories Postgres et restart survival."
+    summary: "Contrats et endpoints existent. Les transitions de workflow restent a durcir.",
+    next: "Goal -> project -> tasks -> events persistants."
   },
   {
     id: "F",
@@ -216,16 +217,16 @@ export const layers = [
 export const timeline = [
   {
     time: "Maintenant",
-    label: "state.company.expanded",
-    target: "State Service",
-    icon: Database,
+    label: "lifecycle.applied",
+    target: "State + Control Plane",
+    icon: ShieldCheck,
     tone: "ok" as Tone
   },
   {
     time: "Suivant",
-    label: "repository.interface",
-    target: "In-memory + PostgreSQL",
-    icon: Fingerprint,
+    label: "approval.queue.ui",
+    target: "Frontend",
+    icon: UserRoundPlus,
     tone: "accent" as Tone
   },
   {
@@ -246,29 +247,68 @@ export const timeline = [
 
 export const backlog = [
   {
-    label: "M1.1",
-    title: "Repository interface",
-    done: false
-  },
-  {
-    label: "M1.2",
-    title: "PostgreSQL persistence",
-    done: false
-  },
-  {
-    label: "M1.3",
-    title: "Restart survival test",
-    done: false
-  },
-  {
-    label: "M0",
-    title: "Backend verify local",
+    label: "M2.1",
+    title: "Approval queue UI",
     done: true
   },
   {
-    label: "M0",
-    title: "Roadmap 9 couches",
+    label: "M2.2",
+    title: "TanStack Query API reads",
+    done: false
+  },
+  {
+    label: "M3.1",
+    title: "Goal creates project",
+    done: false
+  },
+  {
+    label: "M2",
+    title: "Lifecycle decisions",
     done: true
+  },
+  {
+    label: "M1",
+    title: "State repositories",
+    done: true
+  }
+];
+
+export const approvals = [
+  {
+    id: "lifecycle-create-finance-reviewer",
+    title: "IA Finance Reviewer",
+    action: "create_agent",
+    requester: "agent-direction",
+    division: "Finance",
+    status: "requested",
+    age: "12 min",
+    tone: "accent" as Tone,
+    icon: UserRoundPlus,
+    impact: "Ajoute un role de revue facture avant validation humaine des exceptions."
+  },
+  {
+    id: "lifecycle-deactivate-temporary-worker",
+    title: "IA Temporary Worker",
+    action: "deactivate_agent",
+    requester: "local-user",
+    division: "Dev",
+    status: "applied",
+    age: "38 min",
+    tone: "ok" as Tone,
+    icon: UserRoundX,
+    impact: "Retire un worker court terme de l'assignation des nouvelles taches."
+  },
+  {
+    id: "lifecycle-create-ops-extra",
+    title: "IA Ops Extra",
+    action: "create_agent",
+    requester: "agent-ops-sourcing",
+    division: "Ops",
+    status: "requested",
+    age: "1 h",
+    tone: "warn" as Tone,
+    icon: UserRoundPlus,
+    impact: "Propose une capacite RFQ additionnelle pour le flux sourcing."
   }
 ];
 
