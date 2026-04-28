@@ -117,7 +117,8 @@ Progress:
   through Psycopg 3.
 - Done: repository and API tests cover the in-memory and PostgreSQL factory paths, with `16` backend tests
   passing locally.
-- Next: add restart-survival tests against Docker PostgreSQL and formalize migration execution.
+- Done: opt-in PostgreSQL restart-survival test exists behind `SYNARCH_POSTGRES_TEST_URL`.
+- Next: run the restart-survival test against Docker PostgreSQL and formalize migration execution.
 
 Do not include yet:
 
