@@ -36,6 +36,57 @@ def test_project_then_task_flow() -> None:
     assert task_response.json()["project_id"] == project["id"]
 
 
+def test_state_change_with_actor_headers_writes_audit_log() -> None:
+    client = TestClient(app)
+    trace_id = "trace_actor_project_create"
+
+    project_response = client.post(
+        "/projects",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "title": "Audited project",
+            "goal": "Create a project and automatically capture the audit trail",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    audit_response = client.get("/audit-logs", params={"trace_id": trace_id})
+
+    assert audit_response.status_code == 200
+    audit = audit_response.json()[0]
+    assert audit["actor_id"] == "local-user"
+    assert audit["action"] == "project.created"
+    assert audit["target_type"] == "project"
+    assert audit["target_id"] == project["id"]
+
+
+def test_state_change_rejects_unknown_actor_type_before_writing() -> None:
+    client = TestClient(app)
+
+    project_response = client.post(
+        "/projects",
+        headers={
+            "X-Synarch-Actor-Type": "robot",
+            "X-Synarch-Actor-Id": "local-user",
+        },
+        json={
+            "title": "Invalid actor",
+            "goal": "This project should not be written",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+
+    assert project_response.status_code == 400
+    assert client.get("/projects").json() == []
+
+
 def test_company_state_cost_and_audit_flow() -> None:
     client = TestClient(app)
     trace_id = "trace_state_company_flow"

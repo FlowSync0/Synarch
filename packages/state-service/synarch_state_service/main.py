@@ -1,8 +1,11 @@
 import os
+from dataclasses import dataclass
+from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from synarch_models import (
+    ActorType,
     AgentDefinition,
     AgentLifecycleRequest,
     AuditLogRecord,
@@ -32,6 +35,13 @@ def default_repositories() -> StateRepositories:
 REPOSITORIES = default_repositories()
 
 
+@dataclass(frozen=True)
+class AuditContext:
+    actor_type: ActorType
+    actor_id: str
+    trace_id: str | None = None
+
+
 def reset_repositories(repositories: StateRepositories | None = None) -> None:
     global REPOSITORIES
     REPOSITORIES = repositories or StateRepositories.in_memory()
@@ -58,14 +68,66 @@ def read_record[RecordT](
     return record
 
 
+def audit_context_from_request(request: Request) -> AuditContext | None:
+    actor_id = request.headers.get("x-synarch-actor-id")
+    if actor_id is None:
+        return None
+
+    actor_type_value = request.headers.get("x-synarch-actor-type", ActorType.user.value)
+    try:
+        actor_type = ActorType(actor_type_value)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown actor type: {actor_type_value}",
+        ) from error
+
+    return AuditContext(
+        actor_type=actor_type,
+        actor_id=actor_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def write_audit_log(
+    context: AuditContext | None,
+    *,
+    action: str,
+    target_type: str,
+    target_id: str,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    if context is None:
+        return
+
+    audit = AuditLogRecord(
+        actor_type=context.actor_type,
+        actor_id=context.actor_id,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        trace_id=context.trace_id,
+        payload=payload or {},
+    )
+    create_record(REPOSITORIES.audit_logs, audit.id, audit)
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="state-service")
 
 
 @app.post("/divisions", response_model=DivisionRecord, status_code=201)
-def create_division(division: DivisionRecord) -> DivisionRecord:
-    return create_record(REPOSITORIES.divisions, division.id, division)
+def create_division(division: DivisionRecord, request: Request) -> DivisionRecord:
+    audit_context = audit_context_from_request(request)
+    record = create_record(REPOSITORIES.divisions, division.id, division)
+    write_audit_log(
+        audit_context,
+        action="division.created",
+        target_type="division",
+        target_id=record.id,
+    )
+    return record
 
 
 @app.get("/divisions", response_model=list[DivisionRecord])
@@ -79,7 +141,8 @@ def read_division(division_id: str) -> DivisionRecord:
 
 
 @app.post("/agents", response_model=AgentDefinition, status_code=201)
-def create_agent(agent: AgentDefinition) -> AgentDefinition:
+def create_agent(agent: AgentDefinition, request: Request) -> AgentDefinition:
+    audit_context = audit_context_from_request(request)
     if agent.model_policy_id is not None and not REPOSITORIES.model_policies.exists(
         agent.model_policy_id
     ):
@@ -87,7 +150,9 @@ def create_agent(agent: AgentDefinition) -> AgentDefinition:
             status_code=400,
             detail=f"Unknown model policy: {agent.model_policy_id}",
         )
-    return create_record(REPOSITORIES.agents, agent.id, agent)
+    record = create_record(REPOSITORIES.agents, agent.id, agent)
+    write_audit_log(audit_context, action="agent.created", target_type="agent", target_id=record.id)
+    return record
 
 
 @app.get("/agents", response_model=list[AgentDefinition])
@@ -104,8 +169,16 @@ def read_agent(agent_id: str) -> AgentDefinition:
 
 
 @app.post("/projects", response_model=ProjectRecord, status_code=201)
-def create_project(project: ProjectRecord) -> ProjectRecord:
-    return create_record(REPOSITORIES.projects, project.id, project)
+def create_project(project: ProjectRecord, request: Request) -> ProjectRecord:
+    audit_context = audit_context_from_request(request)
+    record = create_record(REPOSITORIES.projects, project.id, project)
+    write_audit_log(
+        audit_context,
+        action="project.created",
+        target_type="project",
+        target_id=record.id,
+    )
+    return record
 
 
 @app.get("/projects", response_model=list[ProjectRecord])
@@ -119,10 +192,19 @@ def read_project(project_id: str) -> ProjectRecord:
 
 
 @app.post("/tasks", response_model=TaskRecord, status_code=201)
-def create_task(task: TaskRecord) -> TaskRecord:
+def create_task(task: TaskRecord, request: Request) -> TaskRecord:
+    audit_context = audit_context_from_request(request)
     if not REPOSITORIES.projects.exists(task.project_id):
         raise HTTPException(status_code=400, detail=f"Unknown project: {task.project_id}")
-    return create_record(REPOSITORIES.tasks, task.id, task)
+    record = create_record(REPOSITORIES.tasks, task.id, task)
+    write_audit_log(
+        audit_context,
+        action="task.created",
+        target_type="task",
+        target_id=record.id,
+        payload={"project_id": record.project_id},
+    )
+    return record
 
 
 @app.get("/tasks", response_model=list[TaskRecord])
@@ -139,8 +221,17 @@ def read_task(task_id: str) -> TaskRecord:
 
 
 @app.post("/events", response_model=EventRecord, status_code=201)
-def create_event(event: EventRecord) -> EventRecord:
-    return create_record(REPOSITORIES.events, event.id, event)
+def create_event(event: EventRecord, request: Request) -> EventRecord:
+    audit_context = audit_context_from_request(request)
+    record = create_record(REPOSITORIES.events, event.id, event)
+    write_audit_log(
+        audit_context,
+        action="event.recorded",
+        target_type="event",
+        target_id=record.id,
+        payload={"event_type": record.type},
+    )
+    return record
 
 
 @app.get("/events", response_model=list[EventRecord])
@@ -159,8 +250,16 @@ def read_event(event_id: str) -> EventRecord:
 
 
 @app.post("/services", response_model=ServiceDefinition, status_code=201)
-def create_service(service: ServiceDefinition) -> ServiceDefinition:
-    return create_record(REPOSITORIES.services, service.id, service)
+def create_service(service: ServiceDefinition, request: Request) -> ServiceDefinition:
+    audit_context = audit_context_from_request(request)
+    record = create_record(REPOSITORIES.services, service.id, service)
+    write_audit_log(
+        audit_context,
+        action="service.created",
+        target_type="service",
+        target_id=record.id,
+    )
+    return record
 
 
 @app.get("/services", response_model=list[ServiceDefinition])
@@ -179,8 +278,16 @@ def read_service(service_id: str) -> ServiceDefinition:
 
 
 @app.post("/model-providers", response_model=ModelProviderConfig, status_code=201)
-def create_model_provider(provider: ModelProviderConfig) -> ModelProviderConfig:
-    return create_record(REPOSITORIES.model_providers, provider.id, provider)
+def create_model_provider(provider: ModelProviderConfig, request: Request) -> ModelProviderConfig:
+    audit_context = audit_context_from_request(request)
+    record = create_record(REPOSITORIES.model_providers, provider.id, provider)
+    write_audit_log(
+        audit_context,
+        action="model_provider.created",
+        target_type="model_provider",
+        target_id=record.id,
+    )
+    return record
 
 
 @app.get("/model-providers", response_model=list[ModelProviderConfig])
@@ -197,10 +304,19 @@ def read_model_provider(provider_id: str) -> ModelProviderConfig:
 
 
 @app.post("/model-definitions", response_model=ModelDefinition, status_code=201)
-def create_model_definition(model: ModelDefinition) -> ModelDefinition:
+def create_model_definition(model: ModelDefinition, request: Request) -> ModelDefinition:
+    audit_context = audit_context_from_request(request)
     if not REPOSITORIES.model_providers.exists(model.provider_id):
         raise HTTPException(status_code=400, detail=f"Unknown model provider: {model.provider_id}")
-    return create_record(REPOSITORIES.model_definitions, model.id, model)
+    record = create_record(REPOSITORIES.model_definitions, model.id, model)
+    write_audit_log(
+        audit_context,
+        action="model_definition.created",
+        target_type="model_definition",
+        target_id=record.id,
+        payload={"provider_id": record.provider_id},
+    )
+    return record
 
 
 @app.get("/model-definitions", response_model=list[ModelDefinition])
@@ -222,7 +338,8 @@ def read_model_definition(model_id: str) -> ModelDefinition:
 
 
 @app.post("/model-policies", response_model=ModelPolicy, status_code=201)
-def create_model_policy(policy: ModelPolicy) -> ModelPolicy:
+def create_model_policy(policy: ModelPolicy, request: Request) -> ModelPolicy:
+    audit_context = audit_context_from_request(request)
     model_ids = {policy.default_model_id, *policy.allowed_model_ids}
     unknown_model_ids = sorted(
         model_id for model_id in model_ids if not REPOSITORIES.model_definitions.exists(model_id)
@@ -232,7 +349,15 @@ def create_model_policy(policy: ModelPolicy) -> ModelPolicy:
             status_code=400,
             detail=f"Unknown model definitions: {unknown_model_ids}",
         )
-    return create_record(REPOSITORIES.model_policies, policy.id, policy)
+    record = create_record(REPOSITORIES.model_policies, policy.id, policy)
+    write_audit_log(
+        audit_context,
+        action="model_policy.created",
+        target_type="model_policy",
+        target_id=record.id,
+        payload={"default_model_id": record.default_model_id},
+    )
+    return record
 
 
 @app.get("/model-policies", response_model=list[ModelPolicy])
@@ -246,12 +371,21 @@ def read_model_policy(policy_id: str) -> ModelPolicy:
 
 
 @app.post("/cost-records", response_model=CostRecord, status_code=201)
-def create_cost_record(cost: CostRecord) -> CostRecord:
+def create_cost_record(cost: CostRecord, request: Request) -> CostRecord:
+    audit_context = audit_context_from_request(request)
     if not REPOSITORIES.model_definitions.exists(cost.model_id):
         raise HTTPException(status_code=400, detail=f"Unknown model definition: {cost.model_id}")
     if not REPOSITORIES.model_providers.exists(cost.provider_id):
         raise HTTPException(status_code=400, detail=f"Unknown model provider: {cost.provider_id}")
-    return create_record(REPOSITORIES.cost_records, cost.id, cost)
+    record = create_record(REPOSITORIES.cost_records, cost.id, cost)
+    write_audit_log(
+        audit_context,
+        action="cost.recorded",
+        target_type="cost_record",
+        target_id=record.id,
+        payload={"project_id": record.project_id, "task_id": record.task_id},
+    )
+    return record
 
 
 @app.get("/cost-records", response_model=list[CostRecord])
@@ -305,8 +439,24 @@ def read_audit_log(audit_id: str) -> AuditLogRecord:
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)
-def create_agent_lifecycle_request(request: AgentLifecycleRequest) -> AgentLifecycleRequest:
-    return create_record(REPOSITORIES.agent_lifecycle_requests, request.id, request)
+def create_agent_lifecycle_request(
+    lifecycle_request: AgentLifecycleRequest,
+    request: Request,
+) -> AgentLifecycleRequest:
+    audit_context = audit_context_from_request(request)
+    record = create_record(
+        REPOSITORIES.agent_lifecycle_requests,
+        lifecycle_request.id,
+        lifecycle_request,
+    )
+    write_audit_log(
+        audit_context,
+        action="agent_lifecycle_request.created",
+        target_type="agent_lifecycle_request",
+        target_id=record.id,
+        payload={"lifecycle_action": record.action, "status": record.status},
+    )
+    return record
 
 
 @app.get("/agent-lifecycle-requests", response_model=list[AgentLifecycleRequest])

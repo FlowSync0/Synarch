@@ -120,6 +120,7 @@ Progress:
 - Done: opt-in PostgreSQL restart-survival test exists behind `SYNARCH_POSTGRES_TEST_URL`.
 - Done: `make migrate-state` runs ordered state-service SQL migrations.
 - Done: `make seed-state` creates default divisions and initial agents idempotently.
+- Done: state-changing endpoints write audit logs when `X-Synarch-Actor-Id` is provided.
 - Next: run the restart-survival test against Docker PostgreSQL.
 
 Do not include yet:
