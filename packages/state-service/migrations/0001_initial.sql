@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS agents (
   model_policy_id TEXT,
   allowed_model_ids TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
   created_by TEXT NOT NULL DEFAULT 'system',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS services (

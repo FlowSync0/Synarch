@@ -113,9 +113,11 @@ Progress:
 - Done: state-service now depends on a `RecordRepository` protocol instead of direct module-level
   dictionaries.
 - Done: `StateRepositories.in_memory()` provides isolated stores for all company-state records.
-- Done: repository and API tests cover the in-memory implementation, with `14` backend tests
+- Done: `StateRepositories.postgres(DATABASE_URL)` maps the same record types to PostgreSQL tables
+  through Psycopg 3.
+- Done: repository and API tests cover the in-memory and PostgreSQL factory paths, with `16` backend tests
   passing locally.
-- Next: implement a PostgreSQL repository behind the same interface and add restart-survival tests.
+- Next: add restart-survival tests against Docker PostgreSQL and formalize migration execution.
 
 Do not include yet:
 

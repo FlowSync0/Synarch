@@ -78,3 +78,9 @@ class StateRepositories:
             audit_logs=InMemoryRecordRepository(),
             agent_lifecycle_requests=InMemoryRecordRepository(),
         )
+
+    @classmethod
+    def postgres(cls, database_url: str) -> StateRepositories:
+        from synarch_state_service.postgres_repositories import build_postgres_repositories
+
+        return build_postgres_repositories(database_url)

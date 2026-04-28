@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import psycopg
+from psycopg import rows, sql
+from psycopg.types.json import Jsonb
+
+from synarch_models import (
+    AgentDefinition,
+    AgentLifecycleRequest,
+    AuditLogRecord,
+    CostRecord,
+    DivisionRecord,
+    EventRecord,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
+    ProjectRecord,
+    ServiceDefinition,
+    TaskRecord,
+)
+from synarch_models.contracts import SynarchModel
+from synarch_state_service.repositories import StateRepositories
+
+
+def normalize_postgres_dsn(database_url: str) -> str:
+    if database_url.startswith("postgresql+psycopg://"):
+        return database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    return database_url
+
+
+@dataclass(frozen=True)
+class PostgresRecordRepository[RecordT: SynarchModel]:
+    database_url: str
+    table_name: str
+    model: type[RecordT]
+    columns: tuple[str, ...]
+    jsonb_columns: frozenset[str] = frozenset()
+
+    def create(self, record_id: str, record: RecordT) -> RecordT:
+        data = record.model_dump(mode="python")
+        values = [self._adapt_value(column, data.get(column)) for column in self.columns]
+        query = sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(
+            sql.Identifier(self.table_name),
+            self._column_list(self.columns),
+            sql.SQL(", ").join([sql.Placeholder() for _ in self.columns]),
+        )
+        with psycopg.connect(normalize_postgres_dsn(self.database_url)) as connection:
+            connection.execute(query, values)
+        return record
+
+    def exists(self, record_id: str) -> bool:
+        query = sql.SQL("SELECT 1 FROM {} WHERE {} = {} LIMIT 1").format(
+            sql.Identifier(self.table_name),
+            sql.Identifier("id"),
+            sql.Placeholder(),
+        )
+        with psycopg.connect(normalize_postgres_dsn(self.database_url)) as connection:
+            result = connection.execute(query, [record_id]).fetchone()
+        return result is not None
+
+    def get(self, record_id: str) -> RecordT | None:
+        query = sql.SQL("SELECT {} FROM {} WHERE {} = {}").format(
+            self._column_list(self.columns),
+            sql.Identifier(self.table_name),
+            sql.Identifier("id"),
+            sql.Placeholder(),
+        )
+        with psycopg.connect(
+            normalize_postgres_dsn(self.database_url),
+            row_factory=rows.dict_row,
+        ) as connection:
+            row = connection.execute(query, [record_id]).fetchone()
+        if row is None:
+            return None
+        return self.model.model_validate(row)
+
+    def list_records(self) -> list[RecordT]:
+        query = sql.SQL("SELECT {} FROM {} ORDER BY {}").format(
+            self._column_list(self.columns),
+            sql.Identifier(self.table_name),
+            sql.Identifier("id"),
+        )
+        with psycopg.connect(
+            normalize_postgres_dsn(self.database_url),
+            row_factory=rows.dict_row,
+        ) as connection:
+            records = connection.execute(query).fetchall()
+        return [self.model.model_validate(record) for record in records]
+
+    def _adapt_value(self, column: str, value: Any) -> Any:
+        if column in self.jsonb_columns and value is not None:
+            return Jsonb(value)
+        return value
+
+    @staticmethod
+    def _column_list(columns: tuple[str, ...]) -> sql.Composed:
+        return sql.SQL(", ").join([sql.Identifier(column) for column in columns])
+
+
+def build_postgres_repositories(database_url: str) -> StateRepositories:
+    return StateRepositories(
+        divisions=PostgresRecordRepository(
+            database_url,
+            "divisions",
+            DivisionRecord,
+            ("id", "name", "purpose", "manager_agent_id", "created_at"),
+        ),
+        agents=PostgresRecordRepository(
+            database_url,
+            "agents",
+            AgentDefinition,
+            (
+                "id",
+                "name",
+                "role",
+                "division",
+                "manager_id",
+                "status",
+                "capabilities",
+                "permissions",
+                "model",
+                "model_policy_id",
+                "allowed_model_ids",
+                "created_by",
+                "created_at",
+                "updated_at",
+            ),
+            frozenset({"capabilities", "permissions"}),
+        ),
+        projects=PostgresRecordRepository(
+            database_url,
+            "projects",
+            ProjectRecord,
+            ("id", "title", "goal", "status", "priority", "owner_agent_id", "created_at"),
+        ),
+        tasks=PostgresRecordRepository(
+            database_url,
+            "tasks",
+            TaskRecord,
+            (
+                "id",
+                "project_id",
+                "title",
+                "status",
+                "assigned_agent_id",
+                "depends_on",
+                "result",
+                "created_at",
+            ),
+            frozenset({"result"}),
+        ),
+        events=PostgresRecordRepository(
+            database_url,
+            "events",
+            EventRecord,
+            ("id", "type", "source_agent_id", "target", "payload", "timestamp", "trace_id"),
+            frozenset({"payload"}),
+        ),
+        services=PostgresRecordRepository(
+            database_url,
+            "services",
+            ServiceDefinition,
+            (
+                "id",
+                "name",
+                "kind",
+                "base_url",
+                "health_endpoint",
+                "capabilities",
+                "owner_agent_id",
+                "enabled",
+            ),
+        ),
+        model_providers=PostgresRecordRepository(
+            database_url,
+            "model_providers",
+            ModelProviderConfig,
+            (
+                "id",
+                "name",
+                "provider_type",
+                "base_url",
+                "api_key_env_var",
+                "default_model_id",
+                "enabled",
+            ),
+        ),
+        model_definitions=PostgresRecordRepository(
+            database_url,
+            "model_definitions",
+            ModelDefinition,
+            (
+                "id",
+                "provider_id",
+                "display_name",
+                "context_window",
+                "input_cost_per_million_tokens",
+                "output_cost_per_million_tokens",
+                "currency",
+                "supports_tool_calling",
+                "supports_structured_output",
+                "enabled",
+            ),
+        ),
+        model_policies=PostgresRecordRepository(
+            database_url,
+            "model_policies",
+            ModelPolicy,
+            (
+                "id",
+                "name",
+                "default_model_id",
+                "allowed_model_ids",
+                "max_cost_per_task",
+                "max_cost_per_day",
+                "currency",
+                "require_human_approval_above",
+            ),
+        ),
+        cost_records=PostgresRecordRepository(
+            database_url,
+            "cost_records",
+            CostRecord,
+            (
+                "id",
+                "provider_id",
+                "model_id",
+                "agent_id",
+                "project_id",
+                "task_id",
+                "trace_id",
+                "input_tokens",
+                "output_tokens",
+                "total_cost",
+                "currency",
+                "recorded_at",
+            ),
+        ),
+        audit_logs=PostgresRecordRepository(
+            database_url,
+            "audit_logs",
+            AuditLogRecord,
+            (
+                "id",
+                "actor_type",
+                "actor_id",
+                "action",
+                "target_type",
+                "target_id",
+                "payload",
+                "trace_id",
+                "created_at",
+            ),
+            frozenset({"payload"}),
+        ),
+        agent_lifecycle_requests=PostgresRecordRepository(
+            database_url,
+            "agent_lifecycle_requests",
+            AgentLifecycleRequest,
+            (
+                "id",
+                "action",
+                "requested_by_type",
+                "requested_by_id",
+                "reason",
+                "proposed_agent",
+                "target_agent_id",
+                "status",
+                "requires_human_approval",
+                "created_at",
+            ),
+            frozenset({"proposed_agent"}),
+        ),
+    )

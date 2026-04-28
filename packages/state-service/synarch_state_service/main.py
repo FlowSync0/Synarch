@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, HTTPException
 
 from synarch_models import (
@@ -19,7 +21,15 @@ from synarch_state_service.repositories import RecordRepository, StateRepositori
 
 app = FastAPI(title="Synarch State Service", version="0.1.0")
 
-REPOSITORIES = StateRepositories.in_memory()
+
+def default_repositories() -> StateRepositories:
+    database_url = os.getenv("DATABASE_URL")
+    if database_url:
+        return StateRepositories.postgres(database_url)
+    return StateRepositories.in_memory()
+
+
+REPOSITORIES = default_repositories()
 
 
 def reset_repositories(repositories: StateRepositories | None = None) -> None:
