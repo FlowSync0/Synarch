@@ -1,11 +1,18 @@
 import os
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
-from synarch_models import AgentDefinition, HealthResponse, LocalWorldView
+from synarch_models import (
+    AgentDefinition,
+    AgentLifecycleDecision,
+    AgentLifecycleRequest,
+    HealthResponse,
+    LocalWorldView,
+)
 
 from .agent_sources import (
     AgentSource,
+    AgentSourceRequestError,
     AgentSourceUnavailable,
     SeedAgentSource,
     StateServiceAgentSource,
@@ -44,6 +51,23 @@ def list_agents_from_source() -> list[AgentDefinition]:
         return AGENT_SOURCE.list_agents()
     except AgentSourceUnavailable as error:
         raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+
+
+def source_request_headers(request: Request) -> dict[str, str]:
+    forwarded_headers = (
+        "x-synarch-actor-type",
+        "x-synarch-actor-id",
+        "x-synarch-trace-id",
+    )
+    return {
+        header: request.headers[header]
+        for header in forwarded_headers
+        if header in request.headers
+    }
+
+
+def raise_source_error(error: AgentSourceRequestError) -> None:
+    raise HTTPException(status_code=error.status_code, detail=error.detail)
 
 
 def list_available_service_ids(agent: AgentDefinition) -> list[str]:
@@ -122,3 +146,55 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         policies=world_view_policy_labels(agent),
         available_services=list_available_service_ids(agent),
     )
+
+
+@app.get("/agent-lifecycle-requests", response_model=list[AgentLifecycleRequest])
+def list_agent_lifecycle_requests(
+    requested_by_id: str | None = None,
+    status: str | None = None,
+) -> list[AgentLifecycleRequest]:
+    try:
+        return AGENT_SOURCE.list_agent_lifecycle_requests(
+            requested_by_id=requested_by_id,
+            status=status,
+        )
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+
+
+@app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)
+def create_agent_lifecycle_request(
+    lifecycle_request: AgentLifecycleRequest,
+    request: Request,
+) -> AgentLifecycleRequest:
+    try:
+        return AGENT_SOURCE.create_agent_lifecycle_request(
+            lifecycle_request,
+            headers=source_request_headers(request),
+        )
+    except AgentSourceRequestError as error:
+        raise_source_error(error)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+
+
+@app.post(
+    "/agent-lifecycle-requests/{request_id}/decisions",
+    response_model=AgentLifecycleDecision,
+    status_code=201,
+)
+def decide_agent_lifecycle_request(
+    request_id: str,
+    decision: AgentLifecycleDecision,
+    request: Request,
+) -> AgentLifecycleDecision:
+    try:
+        return AGENT_SOURCE.decide_agent_lifecycle_request(
+            request_id,
+            decision,
+            headers=source_request_headers(request),
+        )
+    except AgentSourceRequestError as error:
+        raise_source_error(error)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error

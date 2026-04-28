@@ -163,7 +163,9 @@ Progress:
 - Done: approved lifecycle decisions apply agent creation/deactivation, emit `approval.decided`
   plus agent events, and write audit logs.
 - Done: inactive agents are blocked from new task assignment.
-- Next: expose lifecycle request queue/decision flows through control-plane and frontend approvals.
+- Done: control-plane exposes lifecycle request queue, creation, and decision forwarding to
+  state-service.
+- Next: build the frontend approval queue and use it for agent lifecycle decisions.
 
 Definition of done:
 
@@ -372,7 +374,7 @@ Work these in order unless a blocking bug appears.
 4. Make control-plane state-backed.
    - Replace static seed reads with state-service client.
    - Keep deterministic fallback seed for tests only.
-   - Expose lifecycle request queues and decisions through control-plane.
+   - Build frontend approval queue for lifecycle requests.
 
 5. Make gateway create real work.
    - POST `/goals` creates project/tasks/events.
