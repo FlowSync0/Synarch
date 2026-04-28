@@ -158,7 +158,8 @@ Progress:
 - Done: control-plane can read agents from state-service when `STATE_SERVICE_URL` is configured.
 - Done: seed-backed control-plane remains the local fallback for fast tests.
 - Done: Docker Compose points control-plane at state-service after migrations and seeds.
-- Next: move `LocalWorldView` policies and service capabilities fully into state-backed records.
+- Done: `LocalWorldView` includes state-backed model policy labels and available service IDs.
+- Next: add lifecycle request approval/application flow for agent creation and deactivation.
 
 Definition of done:
 

@@ -7,6 +7,7 @@ from synarch_models import (
     CostRecord,
     DivisionRecord,
     LifecycleAction,
+    LocalWorldView,
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
@@ -120,3 +121,18 @@ def test_cost_and_audit_records_have_traceable_scope() -> None:
         "cost.record",
         "model.policy.enforce",
     ]
+
+
+def test_local_world_view_can_expose_state_backed_services_and_policies() -> None:
+    world_view = LocalWorldView(
+        agent_id="agent-finance",
+        role="Compta, TVA, factures",
+        division="finance",
+        policies=["least_privilege_tools", "model_policy:policy-finance-default"],
+        available_services=["service-model-gateway"],
+    )
+
+    payload = world_view.model_dump(mode="json")
+
+    assert payload["policies"] == ["least_privilege_tools", "model_policy:policy-finance-default"]
+    assert payload["available_services"] == ["service-model-gateway"]

@@ -109,6 +109,7 @@ class LocalWorldView(SynarchModel):
     permissions: PermissionBundle = Field(default_factory=PermissionBundle)
     capabilities: CapabilityMap = Field(default_factory=CapabilityMap)
     policies: list[str] = Field(default_factory=list)
+    available_services: list[str] = Field(default_factory=list)
 
 
 class ProjectRecord(SynarchModel):

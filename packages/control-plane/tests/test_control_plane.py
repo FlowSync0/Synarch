@@ -33,6 +33,8 @@ def test_agents_can_be_read_from_state_service(monkeypatch) -> None:
             )
         if request.url.path == "/agents/agent-finance":
             return httpx.Response(200, json=AGENTS[1].model_dump(mode="json"))
+        if request.url.path == "/services":
+            return httpx.Response(200, json=[])
         return httpx.Response(404, json={"detail": "not found"})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -58,3 +60,48 @@ def test_state_service_source_404_becomes_control_plane_404(monkeypatch) -> None
     response = TestClient(app).get("/agents/missing-agent")
 
     assert response.status_code == 404
+
+
+def test_world_view_includes_state_backed_services_and_model_policy(monkeypatch) -> None:
+    finance_agent = AGENTS[1].model_copy(update={"model_policy_id": "policy-finance-default"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/agents":
+            return httpx.Response(200, json=[finance_agent.model_dump(mode="json")])
+        if request.url.path == "/agents/agent-finance":
+            return httpx.Response(200, json=finance_agent.model_dump(mode="json"))
+        if request.url.path == "/services":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "service-ledger",
+                        "name": "Ledger",
+                        "kind": "internal",
+                        "capabilities": ["ledger.write"],
+                    }
+                ],
+            )
+        if request.url.path == "/model-policies/policy-finance-default":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "policy-finance-default",
+                    "name": "Finance default",
+                    "default_model_id": "model-finance",
+                    "allowed_model_ids": ["model-finance"],
+                },
+            )
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "get", client.get)
+    set_agent_source(StateServiceAgentSource("http://state-service:8020"))
+
+    response = TestClient(app).get("/agents/agent-finance/world-view")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "service-ledger" in payload["available_services"]
+    assert "model_policy:policy-finance-default" in payload["policies"]
+    assert "default_model:model-finance" in payload["policies"]

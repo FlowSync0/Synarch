@@ -46,6 +46,47 @@ def list_agents_from_source() -> list[AgentDefinition]:
         raise HTTPException(status_code=502, detail="Agent source unavailable") from error
 
 
+def list_available_service_ids(agent: AgentDefinition) -> list[str]:
+    try:
+        services = AGENT_SOURCE.list_services()
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+
+    allowed_tools = set(agent.permissions.allowed_tools)
+    return [
+        service.id
+        for service in services
+        if service.enabled
+        and (
+            service.owner_agent_id in {None, agent.id}
+            or bool(allowed_tools.intersection(service.capabilities))
+        )
+    ]
+
+
+def world_view_policy_labels(agent: AgentDefinition) -> list[str]:
+    policies = [
+        "least_privilege_tools",
+        "event_log_required",
+        "memory_budget_required",
+    ]
+    if agent.model_policy_id is None:
+        return policies
+
+    try:
+        policy = AGENT_SOURCE.get_model_policy(agent.model_policy_id)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+
+    if policy is None:
+        policies.append(f"missing_model_policy:{agent.model_policy_id}")
+        return policies
+
+    policies.append(f"model_policy:{policy.id}")
+    policies.append(f"default_model:{policy.default_model_id}")
+    return policies
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="control-plane")
@@ -78,9 +119,6 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         manager=agent.manager_id,
         permissions=agent.permissions,
         capabilities=agent.capabilities,
-        policies=[
-            "least_privilege_tools",
-            "event_log_required",
-            "memory_budget_required",
-        ],
+        policies=world_view_policy_labels(agent),
+        available_services=list_available_service_ids(agent),
     )
