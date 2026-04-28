@@ -1,0 +1,168 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: synarch
+      POSTGRES_USER: synarch
+      POSTGRES_PASSWORD: synarch
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./packages/state-service/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synarch -d synarch"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  nats:
+    image: nats:2.10-alpine
+    command: ["-js", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+
+  gateway:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/gateway
+    environment:
+      APP_MODULE: synarch_gateway.main:app
+      CONTROL_PLANE_URL: http://control-plane:8010
+      STATE_SERVICE_URL: http://state-service:8020
+      MEMORY_SERVICE_URL: http://memory-service:8030
+      EVENT_SERVICE_URL: http://event-service:8040
+      AGENT_RUNTIME_URL: http://agent-runtime:8050
+    ports:
+      - "8000:8000"
+    depends_on:
+      - control-plane
+      - state-service
+      - memory-service
+      - event-service
+      - agent-runtime
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/control-plane
+    environment:
+      APP_MODULE: synarch_control_plane.main:app
+      PORT: 8010
+      DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
+      REDIS_URL: redis://redis:6379/0
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8010:8010"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      nats:
+        condition: service_started
+
+  state-service:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/state-service
+    environment:
+      APP_MODULE: synarch_state_service.main:app
+      PORT: 8020
+      DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
+    ports:
+      - "8020:8020"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  memory-service:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/memory-service
+    environment:
+      APP_MODULE: synarch_memory_service.main:app
+      PORT: 8030
+      REDIS_URL: redis://redis:6379/0
+      DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
+    ports:
+      - "8030:8030"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  event-service:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/event-service
+    environment:
+      APP_MODULE: synarch_event_service.main:app
+      PORT: 8040
+      NATS_URL: nats://nats:4222
+    ports:
+      - "8040:8040"
+    depends_on:
+      nats:
+        condition: service_started
+
+  agent-runtime:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/agent-runtime
+    environment:
+      APP_MODULE: synarch_agent_runtime.main:app
+      PORT: 8050
+      MEMORY_SERVICE_URL: http://memory-service:8030
+      EVENT_SERVICE_URL: http://event-service:8040
+    ports:
+      - "8050:8050"
+    depends_on:
+      - memory-service
+      - event-service
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.99.0
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./infra/otel/collector.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  postgres_data:
+  grafana_data:

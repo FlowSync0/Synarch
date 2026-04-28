@@ -1,0 +1,19 @@
+FROM python:3.12-slim
+
+ARG SERVICE_PATH
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
+ENV APP_MODULE=app.main:app
+
+WORKDIR /app
+
+COPY shared/models /app/shared/models
+COPY ${SERVICE_PATH} /app/service
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir -e /app/shared/models -e /app/service
+
+EXPOSE ${PORT}
+
+CMD ["sh", "-c", "uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT}"]

@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synarch-event-service"
+version = "0.1.0"
+description = "Event service for Synarch."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.111,<1",
+  "pydantic-settings>=2.2,<3",
+  "uvicorn[standard]>=0.30,<1",
+  "synarch-models"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["synarch_event_service*"]

@@ -281,6 +281,28 @@ Synarch/
 
 ---
 
+## Quickstart du squelette
+
+```bash
+cp .env.example .env
+python3 -m venv .venv
+source .venv/bin/activate
+make install-backend
+make test
+make dev-backend
+```
+
+Services locaux :
+- Gateway : `http://localhost:8000`
+- Control Plane : `http://localhost:8010`
+- State Service : `http://localhost:8020`
+- Memory Service : `http://localhost:8030`
+- Event Service : `http://localhost:8040`
+- Agent Runtime : `http://localhost:8050`
+- Frontend : `packages/frontend` puis `npm install && npm run dev`
+
+---
+
 ## Résumé en une phrase
 
 Synarch est un OS d'entreprise IA open source : 1 interlocuteur → 1 supervisor → N divisions IA persistantes → mémoire hiérarchique paginée → event-driven → observabilité complète → vue projet et organigramme natifs.
