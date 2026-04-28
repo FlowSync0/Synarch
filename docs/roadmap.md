@@ -108,6 +108,15 @@ Scope:
 - Add seed data for default divisions and initial agents.
 - Make state-changing endpoints write audit logs when the actor is known.
 
+Progress:
+
+- Done: state-service now depends on a `RecordRepository` protocol instead of direct module-level
+  dictionaries.
+- Done: `StateRepositories.in_memory()` provides isolated stores for all company-state records.
+- Done: repository and API tests cover the in-memory implementation, with `14` backend tests
+  passing locally.
+- Next: implement a PostgreSQL repository behind the same interface and add restart-survival tests.
+
 Do not include yet:
 
 - Multi-tenant organizations.

@@ -1,6 +1,12 @@
+import pytest
 from fastapi.testclient import TestClient
 
-from synarch_state_service.main import app
+from synarch_state_service.main import app, reset_repositories
+
+
+@pytest.fixture(autouse=True)
+def clean_state_service() -> None:
+    reset_repositories()
 
 
 def test_project_then_task_flow() -> None:
