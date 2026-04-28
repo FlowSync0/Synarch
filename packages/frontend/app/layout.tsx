@@ -1,4 +1,5 @@
 import "./globals.css";
+import "@fontsource-variable/inter";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {

@@ -74,6 +74,14 @@ class PermissionBundle(SynarchModel):
     denied_tools: list[str] = Field(default_factory=list)
 
 
+class DivisionRecord(SynarchModel):
+    id: str
+    name: str
+    purpose: str
+    manager_agent_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class AgentDefinition(SynarchModel):
     id: str
     name: str

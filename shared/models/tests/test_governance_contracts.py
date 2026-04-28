@@ -5,6 +5,7 @@ from synarch_models import (
     AiProviderType,
     AuditLogRecord,
     CostRecord,
+    DivisionRecord,
     LifecycleAction,
     ModelDefinition,
     ModelPolicy,
@@ -44,6 +45,20 @@ def test_model_provider_and_policy_contracts_are_serializable() -> None:
     assert provider.model_dump(mode="json")["provider_type"] == "openrouter"
     assert model.model_dump(mode="json")["supports_structured_output"] is True
     assert policy.model_dump(mode="json")["allowed_model_ids"] == [model.id]
+
+
+def test_division_contract_captures_company_structure() -> None:
+    division = DivisionRecord(
+        id="division-finance",
+        name="Finance",
+        purpose="Comptabilite, TVA, factures, fournisseurs, paiements",
+        manager_agent_id="agent-direction",
+    )
+
+    payload = division.model_dump(mode="json")
+
+    assert payload["id"] == "division-finance"
+    assert payload["manager_agent_id"] == "agent-direction"
 
 
 def test_agent_lifecycle_request_requires_auditable_actor() -> None:

@@ -319,6 +319,10 @@ Priorité backend actuelle :
 
 Voir `docs/backend-core-priorities.md`.
 
+Roadmap complete :
+- `docs/roadmap.md` : etat actuel, prochaine priorite, statut des 9 couches, risques, tests et
+  decisions ouvertes.
+
 ---
 
 ## Résumé en une phrase
