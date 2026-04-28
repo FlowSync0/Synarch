@@ -121,6 +121,7 @@ Progress:
 - Done: `make migrate-state` runs ordered state-service SQL migrations.
 - Done: `make seed-state` creates default divisions and initial agents idempotently.
 - Done: state-changing endpoints write audit logs when `X-Synarch-Actor-Id` is provided.
+- Done: Docker Compose has a `state-migrations` one-shot service before `state-service`.
 - Next: run the restart-survival test against Docker PostgreSQL.
 
 Do not include yet:

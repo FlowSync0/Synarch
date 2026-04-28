@@ -27,6 +27,10 @@ cp .env.example .env
 make dev-backend
 ```
 
+`docker compose up --build ...` runs the `state-migrations` one-shot service before `state-service`.
+That service applies ordered SQL migrations and then seeds default divisions and agents. The commands
+are idempotent, so they can run repeatedly against the same local database.
+
 Core service ports:
 
 - Gateway: `http://localhost:8000`

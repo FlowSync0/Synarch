@@ -9,7 +9,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./packages/state-service/migrations/0001_initial.sql:/docker-entrypoint-initdb.d/0001_initial.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U synarch -d synarch"]
       interval: 10s
@@ -72,6 +71,21 @@ services:
       nats:
         condition: service_started
 
+  state-migrations:
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/state-service
+    command: >
+      sh -c "python -m synarch_state_service.migrations
+      && python -m synarch_state_service.seeds"
+    environment:
+      DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   state-service:
     build:
       context: .
@@ -87,6 +101,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      state-migrations:
+        condition: service_completed_successfully
 
   memory-service:
     build:
