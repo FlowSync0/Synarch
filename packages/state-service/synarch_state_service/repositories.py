@@ -22,6 +22,8 @@ from synarch_models import (
 class RecordRepository[RecordT](Protocol):
     def create(self, record_id: str, record: RecordT) -> RecordT: ...
 
+    def update(self, record_id: str, record: RecordT) -> RecordT: ...
+
     def exists(self, record_id: str) -> bool: ...
 
     def get(self, record_id: str) -> RecordT | None: ...
@@ -34,6 +36,10 @@ class InMemoryRecordRepository[RecordT]:
     records: dict[str, RecordT] = field(default_factory=dict)
 
     def create(self, record_id: str, record: RecordT) -> RecordT:
+        self.records[record_id] = record
+        return record
+
+    def update(self, record_id: str, record: RecordT) -> RecordT:
         self.records[record_id] = record
         return record
 

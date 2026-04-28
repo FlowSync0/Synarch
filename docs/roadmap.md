@@ -159,7 +159,11 @@ Progress:
 - Done: seed-backed control-plane remains the local fallback for fast tests.
 - Done: Docker Compose points control-plane at state-service after migrations and seeds.
 - Done: `LocalWorldView` includes state-backed model policy labels and available service IDs.
-- Next: add lifecycle request approval/application flow for agent creation and deactivation.
+- Done: state-service records agent lifecycle requests and emits `approval.requested` events.
+- Done: approved lifecycle decisions apply agent creation/deactivation, emit `approval.decided`
+  plus agent events, and write audit logs.
+- Done: inactive agents are blocked from new task assignment.
+- Next: expose lifecycle request queue/decision flows through control-plane and frontend approvals.
 
 Definition of done:
 
@@ -368,7 +372,7 @@ Work these in order unless a blocking bug appears.
 4. Make control-plane state-backed.
    - Replace static seed reads with state-service client.
    - Keep deterministic fallback seed for tests only.
-   - Add lifecycle request endpoints.
+   - Expose lifecycle request queues and decisions through control-plane.
 
 5. Make gateway create real work.
    - POST `/goals` creates project/tasks/events.

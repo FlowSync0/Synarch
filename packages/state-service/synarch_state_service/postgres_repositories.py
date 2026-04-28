@@ -59,6 +59,31 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
             connection.execute(query, values)
         return record
 
+    def update(self, record_id: str, record: RecordT) -> RecordT:
+        update_columns = tuple(column for column in self.columns if column != "id")
+        python_data = record.model_dump(mode="python")
+        json_data = record.model_dump(mode="json")
+        values = [
+            self._adapt_value(
+                column,
+                python_data.get(column),
+                json_data.get(column),
+            )
+            for column in update_columns
+        ]
+        values.append(record_id)
+        query = sql.SQL("UPDATE {} SET {} WHERE {} = {}").format(
+            sql.Identifier(self.table_name),
+            self._assignments(update_columns),
+            sql.Identifier("id"),
+            sql.Placeholder(),
+        )
+        with psycopg.connect(normalize_postgres_dsn(self.database_url)) as connection:
+            cursor = connection.execute(query, values)
+            if cursor.rowcount == 0:
+                raise KeyError(record_id)
+        return record
+
     def exists(self, record_id: str) -> bool:
         query = sql.SQL("SELECT 1 FROM {} WHERE {} = {} LIMIT 1").format(
             sql.Identifier(self.table_name),
@@ -106,6 +131,15 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
     @staticmethod
     def _column_list(columns: tuple[str, ...]) -> sql.Composed:
         return sql.SQL(", ").join([sql.Identifier(column) for column in columns])
+
+    @staticmethod
+    def _assignments(columns: tuple[str, ...]) -> sql.Composed:
+        return sql.SQL(", ").join(
+            [
+                sql.SQL("{} = {}").format(sql.Identifier(column), sql.Placeholder())
+                for column in columns
+            ]
+        )
 
 
 def build_postgres_repositories(database_url: str) -> StateRepositories:

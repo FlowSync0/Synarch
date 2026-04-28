@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -7,12 +8,17 @@ from fastapi import FastAPI, HTTPException, Request
 from synarch_models import (
     ActorType,
     AgentDefinition,
+    AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentStatus,
+    ApprovalStatus,
     AuditLogRecord,
     CostRecord,
     DivisionRecord,
     EventRecord,
+    EventType,
     HealthResponse,
+    LifecycleAction,
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
@@ -68,6 +74,17 @@ def read_record[RecordT](
     return record
 
 
+def update_record[RecordT](
+    repository: RecordRepository[RecordT],
+    record_id: str,
+    record: RecordT,
+    label: str,
+) -> RecordT:
+    if not repository.exists(record_id):
+        raise HTTPException(status_code=404, detail=f"Unknown {label}: {record_id}")
+    return repository.update(record_id, record)
+
+
 def audit_context_from_request(request: Request) -> AuditContext | None:
     actor_id = request.headers.get("x-synarch-actor-id")
     if actor_id is None:
@@ -85,6 +102,14 @@ def audit_context_from_request(request: Request) -> AuditContext | None:
     return AuditContext(
         actor_type=actor_type,
         actor_id=actor_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def decision_audit_context(decision: AgentLifecycleDecision, request: Request) -> AuditContext:
+    return AuditContext(
+        actor_type=decision.decided_by_type,
+        actor_id=decision.decided_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
     )
 
@@ -112,9 +137,63 @@ def write_audit_log(
     create_record(REPOSITORIES.audit_logs, audit.id, audit)
 
 
+def create_domain_event(event: EventRecord) -> EventRecord:
+    return create_record(REPOSITORIES.events, event.id, event)
+
+
+def agent_event_source(actor_type: ActorType, actor_id: str) -> str | None:
+    if actor_type == ActorType.agent:
+        return actor_id
+    return None
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="state-service")
+
+
+def validate_agent_model_policy(agent: AgentDefinition) -> None:
+    if agent.model_policy_id is not None and not REPOSITORIES.model_policies.exists(
+        agent.model_policy_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model policy: {agent.model_policy_id}",
+        )
+
+
+def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None:
+    if lifecycle_request.action == LifecycleAction.create_agent:
+        if lifecycle_request.proposed_agent is None:
+            raise HTTPException(
+                status_code=400,
+                detail="create_agent requires proposed_agent",
+            )
+        validate_agent_model_policy(lifecycle_request.proposed_agent)
+        if REPOSITORIES.agents.exists(lifecycle_request.proposed_agent.id):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Record already exists: {lifecycle_request.proposed_agent.id}",
+            )
+        return
+
+    if lifecycle_request.action == LifecycleAction.deactivate_agent:
+        if lifecycle_request.target_agent_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="deactivate_agent requires target_agent_id",
+            )
+        if not REPOSITORIES.agents.exists(lifecycle_request.target_agent_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown target agent: {lifecycle_request.target_agent_id}",
+            )
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported lifecycle action: {lifecycle_request.action}",
+    )
 
 
 @app.post("/divisions", response_model=DivisionRecord, status_code=201)
@@ -143,13 +222,7 @@ def read_division(division_id: str) -> DivisionRecord:
 @app.post("/agents", response_model=AgentDefinition, status_code=201)
 def create_agent(agent: AgentDefinition, request: Request) -> AgentDefinition:
     audit_context = audit_context_from_request(request)
-    if agent.model_policy_id is not None and not REPOSITORIES.model_policies.exists(
-        agent.model_policy_id
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown model policy: {agent.model_policy_id}",
-        )
+    validate_agent_model_policy(agent)
     record = create_record(REPOSITORIES.agents, agent.id, agent)
     write_audit_log(audit_context, action="agent.created", target_type="agent", target_id=record.id)
     return record
@@ -196,6 +269,12 @@ def create_task(task: TaskRecord, request: Request) -> TaskRecord:
     audit_context = audit_context_from_request(request)
     if not REPOSITORIES.projects.exists(task.project_id):
         raise HTTPException(status_code=400, detail=f"Unknown project: {task.project_id}")
+    assigned_agent = REPOSITORIES.agents.get(task.assigned_agent_id)
+    if assigned_agent is not None and assigned_agent.status != AgentStatus.active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is not active: {task.assigned_agent_id}",
+        )
     record = create_record(REPOSITORIES.tasks, task.id, task)
     write_audit_log(
         audit_context,
@@ -443,11 +522,26 @@ def create_agent_lifecycle_request(
     lifecycle_request: AgentLifecycleRequest,
     request: Request,
 ) -> AgentLifecycleRequest:
+    validate_lifecycle_request(lifecycle_request)
     audit_context = audit_context_from_request(request)
     record = create_record(
         REPOSITORIES.agent_lifecycle_requests,
         lifecycle_request.id,
         lifecycle_request,
+    )
+    create_domain_event(
+        EventRecord(
+            type=EventType.approval_requested,
+            source_agent_id=agent_event_source(record.requested_by_type, record.requested_by_id),
+            target=record.id,
+            payload={
+                "lifecycle_action": record.action,
+                "requested_by_type": record.requested_by_type,
+                "requested_by_id": record.requested_by_id,
+                "status": record.status,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
     )
     write_audit_log(
         audit_context,
@@ -479,3 +573,143 @@ def read_agent_lifecycle_request(request_id: str) -> AgentLifecycleRequest:
         request_id,
         "agent lifecycle request",
     )
+
+
+def approval_decided_event(
+    lifecycle_request: AgentLifecycleRequest,
+    decision: AgentLifecycleDecision,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.approval_decided,
+        source_agent_id=agent_event_source(decision.decided_by_type, decision.decided_by_id),
+        target=lifecycle_request.id,
+        payload={
+            "lifecycle_action": lifecycle_request.action,
+            "status": decision.status,
+            "rationale": decision.rationale,
+        },
+        trace_id=trace_id,
+    )
+
+
+def apply_agent_lifecycle_request(
+    lifecycle_request: AgentLifecycleRequest,
+    decision_context: AuditContext,
+) -> EventRecord:
+    if lifecycle_request.action == LifecycleAction.create_agent:
+        proposed_agent = lifecycle_request.proposed_agent
+        if proposed_agent is None:
+            raise HTTPException(status_code=400, detail="create_agent requires proposed_agent")
+        validate_agent_model_policy(proposed_agent)
+        created_agent = create_record(REPOSITORIES.agents, proposed_agent.id, proposed_agent)
+        write_audit_log(
+            decision_context,
+            action="agent.created",
+            target_type="agent",
+            target_id=created_agent.id,
+            payload={"lifecycle_request_id": lifecycle_request.id},
+        )
+        return EventRecord(
+            type=EventType.agent_created,
+            source_agent_id=agent_event_source(
+                decision_context.actor_type,
+                decision_context.actor_id,
+            ),
+            target=created_agent.id,
+            payload={"lifecycle_request_id": lifecycle_request.id},
+            trace_id=decision_context.trace_id,
+        )
+
+    if lifecycle_request.action == LifecycleAction.deactivate_agent:
+        target_agent_id = lifecycle_request.target_agent_id
+        if target_agent_id is None:
+            raise HTTPException(status_code=400, detail="deactivate_agent requires target_agent_id")
+        agent = read_record(REPOSITORIES.agents, target_agent_id, "agent")
+        deactivated_agent = agent.model_copy(
+            update={
+                "status": AgentStatus.inactive,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        update_record(REPOSITORIES.agents, target_agent_id, deactivated_agent, "agent")
+        write_audit_log(
+            decision_context,
+            action="agent.deactivated",
+            target_type="agent",
+            target_id=target_agent_id,
+            payload={"lifecycle_request_id": lifecycle_request.id},
+        )
+        return EventRecord(
+            type=EventType.agent_deactivated,
+            source_agent_id=agent_event_source(
+                decision_context.actor_type,
+                decision_context.actor_id,
+            ),
+            target=target_agent_id,
+            payload={"lifecycle_request_id": lifecycle_request.id},
+            trace_id=decision_context.trace_id,
+        )
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported lifecycle action: {lifecycle_request.action}",
+    )
+
+
+@app.post(
+    "/agent-lifecycle-requests/{request_id}/decisions",
+    response_model=AgentLifecycleDecision,
+    status_code=201,
+)
+def decide_agent_lifecycle_request(
+    request_id: str,
+    decision: AgentLifecycleDecision,
+    request: Request,
+) -> AgentLifecycleDecision:
+    if decision.request_id != request_id:
+        raise HTTPException(status_code=400, detail="Decision request_id must match path")
+    if decision.status not in {ApprovalStatus.approved, ApprovalStatus.rejected}:
+        raise HTTPException(
+            status_code=400,
+            detail="Lifecycle decisions must be approved or rejected",
+        )
+
+    lifecycle_request = read_record(
+        REPOSITORIES.agent_lifecycle_requests,
+        request_id,
+        "agent lifecycle request",
+    )
+    if lifecycle_request.status != ApprovalStatus.requested:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Lifecycle request is already {lifecycle_request.status}",
+        )
+
+    context = decision_audit_context(decision, request)
+    events = [
+        create_domain_event(approval_decided_event(lifecycle_request, decision, context.trace_id))
+    ]
+    final_status = decision.status
+    if decision.status == ApprovalStatus.approved:
+        events.append(
+            create_domain_event(apply_agent_lifecycle_request(lifecycle_request, context))
+        )
+        final_status = ApprovalStatus.applied
+
+    updated_request = lifecycle_request.model_copy(update={"status": final_status})
+    update_record(
+        REPOSITORIES.agent_lifecycle_requests,
+        request_id,
+        updated_request,
+        "agent lifecycle request",
+    )
+    write_audit_log(
+        context,
+        action=f"agent_lifecycle_request.{final_status}",
+        target_type="agent_lifecycle_request",
+        target_id=request_id,
+        payload={"lifecycle_action": lifecycle_request.action, "rationale": decision.rationale},
+    )
+
+    return decision.model_copy(update={"status": final_status, "events_emitted": events})

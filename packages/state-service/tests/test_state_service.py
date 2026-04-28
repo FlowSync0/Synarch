@@ -242,3 +242,186 @@ def test_company_state_cost_and_audit_flow() -> None:
     audit_timeline = client.get("/audit-logs", params={"trace_id": trace_id})
     assert audit_timeline.status_code == 200
     assert audit_timeline.json()[0]["target_id"] == cost["id"]
+
+
+def test_agent_lifecycle_approval_creates_agent_events_and_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_lifecycle_create_agent"
+
+    lifecycle_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-direction",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "lifecycle-create-finance-reviewer",
+            "action": "create_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "Finance needs a deterministic invoice reviewer.",
+            "proposed_agent": {
+                "id": "agent-finance-reviewer",
+                "name": "IA Finance Reviewer",
+                "role": "Review invoices before approval",
+                "division": "finance",
+                "manager_id": "agent-direction",
+                "created_by": "agent-direction",
+            },
+        },
+    )
+    assert lifecycle_response.status_code == 201
+
+    decision_response = client.post(
+        "/agent-lifecycle-requests/lifecycle-create-finance-reviewer/decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "request_id": "lifecycle-create-finance-reviewer",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Scoped role and no unsafe tools.",
+        },
+    )
+
+    assert decision_response.status_code == 201
+    decision = decision_response.json()
+    assert decision["status"] == "applied"
+    assert [event["type"] for event in decision["events_emitted"]] == [
+        "approval.decided",
+        "agent.created",
+    ]
+
+    agent_response = client.get("/agents/agent-finance-reviewer")
+    assert agent_response.status_code == 200
+    assert agent_response.json()["status"] == "active"
+
+    request_response = client.get(
+        "/agent-lifecycle-requests/lifecycle-create-finance-reviewer"
+    )
+    assert request_response.status_code == 200
+    assert request_response.json()["status"] == "applied"
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert {event["type"] for event in events} == {
+        "approval.requested",
+        "approval.decided",
+        "agent.created",
+    }
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert {audit["action"] for audit in audits} >= {
+        "agent_lifecycle_request.created",
+        "agent_lifecycle_request.applied",
+        "agent.created",
+    }
+
+
+def test_agent_lifecycle_deactivation_blocks_new_task_assignment() -> None:
+    client = TestClient(app)
+    trace_id = "trace_lifecycle_deactivate_agent"
+
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-temporary-worker",
+            "name": "IA Temporary Worker",
+            "role": "Short-lived execution worker",
+            "division": "dev",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    lifecycle_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "lifecycle-deactivate-temporary-worker",
+            "action": "deactivate_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "The temporary worker should no longer receive work.",
+            "target_agent_id": "agent-temporary-worker",
+        },
+    )
+    assert lifecycle_response.status_code == 201
+
+    decision_response = client.post(
+        "/agent-lifecycle-requests/lifecycle-deactivate-temporary-worker/decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "request_id": "lifecycle-deactivate-temporary-worker",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "The agent is out of rotation.",
+        },
+    )
+    assert decision_response.status_code == 201
+    assert decision_response.json()["status"] == "applied"
+
+    deactivated_agent = client.get("/agents/agent-temporary-worker").json()
+    assert deactivated_agent["status"] == "inactive"
+
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Do not assign inactive agent",
+            "goal": "Prove lifecycle deactivation gates task assignment",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project_response.json()["id"],
+            "title": "This should be blocked",
+            "assigned_agent_id": "agent-temporary-worker",
+        },
+    )
+
+    assert task_response.status_code == 400
+    assert task_response.json()["detail"] == "Agent is not active: agent-temporary-worker"
+
+
+def test_agent_lifecycle_rejection_does_not_apply_request() -> None:
+    client = TestClient(app)
+
+    lifecycle_response = client.post(
+        "/agent-lifecycle-requests",
+        json={
+            "id": "lifecycle-reject-ops-agent",
+            "action": "create_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "Ops requested another sourcing worker.",
+            "proposed_agent": {
+                "id": "agent-ops-extra",
+                "name": "IA Ops Extra",
+                "role": "Extra sourcing worker",
+                "division": "ops-sourcing",
+            },
+        },
+    )
+    assert lifecycle_response.status_code == 201
+
+    decision_response = client.post(
+        "/agent-lifecycle-requests/lifecycle-reject-ops-agent/decisions",
+        json={
+            "request_id": "lifecycle-reject-ops-agent",
+            "status": "rejected",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Capacity is enough for now.",
+        },
+    )
+
+    assert decision_response.status_code == 201
+    assert decision_response.json()["status"] == "rejected"
+    assert client.get("/agents/agent-ops-extra").status_code == 404
+    assert client.get("/agent-lifecycle-requests/lifecycle-reject-ops-agent").json()[
+        "status"
+    ] == "rejected"
