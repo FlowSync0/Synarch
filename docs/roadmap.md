@@ -118,7 +118,8 @@ Progress:
 - Done: repository and API tests cover the in-memory and PostgreSQL factory paths, with `16` backend tests
   passing locally.
 - Done: opt-in PostgreSQL restart-survival test exists behind `SYNARCH_POSTGRES_TEST_URL`.
-- Next: run the restart-survival test against Docker PostgreSQL and formalize migration execution.
+- Done: `make migrate-state` runs ordered state-service SQL migrations.
+- Next: run the restart-survival test against Docker PostgreSQL.
 
 Do not include yet:
 

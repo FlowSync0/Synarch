@@ -1,0 +1,28 @@
+from pathlib import Path
+
+import pytest
+
+from synarch_state_service.migrations import (
+    DEFAULT_MIGRATIONS_DIR,
+    migration_files,
+)
+
+
+def test_default_migration_directory_contains_initial_schema() -> None:
+    assert (DEFAULT_MIGRATIONS_DIR / "0001_initial.sql").exists()
+
+
+def test_migration_files_are_sorted(tmp_path: Path) -> None:
+    second = tmp_path / "0002_second.sql"
+    first = tmp_path / "0001_first.sql"
+    ignored = tmp_path / "notes.txt"
+    second.write_text("SELECT 2;", encoding="utf-8")
+    first.write_text("SELECT 1;", encoding="utf-8")
+    ignored.write_text("ignore me", encoding="utf-8")
+
+    assert migration_files(tmp_path) == [first, second]
+
+
+def test_missing_migration_directory_is_explicit(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        migration_files(tmp_path / "missing")
