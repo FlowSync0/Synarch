@@ -4,7 +4,17 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .enums import AgentStatus, EventType, Priority, TaskStatus
+from .enums import (
+    ActorType,
+    AgentStatus,
+    AiProviderType,
+    ApprovalStatus,
+    EventType,
+    LifecycleAction,
+    Priority,
+    ServiceKind,
+    TaskStatus,
+)
 
 
 def new_id(prefix: str) -> str:
@@ -74,7 +84,11 @@ class AgentDefinition(SynarchModel):
     capabilities: CapabilityMap = Field(default_factory=CapabilityMap)
     permissions: PermissionBundle = Field(default_factory=PermissionBundle)
     model: str = "gpt-4.1-mini"
+    model_policy_id: str | None = None
+    allowed_model_ids: list[str] = Field(default_factory=list)
+    created_by: str = "system"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class LocalWorldView(SynarchModel):
@@ -117,6 +131,7 @@ class EventRecord(SynarchModel):
     target: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    trace_id: str | None = None
 
 
 class MemoryItem(SynarchModel):
@@ -136,6 +151,113 @@ class MemoryContext(SynarchModel):
     token_budget: int = 4000
     items: list[MemoryItem] = Field(default_factory=list)
     summary: str = ""
+
+
+class ServiceDefinition(SynarchModel):
+    id: str
+    name: str
+    kind: ServiceKind = ServiceKind.internal
+    base_url: str | None = None
+    health_endpoint: str | None = "/healthz"
+    capabilities: list[str] = Field(default_factory=list)
+    owner_agent_id: str | None = None
+    enabled: bool = True
+
+
+class ModelProviderConfig(SynarchModel):
+    id: str
+    name: str
+    provider_type: AiProviderType
+    base_url: str | None = None
+    api_key_env_var: str | None = None
+    default_model_id: str | None = None
+    enabled: bool = True
+
+
+class ModelDefinition(SynarchModel):
+    id: str
+    provider_id: str
+    display_name: str
+    context_window: int | None = None
+    input_cost_per_million_tokens: float = 0.0
+    output_cost_per_million_tokens: float = 0.0
+    currency: str = "USD"
+    supports_tool_calling: bool = False
+    supports_structured_output: bool = False
+    enabled: bool = True
+
+
+class ModelPolicy(SynarchModel):
+    id: str
+    name: str
+    default_model_id: str
+    allowed_model_ids: list[str] = Field(default_factory=list)
+    max_cost_per_task: float | None = None
+    max_cost_per_day: float | None = None
+    currency: str = "USD"
+    require_human_approval_above: float | None = None
+
+
+class ModelCallRequest(SynarchModel):
+    agent_id: str
+    model_id: str
+    task_id: str | None = None
+    project_id: str | None = None
+    trace_id: str = Field(default_factory=lambda: new_id("trace"))
+    purpose: str
+    input_tokens_estimate: int | None = None
+    max_output_tokens: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CostRecord(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("cost"))
+    provider_id: str
+    model_id: str
+    agent_id: str | None = None
+    project_id: str | None = None
+    task_id: str | None = None
+    trace_id: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost: float = 0.0
+    currency: str = "USD"
+    recorded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AuditLogRecord(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("audit"))
+    actor_type: ActorType
+    actor_id: str
+    action: str
+    target_type: str
+    target_id: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AgentLifecycleRequest(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("agent_lifecycle"))
+    action: LifecycleAction
+    requested_by_type: ActorType
+    requested_by_id: str
+    reason: str
+    proposed_agent: AgentDefinition | None = None
+    target_agent_id: str | None = None
+    status: ApprovalStatus = ApprovalStatus.requested
+    requires_human_approval: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AgentLifecycleDecision(SynarchModel):
+    request_id: str
+    status: ApprovalStatus
+    decided_by_type: ActorType
+    decided_by_id: str
+    rationale: str
+    events_emitted: list[EventRecord] = Field(default_factory=list)
+    decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ToolCallRequest(SynarchModel):

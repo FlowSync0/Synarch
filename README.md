@@ -310,6 +310,15 @@ Commandes de base :
 - `make verify` : lint + tests backend.
 - `make test-integration` : scénario transverse actuel `goal -> agent result -> event`.
 
+Priorité backend actuelle :
+- état durable de l'entreprise IA ;
+- choix des providers/modèles IA via un Model Gateway ;
+- cycle de vie des employés IA avec approbation ;
+- registre des services accessibles ;
+- suivi coûts/tokens/traces/audit logs.
+
+Voir `docs/backend-core-priorities.md`.
+
 ---
 
 ## Résumé en une phrase
