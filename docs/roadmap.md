@@ -153,6 +153,13 @@ Scope:
 - Require human approval for agent-proposed org changes.
 - Record `approval.requested`, `approval.decided`, and audit logs.
 
+Progress:
+
+- Done: control-plane can read agents from state-service when `STATE_SERVICE_URL` is configured.
+- Done: seed-backed control-plane remains the local fallback for fast tests.
+- Done: Docker Compose points control-plane at state-service after migrations and seeds.
+- Next: move `LocalWorldView` policies and service capabilities fully into state-backed records.
+
 Definition of done:
 
 - Creating an agent through lifecycle approval makes it visible in `/agents`.

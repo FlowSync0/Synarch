@@ -1,17 +1,49 @@
+import os
+
 from fastapi import FastAPI, HTTPException
 
 from synarch_models import AgentDefinition, HealthResponse, LocalWorldView
 
-from .seed import AGENTS
+from .agent_sources import (
+    AgentSource,
+    AgentSourceUnavailable,
+    SeedAgentSource,
+    StateServiceAgentSource,
+)
 
 app = FastAPI(title="Synarch Control Plane", version="0.1.0")
 
 
+def default_agent_source() -> AgentSource:
+    state_service_url = os.getenv("STATE_SERVICE_URL")
+    if state_service_url:
+        return StateServiceAgentSource(state_service_url)
+    return SeedAgentSource()
+
+
+AGENT_SOURCE: AgentSource = default_agent_source()
+
+
+def set_agent_source(agent_source: AgentSource | None = None) -> None:
+    global AGENT_SOURCE
+    AGENT_SOURCE = agent_source or default_agent_source()
+
+
 def get_agent_or_404(agent_id: str) -> AgentDefinition:
-    for agent in AGENTS:
-        if agent.id == agent_id:
-            return agent
-    raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+    try:
+        agent = AGENT_SOURCE.get_agent(agent_id)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+    return agent
+
+
+def list_agents_from_source() -> list[AgentDefinition]:
+    try:
+        return AGENT_SOURCE.list_agents()
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
 
 
 @app.get("/healthz", response_model=HealthResponse)
@@ -21,7 +53,7 @@ def healthz() -> HealthResponse:
 
 @app.get("/agents", response_model=list[AgentDefinition])
 def list_agents() -> list[AgentDefinition]:
-    return AGENTS
+    return list_agents_from_source()
 
 
 @app.get("/agents/{agent_id}", response_model=AgentDefinition)
@@ -32,9 +64,10 @@ def read_agent(agent_id: str) -> AgentDefinition:
 @app.get("/agents/{agent_id}/world-view", response_model=LocalWorldView)
 def read_world_view(agent_id: str) -> LocalWorldView:
     agent = get_agent_or_404(agent_id)
+    agents = list_agents_from_source()
     peers = [
         candidate.id
-        for candidate in AGENTS
+        for candidate in agents
         if candidate.division == agent.division and candidate.id != agent.id
     ]
     return LocalWorldView(

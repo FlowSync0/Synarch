@@ -58,6 +58,7 @@ services:
     environment:
       APP_MODULE: synarch_control_plane.main:app
       PORT: 8010
+      STATE_SERVICE_URL: http://state-service:8020
       DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
       REDIS_URL: redis://redis:6379/0
       NATS_URL: nats://nats:4222
@@ -70,6 +71,8 @@ services:
         condition: service_started
       nats:
         condition: service_started
+      state-service:
+        condition: service_healthy
 
   state-migrations:
     build:
@@ -98,6 +101,15 @@ services:
       DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
     ports:
       - "8020:8020"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8020/healthz', timeout=2)\""
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     depends_on:
       postgres:
         condition: service_healthy
