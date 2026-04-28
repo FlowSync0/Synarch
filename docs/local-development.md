@@ -53,6 +53,18 @@ Windows PowerShell:
 make PYTHON=.venv\Scripts\python.exe migrate-state DATABASE_URL="postgresql+psycopg://synarch:synarch@localhost:5432/synarch"
 ```
 
+Seed default divisions and agents:
+
+```sh
+make seed-state DATABASE_URL=postgresql+psycopg://synarch:synarch@localhost:5432/synarch
+```
+
+Windows PowerShell:
+
+```powershell
+make PYTHON=.venv\Scripts\python.exe seed-state DATABASE_URL="postgresql+psycopg://synarch:synarch@localhost:5432/synarch"
+```
+
 Run the opt-in PostgreSQL persistence test:
 
 ```sh
