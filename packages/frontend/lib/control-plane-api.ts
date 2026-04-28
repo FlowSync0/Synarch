@@ -8,7 +8,24 @@ export type AgentDefinition = {
   role: string;
   division: string;
   manager_id?: string | null;
-  status?: string;
+  status: string;
+  capabilities: {
+    skills: string[];
+    tools: string[];
+    models: string[];
+  };
+  permissions: {
+    can_read_scopes: string[];
+    can_write_scopes: string[];
+    allowed_tools: string[];
+    denied_tools: string[];
+  };
+  model: string;
+  model_policy_id?: string | null;
+  allowed_model_ids: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AgentLifecycleRequest = {
@@ -61,6 +78,13 @@ export async function listAgentLifecycleRequests(): Promise<AgentLifecycleReques
     cache: "no-store"
   });
   return parseJsonResponse<AgentLifecycleRequest[]>(response);
+}
+
+export async function listAgents(): Promise<AgentDefinition[]> {
+  const response = await fetch("/api/control-plane/agents", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<AgentDefinition[]>(response);
 }
 
 export async function decideAgentLifecycleRequest({

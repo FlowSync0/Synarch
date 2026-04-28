@@ -7,10 +7,15 @@ import {
   ArrowUpRight,
   Check,
   ChevronRight,
+  CircleDollarSign,
   Clock3,
+  Code2,
   Command,
+  FileText,
+  GitBranch,
   Layers3,
   Menu,
+  Network,
   Plus,
   Search,
   Settings2,
@@ -22,7 +27,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   decideAgentLifecycleRequest,
+  listAgents,
   listAgentLifecycleRequests,
+  type AgentDefinition,
   type AgentLifecycleRequest
 } from "../lib/control-plane-api";
 import {
@@ -88,10 +95,18 @@ const approvalStatusClass: Record<string, string> = {
   rejected: "bg-risk-soft text-risk ring-risk/15"
 };
 
-const approvalModeClass: Record<string, string> = {
+const dataModeClass: Record<string, string> = {
   live: "bg-ok-soft text-ok ring-ok/15",
   syncing: "bg-info-soft text-info ring-info/15",
   sample: "bg-warn-soft text-warn ring-warn/15"
+};
+
+const agentStatusClass: Record<string, string> = {
+  active: "bg-ok-soft text-ok ring-ok/15",
+  inactive: "bg-slate-100 text-muted ring-border",
+  degraded: "bg-warn-soft text-warn ring-warn/15",
+  pending_approval: "bg-info-soft text-info ring-info/15",
+  seed: "bg-slate-100 text-muted ring-border"
 };
 
 type BalancedTextProps = {
@@ -217,6 +232,17 @@ type ApprovalViewModel = {
   source: "api" | "sample";
 };
 
+type AgentViewModel = {
+  id: string;
+  name: string;
+  status: string;
+  load: number;
+  scope: string;
+  division: string;
+  icon: typeof GitBranch;
+  source: "api" | "sample";
+};
+
 function formatLifecycleAge(createdAt: string): string {
   const timestamp = new Date(createdAt).getTime();
   if (Number.isNaN(timestamp)) {
@@ -275,8 +301,56 @@ function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel
   };
 }
 
+function agentIcon(agent: AgentDefinition): typeof GitBranch {
+  const division = agent.division.toLowerCase();
+  if (division.includes("finance")) {
+    return CircleDollarSign;
+  }
+  if (division.includes("dev")) {
+    return Code2;
+  }
+  if (division.includes("admin") || division.includes("knowledge")) {
+    return FileText;
+  }
+  if (division.includes("ops") || division.includes("sourcing")) {
+    return Network;
+  }
+  return GitBranch;
+}
+
+function agentLoad(agent: AgentDefinition): number {
+  if (agent.status === "inactive") {
+    return 0;
+  }
+  if (agent.status === "degraded") {
+    return 92;
+  }
+
+  const toolWeight = agent.permissions.allowed_tools.length * 7;
+  const skillWeight = agent.capabilities.skills.length * 5;
+  return Math.min(88, 30 + toolWeight + skillWeight);
+}
+
+function agentRow(agent: AgentDefinition): AgentViewModel {
+  return {
+    id: agent.id,
+    name: agent.name,
+    status: agent.status,
+    load: agentLoad(agent),
+    scope: agent.role,
+    division: agent.division,
+    icon: agentIcon(agent),
+    source: "api"
+  };
+}
+
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const agentsQuery = useQuery({
+    queryKey: ["agents"],
+    queryFn: listAgents,
+    refetchInterval: 30_000
+  });
   const lifecycleQuery = useQuery({
     queryKey: ["agent-lifecycle-requests"],
     queryFn: listAgentLifecycleRequests,
@@ -322,6 +396,28 @@ export default function DashboardPage() {
       : approvalMode === "syncing"
         ? "Connecting to control-plane"
         : "Control-plane unavailable, showing sample lifecycle records";
+  const agentRows = useMemo<AgentViewModel[]>(() => {
+    if (agentsQuery.isSuccess) {
+      return agentsQuery.data.map(agentRow);
+    }
+
+    return agents.map((agent) => ({
+      ...agent,
+      source: "sample" as const
+    }));
+  }, [agentsQuery.data, agentsQuery.isSuccess]);
+  const agentMode = agentsQuery.isLoading ? "syncing" : agentsQuery.isError ? "sample" : "live";
+  const agentModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "Sample fallback"
+  }[agentMode];
+  const agentModeDetail =
+    agentMode === "live"
+      ? `${agentRows.length} agents from control-plane`
+      : agentMode === "syncing"
+        ? "Connecting to control-plane"
+        : "Control-plane unavailable, showing seeded agents";
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -526,8 +622,22 @@ export default function DashboardPage() {
         <aside className="space-y-4 lg:sticky lg:top-[76px] lg:self-start">
           <section className="rounded-md border border-border bg-panel">
             <SectionHeader eyebrow="Agents" title="Organisation IA" action="Voir agents" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{agentModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[agentMode]}`}
+              >
+                {agentModeLabel}
+              </span>
+            </div>
             <div className="divide-y divide-border">
-              {agents.map((agent) => {
+              {agentRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucun agent disponible</p>
+                  <p className="mt-1 text-xs text-muted">Le control-plane ne retourne aucun agent.</p>
+                </article>
+              ) : null}
+              {agentRows.map((agent) => {
                 const Icon = agent.icon;
                 return (
                   <article key={agent.id} className="px-4 py-3">
@@ -537,9 +647,15 @@ export default function DashboardPage() {
                       </div>
                       <div className="min-w-0 flex-1">
                         <h3 className="truncate text-sm font-semibold">{agent.name}</h3>
-                        <p className="truncate text-xs text-muted">{agent.scope}</p>
+                        <p className="truncate text-xs text-muted">
+                          {agent.scope} / {agent.division}
+                        </p>
                       </div>
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-muted">
+                      <span
+                        className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                          agentStatusClass[agent.status] ?? agentStatusClass.seed
+                        }`}
+                      >
                         {agent.status}
                       </span>
                     </div>
@@ -558,7 +674,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
               <p className="min-w-0 truncate text-xs text-muted">{approvalModeDetail}</p>
               <span
-                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${approvalModeClass[approvalMode]}`}
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[approvalMode]}`}
               >
                 {approvalModeLabel}
               </span>
