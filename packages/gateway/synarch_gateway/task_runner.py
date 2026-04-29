@@ -7,6 +7,8 @@ from synarch_models import (
     AgentResult,
     AgentTaskRequest,
     CostRecord,
+    EventRecord,
+    EventType,
     LocalWorldView,
     MemoryContext,
     TaskRecord,
@@ -112,12 +114,51 @@ class TaskRunner:
                 token_budget=self.memory_token_budget,
             )
         )
-        agent_result = self.runtime.run_task(
-            AgentTaskRequest(
+        started_event = self.state.create_event(
+            model_call_started_event(
                 task=started_task,
                 world_view=world_view,
                 memory_context=memory_context,
+                trace_id=trace_id,
+            ),
+            headers=headers,
+        )
+        try:
+            agent_result = self.runtime.run_task(
+                AgentTaskRequest(
+                    task=started_task,
+                    world_view=world_view,
+                    memory_context=memory_context,
+                )
             )
+        except (TaskRunnerRequestError, TaskRunnerUnavailable) as error:
+            self.state.create_event(
+                model_call_failed_event(
+                    task=started_task,
+                    world_view=world_view,
+                    trace_id=trace_id,
+                    error=str(error),
+                ),
+                headers=headers,
+            )
+            raise
+
+        cost_record = cost_record_for_run(
+            task=started_task,
+            world_view=world_view,
+            memory_context=memory_context,
+            agent_result=agent_result,
+            trace_id=trace_id,
+        )
+        completed_event = self.state.create_event(
+            model_call_completed_event(
+                task=started_task,
+                world_view=world_view,
+                agent_result=agent_result,
+                cost_record=cost_record,
+                trace_id=trace_id,
+            ),
+            headers=headers,
         )
         recorded_task = self.state.record_task_result(
             started_task.id,
@@ -125,13 +166,7 @@ class TaskRunner:
             headers=headers,
         )
         cost_record = self.state.create_cost_record(
-            cost_record_for_run(
-                task=started_task,
-                world_view=world_view,
-                memory_context=memory_context,
-                agent_result=agent_result,
-                trace_id=trace_id,
-            ),
+            cost_record,
             headers=headers,
         )
         return TaskRunResult(
@@ -140,6 +175,7 @@ class TaskRunner:
             world_view=world_view,
             memory_context=memory_context,
             agent_result=agent_result,
+            model_call_events=[started_event, completed_event],
             cost_records=[cost_record],
         )
 
@@ -192,6 +228,80 @@ def cost_record_for_run(
 
 def estimated_tokens(*texts: str) -> int:
     return max(1, (sum(len(text) for text in texts) + 3) // 4)
+
+
+def model_call_started_event(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    memory_context: MemoryContext,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.model_call_started,
+        source_agent_id=world_view.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "provider_id": LOCAL_RUNTIME_PROVIDER_ID,
+            "model_id": LOCAL_RUNTIME_MODEL_ID,
+            "purpose": "task.run",
+            "input_tokens_estimate": estimated_tokens(
+                task.model_dump_json(),
+                world_view.model_dump_json(),
+                memory_context.model_dump_json(),
+            ),
+        },
+        trace_id=trace_id,
+    )
+
+
+def model_call_completed_event(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    agent_result: AgentResult,
+    cost_record: CostRecord,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.model_call_completed,
+        source_agent_id=world_view.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "provider_id": cost_record.provider_id,
+            "model_id": cost_record.model_id,
+            "cost_id": cost_record.id,
+            "status": agent_result.status,
+            "input_tokens": cost_record.input_tokens,
+            "output_tokens": cost_record.output_tokens,
+            "total_cost": cost_record.total_cost,
+            "currency": cost_record.currency,
+        },
+        trace_id=trace_id,
+    )
+
+
+def model_call_failed_event(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    trace_id: str,
+    error: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.model_call_failed,
+        source_agent_id=world_view.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "provider_id": LOCAL_RUNTIME_PROVIDER_ID,
+            "model_id": LOCAL_RUNTIME_MODEL_ID,
+            "error": error,
+        },
+        trace_id=trace_id,
+    )
 
 
 def get_json(url: str, timeout_seconds: float) -> Any:

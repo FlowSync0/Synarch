@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from synarch_gateway.main import app, get_state_client, get_task_runner
 from synarch_gateway.state_client import StateServiceUnavailable
-from synarch_gateway.task_runner import TaskRunner
+from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
 from synarch_models import (
     AgentResult,
     AgentTaskRequest,
@@ -129,6 +129,11 @@ class FakeAgentRuntimeClient:
         )
 
 
+class FailingAgentRuntimeClient:
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        raise TaskRunnerUnavailable("runtime offline")
+
+
 def test_goal_routes_to_dev_agent() -> None:
     response = TestClient(app).post(
         "/goals",
@@ -229,7 +234,49 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
     assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
     assert payload["cost_records"][0]["total_cost"] > 0
+    assert [event.type for event in state_client.events] == [
+        "model_call.started",
+        "model_call.completed",
+    ]
+    assert [event["type"] for event in payload["model_call_events"]] == [
+        "model_call.started",
+        "model_call.completed",
+    ]
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -> None:
+    state_client = FakeStateClient()
+    state_client.tasks.append(
+        TaskRecord(
+            project_id="project_demo",
+            title="Ready task",
+            assigned_agent_id="agent-dev",
+        )
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=FailingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_gateway_runner_failure_test"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == "Task runner dependency unavailable"
+    assert [event.type for event in state_client.events] == [
+        "model_call.started",
+        "model_call.failed",
+    ]
+    assert state_client.events[1].trace_id == "trace_gateway_runner_failure_test"
 
 
 def test_run_next_task_returns_404_when_no_task_is_ready() -> None:

@@ -257,6 +257,10 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     direction_run = direction_run_response.json()
     assert direction_run["task"]["assigned_agent_id"] == "agent-direction"
     assert direction_run["task"]["status"] == "completed"
+    assert [event["type"] for event in direction_run["model_call_events"]] == [
+        "model_call.started",
+        "model_call.completed",
+    ]
     assert direction_run["cost_records"][0]["total_cost"] > 0
 
     assert finance_run_response.status_code == 200
@@ -281,6 +285,8 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     state_events = state_timeline_response.json()
     assert "task.started" in [event["type"] for event in state_events]
     assert "task.completed" in [event["type"] for event in state_events]
+    assert "model_call.started" in [event["type"] for event in state_events]
+    assert "model_call.completed" in [event["type"] for event in state_events]
     assert "cost.recorded" in [event["type"] for event in state_events]
     assert any(
         event["type"] == "agent.reported" and event["payload"]["task_id"] == task["id"]

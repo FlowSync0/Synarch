@@ -250,6 +250,8 @@ Progress:
   task result recording, events, and audit logs.
 - Done: every deterministic runner execution records a mock `CostRecord`, emits
   `cost.recorded`, and makes the run queryable by project, agent, model, provider, and trace ID.
+- Done: runner executions now emit `model_call.started` and `model_call.completed`; runtime
+  failures emit `model_call.failed` before the dependency error is returned.
 
 Definition of done:
 

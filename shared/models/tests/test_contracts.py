@@ -52,6 +52,14 @@ def test_task_run_result_captures_execution_boundary() -> None:
         world_view=world_view,
         memory_context=memory_context,
         agent_result=agent_result,
+        model_call_events=[
+            EventRecord(
+                type=EventType.model_call_completed,
+                source_agent_id="agent-dev",
+                target=task.project_id,
+                trace_id="trace_123",
+            )
+        ],
         cost_records=[
             CostRecord(
                 provider_id="provider-local-runtime-stub",
@@ -73,4 +81,5 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["task"]["id"] == task.id
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["model_call_events"][0]["type"] == "model_call.completed"
     assert payload["cost_records"][0]["trace_id"] == "trace_123"
