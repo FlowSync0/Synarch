@@ -197,6 +197,8 @@ Infra
 - **projects** : id, title, goal, status, priority, owner_agent_id, created_at
 - **project_workspaces** : id, project_id, memory_scope, allowed_agent_ids, bridge_project_ids, active
 - **agent_project_assignments** : id, project_id, workspace_id, agent_id, assignment_role, active
+- **project_complexity_reports** : id, project_id, task_count, open_task_count, blocked_task_count, assigned_agent_count, score, split_recommended
+- **project_split_requests** : id, project_id, complexity_report_id, requested_by, reason, proposed_shard_titles, status
 - **tasks** : id, project_id, title, status, assigned_agent_id, depends_on, acceptance_criteria, sequence, result, created_at
 - **events** : id, type, source_agent_id, target, payload, timestamp
 - **memory_items** : id, scope (global/division/agent/project), agent_id, content, embedding, created_at, expires_at

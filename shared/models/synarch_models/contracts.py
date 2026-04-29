@@ -169,6 +169,37 @@ class AgentProjectAssignment(SynarchModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ProjectComplexityReport(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("complexity"))
+    project_id: str
+    task_count: int = 0
+    open_task_count: int = 0
+    blocked_task_count: int = 0
+    assigned_agent_count: int = 0
+    workspace_bridge_count: int = 0
+    score: int = 0
+    threshold: int = 10
+    split_recommended: bool = False
+    reasons: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ProjectSplitRequest(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("project_split"))
+    project_id: str
+    complexity_report_id: str
+    requested_by: str = "system"
+    reason: str
+    proposed_shard_titles: list[str] = Field(default_factory=list)
+    status: ApprovalStatus = ApprovalStatus.requested
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ProjectComplexityAssessment(SynarchModel):
+    report: ProjectComplexityReport
+    split_request: ProjectSplitRequest | None = None
+
+
 class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str

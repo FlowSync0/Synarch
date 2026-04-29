@@ -15,7 +15,9 @@ from synarch_models import (
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
+    ProjectComplexityReport,
     ProjectRecord,
+    ProjectSplitRequest,
     ProjectWorkspace,
     ServiceDefinition,
     TaskRecord,
@@ -64,6 +66,8 @@ class StateRepositories:
     projects: RecordRepository[ProjectRecord]
     project_workspaces: RecordRepository[ProjectWorkspace]
     agent_project_assignments: RecordRepository[AgentProjectAssignment]
+    project_complexity_reports: RecordRepository[ProjectComplexityReport]
+    project_split_requests: RecordRepository[ProjectSplitRequest]
     tasks: RecordRepository[TaskRecord]
     events: RecordRepository[EventRecord]
     services: RecordRepository[ServiceDefinition]
@@ -83,6 +87,8 @@ class StateRepositories:
             projects=InMemoryRecordRepository(),
             project_workspaces=InMemoryRecordRepository(),
             agent_project_assignments=InMemoryRecordRepository(),
+            project_complexity_reports=InMemoryRecordRepository(),
+            project_split_requests=InMemoryRecordRepository(),
             tasks=InMemoryRecordRepository(),
             events=InMemoryRecordRepository(),
             services=InMemoryRecordRepository(),

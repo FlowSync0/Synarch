@@ -30,6 +30,8 @@ class EventType(StrEnum):
     routing_decided = "routing.decided"
     project_created = "project.created"
     project_workspace_created = "project_workspace.created"
+    project_complexity_reported = "project_complexity.reported"
+    project_split_requested = "project_split.requested"
     task_created = "task.created"
     task_started = "task.started"
     task_completed = "task.completed"

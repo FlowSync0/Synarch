@@ -444,6 +444,150 @@ def test_project_workspace_assignment_flow_records_events_and_active_scope() -> 
     }
 
 
+def test_project_complexity_assessment_requests_split_when_threshold_is_reached() -> None:
+    client = TestClient(app)
+    trace_id = "trace_project_complexity_split"
+    for agent_id in ["agent-direction", "agent-dev"]:
+        assert (
+            client.post(
+                "/agents",
+                json={
+                    "id": agent_id,
+                    "name": agent_id,
+                    "role": "Project participant",
+                    "division": "dev",
+                },
+            ).status_code
+            == 201
+        )
+    project_response = client.post(
+        "/projects",
+        json={
+            "id": "project-large-build",
+            "title": "Large build",
+            "goal": "Keep large work decomposed before execution",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    workspace_response = client.post(
+        "/project-workspaces",
+        json={
+            "id": "workspace-large-build",
+            "project_id": "project-large-build",
+            "name": "Large build workspace",
+            "memory_scope": "project:project-large-build",
+            "allowed_agent_ids": ["agent-direction", "agent-dev"],
+        },
+    )
+    assert workspace_response.status_code == 201
+    assignment_response = client.post(
+        "/agent-project-assignments",
+        json={
+            "id": "assignment-large-build-dev",
+            "project_id": "project-large-build",
+            "workspace_id": "workspace-large-build",
+            "agent_id": "agent-dev",
+            "assignment_role": "owner",
+        },
+    )
+    assert assignment_response.status_code == 201
+    for index in range(8):
+        task_response = client.post(
+            "/tasks",
+            json=task_payload("project-large-build", f"Implement slice {index + 1}"),
+        )
+        assert task_response.status_code == 201
+
+    assessment_response = client.post(
+        "/projects/project-large-build/complexity-assessments",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-direction",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert assessment_response.status_code == 201
+    assessment = assessment_response.json()
+    report = assessment["report"]
+    split_request = assessment["split_request"]
+    assert report["task_count"] == 8
+    assert report["open_task_count"] == 8
+    assert report["assigned_agent_count"] == 1
+    assert report["score"] == 10
+    assert report["split_recommended"] is True
+    assert split_request["status"] == "requested"
+    assert split_request["complexity_report_id"] == report["id"]
+    assert split_request["requested_by"] == "agent-direction"
+    assert split_request["proposed_shard_titles"] == [
+        "Large build - planning",
+        "Large build - execution",
+    ]
+
+    reports_response = client.get(
+        "/project-complexity-reports",
+        params={"project_id": "project-large-build"},
+    )
+    assert reports_response.status_code == 200
+    assert [stored_report["id"] for stored_report in reports_response.json()] == [report["id"]]
+
+    split_requests_response = client.get(
+        "/project-split-requests",
+        params={"project_id": "project-large-build", "status": "requested"},
+    )
+    assert split_requests_response.status_code == 200
+    assert [request["id"] for request in split_requests_response.json()] == [split_request["id"]]
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "project_complexity.reported",
+        "project_split.requested",
+    ]
+    assert events[0]["source_agent_id"] == "agent-direction"
+    assert events[0]["payload"]["score"] == 10
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [audit["action"] for audit in audits] == [
+        "project_complexity.reported",
+        "project_split.requested",
+    ]
+
+
+def test_project_complexity_assessment_skips_split_below_threshold() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "id": "project-small-build",
+            "title": "Small build",
+            "goal": "Keep small work in one project",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload("project-small-build", "Implement one small slice"),
+    )
+    assert task_response.status_code == 201
+
+    assessment_response = client.post("/projects/project-small-build/complexity-assessments")
+
+    assert assessment_response.status_code == 201
+    assessment = assessment_response.json()
+    assert assessment["report"]["score"] == 1
+    assert assessment["report"]["split_recommended"] is False
+    assert assessment["split_request"] is None
+    assert (
+        client.get(
+            "/project-split-requests",
+            params={"project_id": "project-small-build"},
+        ).json()
+        == []
+    )
+
+
 def test_project_assignment_requires_workspace_allowlist() -> None:
     client = TestClient(app)
     for agent_id in ["agent-direction", "agent-dev"]:

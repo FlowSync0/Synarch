@@ -25,7 +25,10 @@ from synarch_models import (
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
+    ProjectComplexityAssessment,
+    ProjectComplexityReport,
     ProjectRecord,
+    ProjectSplitRequest,
     ProjectWorkspace,
     ServiceDefinition,
     TaskRecord,
@@ -44,6 +47,9 @@ def default_repositories() -> StateRepositories:
 
 
 REPOSITORIES = default_repositories()
+
+PROJECT_COMPLEXITY_SPLIT_THRESHOLD = 10
+CLOSED_TASK_STATUSES = {TaskStatus.completed, TaskStatus.failed}
 
 
 @dataclass(frozen=True)
@@ -221,6 +227,83 @@ def active_project_workspace(project_id: str) -> ProjectWorkspace | None:
         key=lambda workspace: workspace.created_at,
         reverse=True,
     )[0]
+
+
+def project_tasks(project_id: str) -> list[TaskRecord]:
+    return [task for task in REPOSITORIES.tasks.list_records() if task.project_id == project_id]
+
+
+def active_project_assignments(project_id: str) -> list[AgentProjectAssignment]:
+    return [
+        assignment
+        for assignment in REPOSITORIES.agent_project_assignments.list_records()
+        if assignment.project_id == project_id and assignment.active
+    ]
+
+
+def build_project_complexity_report(project_id: str) -> ProjectComplexityReport:
+    tasks = project_tasks(project_id)
+    open_task_count = sum(task.status not in CLOSED_TASK_STATUSES for task in tasks)
+    blocked_task_count = sum(task.status == TaskStatus.blocked for task in tasks)
+    assigned_agent_count = len(
+        {assignment.agent_id for assignment in active_project_assignments(project_id)}
+    )
+    workspace = active_project_workspace(project_id)
+    workspace_bridge_count = len(workspace.bridge_project_ids) if workspace is not None else 0
+    score = (
+        open_task_count
+        + blocked_task_count * 3
+        + assigned_agent_count * 2
+        + workspace_bridge_count * 2
+    )
+    reasons: list[str] = []
+    if open_task_count >= 8:
+        reasons.append(f"Project has {open_task_count} open tasks.")
+    if blocked_task_count > 0:
+        reasons.append(f"Project has {blocked_task_count} blocked tasks.")
+    if assigned_agent_count >= 4:
+        reasons.append(f"Project has {assigned_agent_count} active assigned agents.")
+    if workspace_bridge_count > 0:
+        reasons.append(f"Project has {workspace_bridge_count} explicit workspace bridges.")
+    if score >= PROJECT_COMPLEXITY_SPLIT_THRESHOLD and not reasons:
+        reasons.append("Project complexity score reached the split threshold.")
+
+    return ProjectComplexityReport(
+        project_id=project_id,
+        task_count=len(tasks),
+        open_task_count=open_task_count,
+        blocked_task_count=blocked_task_count,
+        assigned_agent_count=assigned_agent_count,
+        workspace_bridge_count=workspace_bridge_count,
+        score=score,
+        threshold=PROJECT_COMPLEXITY_SPLIT_THRESHOLD,
+        split_recommended=score >= PROJECT_COMPLEXITY_SPLIT_THRESHOLD,
+        reasons=reasons,
+    )
+
+
+def proposed_project_shards(project: ProjectRecord, report: ProjectComplexityReport) -> list[str]:
+    if report.blocked_task_count > 0:
+        return [f"{project.title} - unblock", f"{project.title} - execution"]
+    if report.assigned_agent_count >= 4:
+        return [f"{project.title} - coordination", f"{project.title} - delivery"]
+    return [f"{project.title} - planning", f"{project.title} - execution"]
+
+
+def project_complexity_payload(report: ProjectComplexityReport) -> dict[str, Any]:
+    return {
+        "project_id": report.project_id,
+        "report_id": report.id,
+        "task_count": report.task_count,
+        "open_task_count": report.open_task_count,
+        "blocked_task_count": report.blocked_task_count,
+        "assigned_agent_count": report.assigned_agent_count,
+        "workspace_bridge_count": report.workspace_bridge_count,
+        "score": report.score,
+        "threshold": report.threshold,
+        "split_recommended": report.split_recommended,
+        "reasons": report.reasons,
+    }
 
 
 def validate_agent_project_assignment(assignment: AgentProjectAssignment) -> None:
@@ -543,6 +626,136 @@ def read_agent_project_assignment(assignment_id: str) -> AgentProjectAssignment:
         REPOSITORIES.agent_project_assignments,
         assignment_id,
         "agent project assignment",
+    )
+
+
+@app.post(
+    "/projects/{project_id}/complexity-assessments",
+    response_model=ProjectComplexityAssessment,
+    status_code=201,
+)
+def assess_project_complexity(project_id: str, request: Request) -> ProjectComplexityAssessment:
+    project = read_record(REPOSITORIES.projects, project_id, "project")
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    source_agent_id = (
+        agent_event_source(audit_context.actor_type, audit_context.actor_id)
+        if audit_context is not None
+        else None
+    )
+
+    report_draft = build_project_complexity_report(project_id)
+    report = create_record(
+        REPOSITORIES.project_complexity_reports,
+        report_draft.id,
+        report_draft,
+    )
+
+    create_domain_event(
+        EventRecord(
+            type=EventType.project_complexity_reported,
+            source_agent_id=source_agent_id,
+            target=project_id,
+            payload=project_complexity_payload(report),
+            trace_id=trace_id,
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="project_complexity.reported",
+        target_type="project_complexity_report",
+        target_id=report.id,
+        payload=project_complexity_payload(report),
+    )
+
+    split_request: ProjectSplitRequest | None = None
+    if report.split_recommended:
+        split_request_draft = ProjectSplitRequest(
+            project_id=project_id,
+            complexity_report_id=report.id,
+            requested_by=audit_context.actor_id if audit_context is not None else "system",
+            reason=" ".join(report.reasons),
+            proposed_shard_titles=proposed_project_shards(project, report),
+        )
+        split_request = create_record(
+            REPOSITORIES.project_split_requests,
+            split_request_draft.id,
+            split_request_draft,
+        )
+        create_domain_event(
+            EventRecord(
+                type=EventType.project_split_requested,
+                source_agent_id=source_agent_id,
+                target=project_id,
+                payload={
+                    "project_id": project_id,
+                    "split_request_id": split_request.id,
+                    "complexity_report_id": report.id,
+                    "proposed_shard_titles": split_request.proposed_shard_titles,
+                    "status": split_request.status,
+                },
+                trace_id=trace_id,
+            )
+        )
+        write_audit_log(
+            audit_context,
+            action="project_split.requested",
+            target_type="project_split_request",
+            target_id=split_request.id,
+            payload={
+                "project_id": project_id,
+                "complexity_report_id": report.id,
+                "status": split_request.status,
+            },
+        )
+
+    return ProjectComplexityAssessment(report=report, split_request=split_request)
+
+
+@app.get("/project-complexity-reports", response_model=list[ProjectComplexityReport])
+def list_project_complexity_reports(
+    project_id: str | None = None,
+) -> list[ProjectComplexityReport]:
+    reports = REPOSITORIES.project_complexity_reports.list_records()
+    if project_id is not None:
+        reports = [report for report in reports if report.project_id == project_id]
+    return reports
+
+
+@app.get("/project-complexity-reports/{report_id}", response_model=ProjectComplexityReport)
+def read_project_complexity_report(report_id: str) -> ProjectComplexityReport:
+    return read_record(
+        REPOSITORIES.project_complexity_reports,
+        report_id,
+        "project complexity report",
+    )
+
+
+@app.get("/project-split-requests", response_model=list[ProjectSplitRequest])
+def list_project_split_requests(
+    project_id: str | None = None,
+    status: ApprovalStatus | None = None,
+) -> list[ProjectSplitRequest]:
+    split_requests = REPOSITORIES.project_split_requests.list_records()
+    if project_id is not None:
+        split_requests = [
+            split_request
+            for split_request in split_requests
+            if split_request.project_id == project_id
+        ]
+    if status is not None:
+        split_requests = [
+            split_request for split_request in split_requests if split_request.status == status
+        ]
+    return split_requests
+
+
+@app.get("/project-split-requests/{split_request_id}", response_model=ProjectSplitRequest)
+def read_project_split_request(split_request_id: str) -> ProjectSplitRequest:
+    return read_record(
+        REPOSITORIES.project_split_requests,
+        split_request_id,
+        "project split request",
     )
 
 

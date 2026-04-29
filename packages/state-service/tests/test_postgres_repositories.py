@@ -21,11 +21,15 @@ def test_postgres_repository_factory_builds_all_state_stores() -> None:
     assert isinstance(repositories.projects, PostgresRecordRepository)
     assert isinstance(repositories.project_workspaces, PostgresRecordRepository)
     assert isinstance(repositories.agent_project_assignments, PostgresRecordRepository)
+    assert isinstance(repositories.project_complexity_reports, PostgresRecordRepository)
+    assert isinstance(repositories.project_split_requests, PostgresRecordRepository)
     assert isinstance(repositories.agent_souls, PostgresRecordRepository)
     assert isinstance(repositories.audit_logs, PostgresRecordRepository)
     assert repositories.projects.table_name == "projects"
     assert repositories.project_workspaces.table_name == "project_workspaces"
     assert repositories.agent_project_assignments.table_name == "agent_project_assignments"
+    assert repositories.project_complexity_reports.table_name == "project_complexity_reports"
+    assert repositories.project_split_requests.table_name == "project_split_requests"
     assert repositories.agent_souls.table_name == "agent_souls"
     assert repositories.audit_logs.table_name == "audit_logs"
 

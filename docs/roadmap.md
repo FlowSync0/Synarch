@@ -14,7 +14,8 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
 - Backend services exist as FastAPI boundaries: gateway, control-plane, state-service,
   memory-service, event-service, and agent-runtime.
 - Shared Pydantic contracts exist for goals, projects, tasks, agents, memory, events, tools,
-  model providers, model policies, costs, audit logs, and lifecycle requests.
+  model providers, model policies, costs, audit logs, lifecycle requests, project workspaces, and
+  project split requests.
 - The state-service exposes endpoints for company state, model routing state, cost records, audit
   logs, task results, and lifecycle requests through in-memory or PostgreSQL repositories.
 - PostgreSQL schema coverage is implemented in `packages/state-service/migrations/0001_initial.sql`.
@@ -177,6 +178,8 @@ Progress:
   execution task.
 - Done: goal submission creates a project workspace and active project assignments for routed
   agents.
+- Done: state-service can persist deterministic project complexity reports and request a project
+  split when the current task/assignment/workspace score reaches the configured threshold.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:

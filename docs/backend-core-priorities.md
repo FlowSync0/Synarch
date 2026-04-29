@@ -108,8 +108,14 @@ Objectives must become small ordered tasks before execution:
 - the runner executes only the next ready task
 - blocked tasks leave a precise debug boundary
 
-Large projects should later produce split requests when the task graph, context volume, cost, or
-external coordination load exceeds configured thresholds.
+Large projects should produce split requests when the task graph, context volume, cost, or external
+coordination load exceeds configured thresholds.
+
+Implemented baseline:
+
+- `ProjectComplexityReport`: deterministic score from open tasks, blocked tasks, active project
+  assignments, and workspace bridges
+- `ProjectSplitRequest`: approval-ready request when the score reaches the split threshold
 
 ## Priority 8: Project Workspaces
 

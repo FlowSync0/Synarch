@@ -56,6 +56,7 @@ The current integration slice is:
 GoalEnvelope
   -> Gateway RoutingDecision
   -> State ProjectRecord + ProjectWorkspace + AgentProjectAssignment + TaskRecord
+  -> ProjectComplexityReport + optional ProjectSplitRequest
   -> Control Plane LocalWorldView + active AgentSoul
   -> Memory Context Assembly
   -> Agent Runtime AgentResult

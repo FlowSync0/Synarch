@@ -6,6 +6,9 @@ from synarch_models import (
     GoalEnvelope,
     LocalWorldView,
     MemoryContext,
+    ProjectComplexityAssessment,
+    ProjectComplexityReport,
+    ProjectSplitRequest,
     TaskRecord,
     TaskRunResult,
     TaskStatus,
@@ -123,3 +126,31 @@ def test_project_workspace_and_assignment_isolate_project_context() -> None:
     assert workspace.memory_scope == "project:project_supplier_search"
     assert assignment.workspace_id == workspace.id
     assert assignment.active is True
+
+
+def test_project_complexity_assessment_serializes_split_request() -> None:
+    report = ProjectComplexityReport(
+        project_id="project_supplier_search",
+        task_count=10,
+        open_task_count=9,
+        blocked_task_count=1,
+        assigned_agent_count=2,
+        score=16,
+        threshold=10,
+        split_recommended=True,
+        reasons=["Project has 9 open tasks."],
+    )
+    split_request = ProjectSplitRequest(
+        project_id=report.project_id,
+        complexity_report_id=report.id,
+        requested_by="agent-direction",
+        reason="Project has 9 open tasks.",
+        proposed_shard_titles=["Supplier search - planning", "Supplier search - execution"],
+    )
+    assessment = ProjectComplexityAssessment(report=report, split_request=split_request)
+
+    payload = assessment.model_dump(mode="json")
+
+    assert payload["report"]["split_recommended"] is True
+    assert payload["split_request"]["status"] == "requested"
+    assert payload["split_request"]["complexity_report_id"] == report.id
