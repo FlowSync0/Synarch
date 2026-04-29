@@ -2,6 +2,7 @@ from synarch_models import (
     ActorType,
     AgentDefinition,
     AgentLifecycleRequest,
+    AgentSoul,
     AiProviderType,
     AuditLogRecord,
     CostRecord,
@@ -85,6 +86,33 @@ def test_agent_lifecycle_request_requires_auditable_actor() -> None:
     assert payload["action"] == "create_agent"
     assert payload["requires_human_approval"] is True
     assert payload["proposed_agent"]["created_by"] == "agent-direction"
+
+
+def test_agent_soul_captures_persistent_identity() -> None:
+    soul = AgentSoul(
+        agent_id="agent-finance",
+        identity="IA Finance is the finance service manager for accounting and invoice review.",
+        mission="Protect company finances by reviewing invoices and VAT anomalies.",
+        responsibilities=["Review invoices", "Prepare accounting entries"],
+        operating_principles=["Keep financial actions auditable"],
+        boundaries=["Never execute payments"],
+        escalation_rules=["Escalate payment or tax anomalies to agent-direction"],
+        created_by="agent-direction",
+    )
+    world_view = LocalWorldView(
+        agent_id="agent-finance",
+        role="Compta, TVA, factures",
+        division="finance",
+        manager="agent-direction",
+        soul=soul,
+    )
+
+    payload = world_view.model_dump(mode="json")
+
+    assert payload["soul"]["mission"].startswith("Protect company finances")
+    assert payload["soul"]["operating_principles"] == ["Keep financial actions auditable"]
+    assert payload["soul"]["boundaries"] == ["Never execute payments"]
+    assert payload["soul"]["created_by"] == "agent-direction"
 
 
 def test_cost_and_audit_records_have_traceable_scope() -> None:

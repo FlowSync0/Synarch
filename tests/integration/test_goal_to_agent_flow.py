@@ -266,6 +266,8 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert finance_run_response.status_code == 200
     finance_run = finance_run_response.json()
     assert finance_run["world_view"]["agent_id"] == "agent-finance"
+    assert finance_run["world_view"]["soul"]["id"] == "soul-agent-finance-v1"
+    assert finance_run["world_view"]["soul"]["created_by"] == "agent-direction"
     assert "payment.execute" in finance_run["world_view"]["permissions"]["denied_tools"]
     assert finance_run["memory_context"]["items"][0]["content"].startswith(
         "Les paiements fournisseurs"

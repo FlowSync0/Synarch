@@ -131,6 +131,10 @@ def read_agent(agent_id: str) -> AgentDefinition:
 def read_world_view(agent_id: str) -> LocalWorldView:
     agent = get_agent_or_404(agent_id)
     agents = list_agents_from_source()
+    try:
+        soul = AGENT_SOURCE.get_agent_soul(agent.id)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
     peers = [
         candidate.id
         for candidate in agents
@@ -142,6 +146,7 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         division=agent.division,
         peers=peers,
         manager=agent.manager_id,
+        soul=soul,
         permissions=agent.permissions,
         capabilities=agent.capabilities,
         policies=world_view_policy_labels(agent),

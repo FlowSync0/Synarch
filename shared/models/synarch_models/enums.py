@@ -37,6 +37,7 @@ class EventType(StrEnum):
     agent_created = "agent.created"
     agent_updated = "agent.updated"
     agent_deactivated = "agent.deactivated"
+    agent_soul_created = "agent_soul.created"
     memory_candidate_created = "memory.candidate_created"
     model_call_started = "model_call.started"
     model_call_completed = "model_call.completed"

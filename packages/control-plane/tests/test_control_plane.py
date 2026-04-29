@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from synarch_control_plane.agent_sources import StateServiceAgentSource
 from synarch_control_plane.main import app, set_agent_source
-from synarch_control_plane.seed import AGENTS
+from synarch_control_plane.seed import AGENT_SOULS, AGENTS
 
 
 def setup_function() -> None:
@@ -24,6 +24,8 @@ def test_world_view_is_limited_to_agent_scope() -> None:
     payload = response.json()
     assert payload["agent_id"] == "agent-dev"
     assert payload["division"] == "dev"
+    assert payload["soul"]["agent_id"] == "agent-dev"
+    assert payload["soul"]["identity"].startswith("IA Dev")
     assert "payment.execute" in payload["permissions"]["denied_tools"]
 
 
@@ -36,6 +38,8 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
             )
         if request.url.path == "/agents/agent-finance":
             return httpx.Response(200, json=AGENTS[1].model_dump(mode="json"))
+        if request.url.path == "/agents/agent-finance/soul":
+            return httpx.Response(200, json=AGENT_SOULS[1].model_dump(mode="json"))
         if request.url.path == "/services":
             return httpx.Response(200, json=[])
         return httpx.Response(404, json={"detail": "not found"})
@@ -50,6 +54,7 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
     payload = response.json()
     assert payload["agent_id"] == "agent-finance"
     assert payload["manager"] == "agent-direction"
+    assert payload["soul"]["id"] == "soul-agent-finance-v1"
 
 
 def test_state_service_source_404_becomes_control_plane_404(
@@ -77,6 +82,8 @@ def test_world_view_includes_state_backed_services_and_model_policy(
             return httpx.Response(200, json=[finance_agent.model_dump(mode="json")])
         if request.url.path == "/agents/agent-finance":
             return httpx.Response(200, json=finance_agent.model_dump(mode="json"))
+        if request.url.path == "/agents/agent-finance/soul":
+            return httpx.Response(404, json={"detail": "No active soul for agent: agent-finance"})
         if request.url.path == "/services":
             return httpx.Response(
                 200,

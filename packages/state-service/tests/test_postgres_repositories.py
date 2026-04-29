@@ -19,8 +19,10 @@ def test_postgres_repository_factory_builds_all_state_stores() -> None:
     repositories = StateRepositories.postgres("postgresql://synarch:synarch@localhost:5432/synarch")
 
     assert isinstance(repositories.projects, PostgresRecordRepository)
+    assert isinstance(repositories.agent_souls, PostgresRecordRepository)
     assert isinstance(repositories.audit_logs, PostgresRecordRepository)
     assert repositories.projects.table_name == "projects"
+    assert repositories.agent_souls.table_name == "agent_souls"
     assert repositories.audit_logs.table_name == "audit_logs"
 
 

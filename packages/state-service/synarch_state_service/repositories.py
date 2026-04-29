@@ -6,6 +6,7 @@ from typing import Protocol
 from synarch_models import (
     AgentDefinition,
     AgentLifecycleRequest,
+    AgentSoul,
     AuditLogRecord,
     CostRecord,
     DivisionRecord,
@@ -57,6 +58,7 @@ class InMemoryRecordRepository[RecordT]:
 class StateRepositories:
     divisions: RecordRepository[DivisionRecord]
     agents: RecordRepository[AgentDefinition]
+    agent_souls: RecordRepository[AgentSoul]
     projects: RecordRepository[ProjectRecord]
     tasks: RecordRepository[TaskRecord]
     events: RecordRepository[EventRecord]
@@ -73,6 +75,7 @@ class StateRepositories:
         return cls(
             divisions=InMemoryRecordRepository(),
             agents=InMemoryRecordRepository(),
+            agent_souls=InMemoryRecordRepository(),
             projects=InMemoryRecordRepository(),
             tasks=InMemoryRecordRepository(),
             events=InMemoryRecordRepository(),

@@ -159,6 +159,14 @@ Infra
   "division": "string",
   "peers": ["agent_id"],
   "manager": "agent_id",
+  "soul": {
+    "identity": "string",
+    "mission": "string",
+    "responsibilities": [],
+    "operating_principles": [],
+    "boundaries": [],
+    "escalation_rules": []
+  },
   "active_projects": [],
   "permissions": {},
   "capabilities": [],
@@ -185,6 +193,7 @@ Infra
 ## Tables de Base de Données Minimales
 
 - **agents** : id, name, role, division, manager_id, status, capabilities, model, created_at
+- **agent_souls** : id, agent_id, version, identity, mission, responsibilities, boundaries, active
 - **projects** : id, title, goal, status, priority, owner_agent_id, created_at
 - **tasks** : id, project_id, title, status, assigned_agent_id, depends_on, result, created_at
 - **events** : id, type, source_agent_id, target, payload, timestamp
@@ -211,7 +220,7 @@ Chaque IA a : sa mémoire longue, ses documents propres, ses skills, son journal
 
 1. **Isolation des contextes** : Chaque division IA a sa propre mémoire. Finance ne pollue pas Dev.
 2. **Mémoire paginée** : Pas de rechargement d'historique complet. Compaction, résumés, retrieval ciblé.
-3. **World model partagé** : Chaque agent sait où il est dans l'org via `LocalWorldView` injecté par le Control Plane, pas via un soul.md géant.
+3. **World model partagé** : Chaque agent sait où il est dans l'org via `LocalWorldView` injecté par le Control Plane. Son `AgentSoul` reste borné et séparé de la mémoire, de l'historique et des skills.
 4. **Event-driven** : Tout passe par des événements (NATS). Les agents réagissent, le système journalise.
 5. **Observabilité dès le jour 1** : OTEL + Langfuse. Pas de vol à l'aveugle.
 6. **Modèles différenciés** : Workers cheap (Ollama/Mistral local), supervisor premium si besoin.

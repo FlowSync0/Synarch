@@ -11,6 +11,7 @@ from synarch_models import (
     AgentLifecycleDecision,
     AgentLifecycleRequest,
     AgentResult,
+    AgentSoul,
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
@@ -164,6 +165,29 @@ def validate_agent_model_policy(agent: AgentDefinition) -> None:
         )
 
 
+def active_agent_soul(agent_id: str) -> AgentSoul | None:
+    active_souls = [
+        soul
+        for soul in REPOSITORIES.agent_souls.list_records()
+        if soul.agent_id == agent_id and soul.active
+    ]
+    if not active_souls:
+        return None
+    return sorted(active_souls, key=lambda soul: (soul.version, soul.created_at), reverse=True)[0]
+
+
+def validate_agent_soul(soul: AgentSoul) -> None:
+    if not REPOSITORIES.agents.exists(soul.agent_id):
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {soul.agent_id}")
+    if soul.active:
+        existing_active_soul = active_agent_soul(soul.agent_id)
+        if existing_active_soul is not None and existing_active_soul.id != soul.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Active soul already exists for agent: {soul.agent_id}",
+            )
+
+
 def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None:
     if lifecycle_request.action == LifecycleAction.create_agent:
         if lifecycle_request.proposed_agent is None:
@@ -241,6 +265,60 @@ def list_agents(division: str | None = None) -> list[AgentDefinition]:
 @app.get("/agents/{agent_id}", response_model=AgentDefinition)
 def read_agent(agent_id: str) -> AgentDefinition:
     return read_record(REPOSITORIES.agents, agent_id, "agent")
+
+
+@app.post("/agent-souls", response_model=AgentSoul, status_code=201)
+def create_agent_soul(soul: AgentSoul, request: Request) -> AgentSoul:
+    audit_context = audit_context_from_request(request)
+    validate_agent_soul(soul)
+    record = create_record(REPOSITORIES.agent_souls, soul.id, soul)
+    create_domain_event(
+        EventRecord(
+            type=EventType.agent_soul_created,
+            source_agent_id=record.created_by
+            if REPOSITORIES.agents.exists(record.created_by)
+            else None,
+            target=record.agent_id,
+            payload={"soul_id": record.id, "version": record.version, "active": record.active},
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="agent_soul.created",
+        target_type="agent_soul",
+        target_id=record.id,
+        payload={"agent_id": record.agent_id, "version": record.version, "active": record.active},
+    )
+    return record
+
+
+@app.get("/agent-souls", response_model=list[AgentSoul])
+def list_agent_souls(
+    agent_id: str | None = None,
+    active: bool | None = None,
+) -> list[AgentSoul]:
+    souls = REPOSITORIES.agent_souls.list_records()
+    if agent_id is not None:
+        souls = [soul for soul in souls if soul.agent_id == agent_id]
+    if active is not None:
+        souls = [soul for soul in souls if soul.active == active]
+    return souls
+
+
+@app.get("/agent-souls/{soul_id}", response_model=AgentSoul)
+def read_agent_soul(soul_id: str) -> AgentSoul:
+    return read_record(REPOSITORIES.agent_souls, soul_id, "agent soul")
+
+
+@app.get("/agents/{agent_id}/soul", response_model=AgentSoul)
+def read_active_agent_soul(agent_id: str) -> AgentSoul:
+    if not REPOSITORIES.agents.exists(agent_id):
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+    soul = active_agent_soul(agent_id)
+    if soul is None:
+        raise HTTPException(status_code=404, detail=f"No active soul for agent: {agent_id}")
+    return soul
 
 
 @app.post("/projects", response_model=ProjectRecord, status_code=201)

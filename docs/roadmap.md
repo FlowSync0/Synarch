@@ -161,6 +161,7 @@ Progress:
 - Done: seed-backed control-plane remains the local fallback for fast tests.
 - Done: Docker Compose points control-plane at state-service after migrations and seeds.
 - Done: `LocalWorldView` includes state-backed model policy labels and available service IDs.
+- Done: `LocalWorldView` includes the active state-backed `AgentSoul` for stable agent identity.
 - Done: state-service records agent lifecycle requests and emits `approval.requested` events.
 - Done: approved lifecycle decisions apply agent creation/deactivation, emit `approval.decided`
   plus agent events, and write audit logs.

@@ -232,8 +232,7 @@ def test_task_result_rejects_wrong_agent() -> None:
 
     assert result_response.status_code == 400
     assert (
-        result_response.json()["detail"]
-        == "Result agent does not match assigned agent: agent-dev"
+        result_response.json()["detail"] == "Result agent does not match assigned agent: agent-dev"
     )
 
 
@@ -266,6 +265,75 @@ def test_state_change_with_actor_headers_writes_audit_log() -> None:
     assert audit["action"] == "project.created"
     assert audit["target_type"] == "project"
     assert audit["target_id"] == project["id"]
+
+
+def test_agent_soul_flow_records_identity_event_and_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_agent_soul_created"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-finance",
+            "name": "IA Finance",
+            "role": "Compta, TVA, factures",
+            "division": "finance",
+            "manager_id": "agent-direction",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    soul_response = client.post(
+        "/agent-souls",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-direction",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "soul-agent-finance-v1",
+            "agent_id": "agent-finance",
+            "identity": "IA Finance is the finance service manager.",
+            "mission": "Coordinate accounting work and keep payment execution out of scope.",
+            "responsibilities": ["Review invoices"],
+            "operating_principles": ["Keep financial decisions auditable"],
+            "boundaries": ["Never execute payments"],
+            "escalation_rules": ["Escalate payment anomalies to IA Direction"],
+            "created_by": "agent-direction",
+        },
+    )
+
+    assert soul_response.status_code == 201
+    soul = soul_response.json()
+    assert soul["active"] is True
+    assert soul["identity"].startswith("IA Finance")
+
+    active_soul_response = client.get("/agents/agent-finance/soul")
+    assert active_soul_response.status_code == 200
+    assert active_soul_response.json()["id"] == "soul-agent-finance-v1"
+
+    duplicate_response = client.post(
+        "/agent-souls",
+        json={
+            "id": "soul-agent-finance-v2",
+            "agent_id": "agent-finance",
+            "identity": "Updated identity.",
+            "mission": "Updated mission.",
+            "created_by": "agent-direction",
+        },
+    )
+    assert duplicate_response.status_code == 409
+
+    events_response = client.get("/events", params={"trace_id": trace_id})
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert [event["type"] for event in events] == ["agent_soul.created"]
+    assert events[0]["target"] == "agent-finance"
+
+    audit_response = client.get("/audit-logs", params={"trace_id": trace_id})
+    assert audit_response.status_code == 200
+    audit = audit_response.json()[0]
+    assert audit["action"] == "agent_soul.created"
+    assert audit["target_id"] == "soul-agent-finance-v1"
 
 
 def test_state_change_rejects_unknown_actor_type_before_writing() -> None:
@@ -520,9 +588,7 @@ def test_agent_lifecycle_approval_creates_agent_events_and_audit() -> None:
     assert agent_response.status_code == 200
     assert agent_response.json()["status"] == "active"
 
-    request_response = client.get(
-        "/agent-lifecycle-requests/lifecycle-create-finance-reviewer"
-    )
+    request_response = client.get("/agent-lifecycle-requests/lifecycle-create-finance-reviewer")
     assert request_response.status_code == 200
     assert request_response.json()["status"] == "applied"
 
@@ -645,6 +711,7 @@ def test_agent_lifecycle_rejection_does_not_apply_request() -> None:
     assert decision_response.status_code == 201
     assert decision_response.json()["status"] == "rejected"
     assert client.get("/agents/agent-ops-extra").status_code == 404
-    assert client.get("/agent-lifecycle-requests/lifecycle-reject-ops-agent").json()[
-        "status"
-    ] == "rejected"
+    assert (
+        client.get("/agent-lifecycle-requests/lifecycle-reject-ops-agent").json()["status"]
+        == "rejected"
+    )

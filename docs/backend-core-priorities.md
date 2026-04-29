@@ -76,7 +76,19 @@ Each service/tool/provider must be visible as structured state:
 This is how an agent knows which company service it may communicate with. It is not prompt text; it is
 runtime state exposed through `LocalWorldView`.
 
-## Priority 5: Logs and Cost Tracking
+## Priority 5: Agent Identity
+
+Each agent needs a bounded durable identity record:
+
+- `AgentSoul`: identity, mission, responsibilities, operating principles, boundaries, escalation rules
+- `AgentDefinition`: org position, manager, model policy, capabilities, permissions
+- `MemoryContext`: scoped facts retrieved for the current task
+- events and audit logs: historical record of what happened
+
+The soul is injected through `LocalWorldView`; it is not a replacement for memory, task history, or
+the skill system.
+
+## Priority 6: Logs and Cost Tracking
 
 Minimum required records:
 

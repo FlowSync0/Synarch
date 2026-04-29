@@ -99,12 +99,33 @@ class AgentDefinition(SynarchModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class AgentSoul(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("agent_soul"))
+    agent_id: str
+    version: int = 1
+    identity: str = Field(min_length=1, max_length=1200)
+    mission: str = Field(min_length=1, max_length=1200)
+    responsibilities: list[str] = Field(default_factory=list)
+    operating_principles: list[str] = Field(default_factory=list)
+    boundaries: list[str] = Field(default_factory=list)
+    escalation_rules: list[str] = Field(default_factory=list)
+    communication_style: str = Field(
+        default="Clear, concise, and auditable.",
+        max_length=800,
+    )
+    created_by: str
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class LocalWorldView(SynarchModel):
     agent_id: str
     role: str
     division: str
     peers: list[str] = Field(default_factory=list)
     manager: str | None = None
+    soul: AgentSoul | None = None
     active_projects: list[str] = Field(default_factory=list)
     permissions: PermissionBundle = Field(default_factory=PermissionBundle)
     capabilities: CapabilityMap = Field(default_factory=CapabilityMap)

@@ -55,7 +55,7 @@ The current integration slice is:
 GoalEnvelope
   -> Gateway RoutingDecision
   -> State ProjectRecord + TaskRecord
-  -> Control Plane LocalWorldView
+  -> Control Plane LocalWorldView + active AgentSoul
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
   -> Event Service timeline

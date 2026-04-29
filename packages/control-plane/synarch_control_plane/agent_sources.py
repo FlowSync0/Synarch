@@ -9,11 +9,12 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentSoul,
     ModelPolicy,
     ServiceDefinition,
 )
 
-from .seed import AGENTS
+from .seed import AGENT_SOULS, AGENTS
 
 
 class AgentSourceUnavailable(Exception):
@@ -31,6 +32,8 @@ class AgentSource(Protocol):
     def list_agents(self) -> list[AgentDefinition]: ...
 
     def get_agent(self, agent_id: str) -> AgentDefinition | None: ...
+
+    def get_agent_soul(self, agent_id: str) -> AgentSoul | None: ...
 
     def list_services(self) -> list[ServiceDefinition]: ...
 
@@ -68,6 +71,11 @@ class SeedAgentSource:
 
     def get_agent(self, agent_id: str) -> AgentDefinition | None:
         return next((agent for agent in self.agents if agent.id == agent_id), None)
+
+    def get_agent_soul(self, agent_id: str) -> AgentSoul | None:
+        return next(
+            (soul for soul in AGENT_SOULS if soul.agent_id == agent_id and soul.active), None
+        )
 
     def list_services(self) -> list[ServiceDefinition]:
         return []
@@ -122,6 +130,12 @@ class StateServiceAgentSource:
         if response is None:
             return None
         return AgentDefinition.model_validate(response.json())
+
+    def get_agent_soul(self, agent_id: str) -> AgentSoul | None:
+        response = self._get_optional(f"/agents/{agent_id}/soul")
+        if response is None:
+            return None
+        return AgentSoul.model_validate(response.json())
 
     def list_services(self) -> list[ServiceDefinition]:
         try:
