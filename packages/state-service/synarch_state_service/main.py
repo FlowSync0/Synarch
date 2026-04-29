@@ -165,6 +165,29 @@ def validate_agent_model_policy(agent: AgentDefinition) -> None:
         )
 
 
+def validate_task_breakdown(task: TaskRecord) -> None:
+    if not task.acceptance_criteria:
+        raise HTTPException(
+            status_code=400,
+            detail="Task requires at least one acceptance criterion",
+        )
+    missing_dependencies = [
+        dependency_id
+        for dependency_id in task.depends_on
+        if not REPOSITORIES.tasks.exists(dependency_id)
+    ]
+    if missing_dependencies:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown task dependencies: {missing_dependencies}",
+        )
+    if task.parent_task_id is not None and not REPOSITORIES.tasks.exists(task.parent_task_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown parent task: {task.parent_task_id}",
+        )
+
+
 def active_agent_soul(agent_id: str) -> AgentSoul | None:
     active_souls = [
         soul
@@ -349,6 +372,7 @@ def create_task(task: TaskRecord, request: Request) -> TaskRecord:
     audit_context = audit_context_from_request(request)
     if not REPOSITORIES.projects.exists(task.project_id):
         raise HTTPException(status_code=400, detail=f"Unknown project: {task.project_id}")
+    validate_task_breakdown(task)
     assigned_agent = REPOSITORIES.agents.get(task.assigned_agent_id)
     if assigned_agent is not None and assigned_agent.status != AgentStatus.active:
         raise HTTPException(
@@ -511,8 +535,7 @@ def record_task_result(
     record = update_record(REPOSITORIES.tasks, task_id, updated_task, "task")
 
     events = [
-        normalize_result_event(event, record, result, trace_id)
-        for event in result.events_emitted
+        normalize_result_event(event, record, result, trace_id) for event in result.events_emitted
     ]
     event_type = status_event_type(result.status)
     if not any(event.type == event_type for event in events):

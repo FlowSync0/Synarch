@@ -173,15 +173,25 @@ def test_goal_submit_persists_project_tasks_and_events() -> None:
     assert [task["assigned_agent_id"] for task in payload["tasks"]] == [
         "agent-direction",
         "agent-finance",
+        "agent-finance",
+        "agent-direction",
     ]
     assert payload["tasks"][1]["depends_on"] == [payload["tasks"][0]["id"]]
+    assert payload["tasks"][2]["depends_on"] == [payload["tasks"][1]["id"]]
+    assert payload["tasks"][3]["depends_on"] == [payload["tasks"][2]["id"]]
+    assert all(task["acceptance_criteria"] for task in payload["tasks"])
+    assert [task["sequence"] for task in payload["tasks"]] == [1, 2, 3, 4]
     assert [event["type"] for event in payload["events"]] == [
         "goal.received",
         "routing.decided",
         "project.created",
         "task.created",
         "task.created",
+        "task.created",
+        "task.created",
     ]
+    task_events = payload["events"][3:]
+    assert [event["payload"]["sequence"] for event in task_events] == [1, 2, 3, 4]
     assert {event["trace_id"] for event in payload["events"]} == {payload["trace_id"]}
     assert state_client.projects[0].id == payload["project"]["id"]
     assert state_client.headers[0]["x-synarch-actor-id"] == "hugo"
@@ -210,6 +220,7 @@ def test_run_next_task_executes_first_ready_task() -> None:
             project_id="project_demo",
             title="Ready task",
             assigned_agent_id="agent-dev",
+            acceptance_criteria=["Ready task can produce a recorded result."],
         )
     )
     memory_client = FakeMemoryClient()
@@ -263,6 +274,7 @@ def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -
             project_id="project_demo",
             title="Ready task",
             assigned_agent_id="agent-dev",
+            acceptance_criteria=["Ready task can produce a recorded result."],
         )
     )
     runner = TaskRunner(

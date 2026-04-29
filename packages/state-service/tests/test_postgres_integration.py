@@ -43,6 +43,7 @@ def test_postgres_task_result_survives_repository_recreation() -> None:
         project_id=project.id,
         title="Persist task result",
         assigned_agent_id="agent-direction",
+        acceptance_criteria=["Task result can be read after repository recreation."],
     )
     first_repositories = StateRepositories.postgres(database_url)
     first_repositories.projects.create(project.id, project)

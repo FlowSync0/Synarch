@@ -9,6 +9,22 @@ def clean_state_service() -> None:
     reset_repositories()
 
 
+def task_payload(
+    project_id: str,
+    title: str,
+    assigned_agent_id: str = "agent-dev",
+    **overrides: object,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "project_id": project_id,
+        "title": title,
+        "assigned_agent_id": assigned_agent_id,
+        "acceptance_criteria": [f"{title} has a recorded outcome."],
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_project_then_task_flow() -> None:
     client = TestClient(app)
     project_response = client.post(
@@ -25,15 +41,39 @@ def test_project_then_task_flow() -> None:
 
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": "Implement route",
-            "assigned_agent_id": "agent-dev",
-        },
+        json=task_payload(project["id"], "Implement route"),
     )
 
     assert task_response.status_code == 201
     assert task_response.json()["project_id"] == project["id"]
+    assert task_response.json()["acceptance_criteria"] == [
+        "Implement route has a recorded outcome."
+    ]
+
+
+def test_task_requires_acceptance_criteria() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Reject vague task",
+            "goal": "Tasks must be debuggable units",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project_response.json()["id"],
+            "title": "Do everything",
+            "assigned_agent_id": "agent-dev",
+        },
+    )
+
+    assert task_response.status_code == 400
+    assert task_response.json()["detail"] == "Task requires at least one acceptance criterion"
 
 
 def test_task_start_updates_status_and_writes_event_and_audit() -> None:
@@ -50,11 +90,7 @@ def test_task_start_updates_status_and_writes_event_and_audit() -> None:
     assert project_response.status_code == 201
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project_response.json()["id"],
-            "title": "Run this task",
-            "assigned_agent_id": "agent-dev",
-        },
+        json=task_payload(project_response.json()["id"], "Run this task"),
     )
     assert task_response.status_code == 201
     task = task_response.json()
@@ -100,21 +136,16 @@ def test_task_start_rejects_incomplete_dependencies() -> None:
     project = project_response.json()
     first_task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": "Dependency",
-            "assigned_agent_id": "agent-direction",
-        },
+        json=task_payload(project["id"], "Dependency", "agent-direction"),
     )
     assert first_task_response.status_code == 201
     second_task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": "Blocked by dependency",
-            "assigned_agent_id": "agent-dev",
-            "depends_on": [first_task_response.json()["id"]],
-        },
+        json=task_payload(
+            project["id"],
+            "Blocked by dependency",
+            depends_on=[first_task_response.json()["id"]],
+        ),
     )
     assert second_task_response.status_code == 201
 
@@ -141,11 +172,7 @@ def test_task_result_updates_task_and_writes_event_and_audit() -> None:
 
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": "Prepare deterministic result",
-            "assigned_agent_id": "agent-dev",
-        },
+        json=task_payload(project["id"], "Prepare deterministic result"),
     )
     assert task_response.status_code == 201
     task = task_response.json()
@@ -211,11 +238,7 @@ def test_task_result_rejects_wrong_agent() -> None:
     assert project_response.status_code == 201
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project_response.json()["id"],
-            "title": "Wrong agent must fail",
-            "assigned_agent_id": "agent-dev",
-        },
+        json=task_payload(project_response.json()["id"], "Wrong agent must fail"),
     )
     assert task_response.status_code == 201
     task = task_response.json()
@@ -460,11 +483,11 @@ def test_company_state_cost_and_audit_flow() -> None:
 
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": "Extract invoice JSON and estimate cost",
-            "assigned_agent_id": "agent-finance-state-test",
-        },
+        json=task_payload(
+            project["id"],
+            "Extract invoice JSON and estimate cost",
+            "agent-finance-state-test",
+        ),
     )
     assert task_response.status_code == 201
     task = task_response.json()
@@ -665,11 +688,11 @@ def test_agent_lifecycle_deactivation_blocks_new_task_assignment() -> None:
 
     task_response = client.post(
         "/tasks",
-        json={
-            "project_id": project_response.json()["id"],
-            "title": "This should be blocked",
-            "assigned_agent_id": "agent-temporary-worker",
-        },
+        json=task_payload(
+            project_response.json()["id"],
+            "This should be blocked",
+            "agent-temporary-worker",
+        ),
     )
 
     assert task_response.status_code == 400

@@ -99,14 +99,50 @@ def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
     task_drafts = [
         TaskDraft(
             title="Clarify success criteria",
+            description="Turn the raw objective into explicit success criteria and constraints.",
             assigned_agent_id="agent-direction",
             priority=envelope.priority,
+            acceptance_criteria=[
+                "The original goal is restated in operational terms.",
+                "Unknowns, constraints, and stop conditions are listed.",
+            ],
+            sequence=1,
         ),
         TaskDraft(
-            title=f"Specialist assessment for: {envelope.goal[:60]}",
+            title="Prepare specialist action plan",
+            description=f"Plan the first scoped work package for: {envelope.goal[:80]}",
             assigned_agent_id=agent_id,
             depends_on=["Clarify success criteria"],
             priority=envelope.priority,
+            acceptance_criteria=[
+                "The specialist scope is small enough to execute and debug independently.",
+                "Expected inputs, outputs, tools, and blockers are identified.",
+            ],
+            sequence=2,
+        ),
+        TaskDraft(
+            title=f"Execute first scoped work package: {envelope.goal[:50]}",
+            description="Execute only the first validated unit of work, not the full project.",
+            assigned_agent_id=agent_id,
+            depends_on=["Prepare specialist action plan"],
+            priority=envelope.priority,
+            acceptance_criteria=[
+                "One concrete work package is completed or explicitly blocked.",
+                "Produced facts, artifacts, costs, and blockers are recorded.",
+            ],
+            sequence=3,
+        ),
+        TaskDraft(
+            title="Review outcome and next split",
+            description="Review the completed unit and decide the next smallest actionable slice.",
+            assigned_agent_id="agent-direction",
+            depends_on=[f"Execute first scoped work package: {envelope.goal[:50]}"],
+            priority=envelope.priority,
+            acceptance_criteria=[
+                "The previous unit is accepted, rejected, or marked blocked with a reason.",
+                "The next task or project split decision is explicit.",
+            ],
+            sequence=4,
         ),
     ]
     return RoutingDecision(
@@ -150,25 +186,26 @@ def persist_goal_submission(
         headers=headers,
     )
 
-    clarify_draft, specialist_draft = routing_decision.task_drafts
-    clarify_task = state_client.create_task(
-        TaskRecord(
-            project_id=project.id,
-            title=clarify_draft.title,
-            assigned_agent_id=clarify_draft.assigned_agent_id,
-        ),
-        headers=headers,
-    )
-    specialist_task = state_client.create_task(
-        TaskRecord(
-            project_id=project.id,
-            title=specialist_draft.title,
-            assigned_agent_id=specialist_draft.assigned_agent_id,
-            depends_on=[clarify_task.id],
-        ),
-        headers=headers,
-    )
-    tasks = [clarify_task, specialist_task]
+    tasks: list[TaskRecord] = []
+    task_ids_by_draft_title: dict[str, str] = {}
+    for draft in routing_decision.task_drafts:
+        task = state_client.create_task(
+            TaskRecord(
+                project_id=project.id,
+                title=draft.title,
+                description=draft.description,
+                assigned_agent_id=draft.assigned_agent_id,
+                depends_on=[
+                    task_ids_by_draft_title.get(dependency, dependency)
+                    for dependency in draft.depends_on
+                ],
+                acceptance_criteria=draft.acceptance_criteria,
+                sequence=draft.sequence,
+            ),
+            headers=headers,
+        )
+        tasks.append(task)
+        task_ids_by_draft_title[draft.title] = task.id
 
     events = [
         state_client.create_event(event, headers=headers)
@@ -226,6 +263,8 @@ def goal_submission_events(
                     "task_id": task.id,
                     "assigned_agent_id": task.assigned_agent_id,
                     "depends_on": task.depends_on,
+                    "acceptance_criteria": task.acceptance_criteria,
+                    "sequence": task.sequence,
                 },
                 trace_id=trace_id,
             )

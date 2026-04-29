@@ -195,7 +195,7 @@ Infra
 - **agents** : id, name, role, division, manager_id, status, capabilities, model, created_at
 - **agent_souls** : id, agent_id, version, identity, mission, responsibilities, boundaries, active
 - **projects** : id, title, goal, status, priority, owner_agent_id, created_at
-- **tasks** : id, project_id, title, status, assigned_agent_id, depends_on, result, created_at
+- **tasks** : id, project_id, title, status, assigned_agent_id, depends_on, acceptance_criteria, sequence, result, created_at
 - **events** : id, type, source_agent_id, target, payload, timestamp
 - **memory_items** : id, scope (global/division/agent/project), agent_id, content, embedding, created_at, expires_at
 - **checkpoints** : id, agent_id, project_id, state_snapshot, timestamp
@@ -220,11 +220,12 @@ Chaque IA a : sa mémoire longue, ses documents propres, ses skills, son journal
 
 1. **Isolation des contextes** : Chaque division IA a sa propre mémoire. Finance ne pollue pas Dev.
 2. **Mémoire paginée** : Pas de rechargement d'historique complet. Compaction, résumés, retrieval ciblé.
-3. **World model partagé** : Chaque agent sait où il est dans l'org via `LocalWorldView` injecté par le Control Plane. Son `AgentSoul` reste borné et séparé de la mémoire, de l'historique et des skills.
-4. **Event-driven** : Tout passe par des événements (NATS). Les agents réagissent, le système journalise.
-5. **Observabilité dès le jour 1** : OTEL + Langfuse. Pas de vol à l'aveugle.
-6. **Modèles différenciés** : Workers cheap (Ollama/Mistral local), supervisor premium si besoin.
-7. **Sécurité par défaut** : Permissions par agent, pas d'accès large.
+3. **Découpage vérifiable** : Aucun objectif ne devient une seule grosse tâche. Chaque tâche a des critères de réussite et une dépendance explicite.
+4. **World model partagé** : Chaque agent sait où il est dans l'org via `LocalWorldView` injecté par le Control Plane. Son `AgentSoul` reste borné et séparé de la mémoire, de l'historique et des skills.
+5. **Event-driven** : Tout passe par des événements (NATS). Les agents réagissent, le système journalise.
+6. **Observabilité dès le jour 1** : OTEL + Langfuse. Pas de vol à l'aveugle.
+7. **Modèles différenciés** : Workers cheap (Ollama/Mistral local), supervisor premium si besoin.
+8. **Sécurité par défaut** : Permissions par agent, pas d'accès large.
 
 ---
 

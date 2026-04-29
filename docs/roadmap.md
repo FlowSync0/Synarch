@@ -173,6 +173,8 @@ Progress:
 - Done: frontend agent organization panel reads control-plane through the same live/fallback path.
 - Done: frontend project panel reads state-service through the same live/fallback path.
 - Done: frontend timeline panel reads state-service events through the same live/fallback path.
+- Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
+  execution task.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:
@@ -180,6 +182,7 @@ Definition of done:
 - Creating an agent through lifecycle approval makes it visible in `/agents`.
 - A deactivated agent cannot receive new tasks.
 - `LocalWorldView` contains only allowed capabilities, tools, services, and policies.
+- New tasks have explicit acceptance criteria.
 
 ### M3. Goal To Project Slice
 

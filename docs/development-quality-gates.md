@@ -14,6 +14,7 @@ that means:
   deterministic fallback.
 - Use generation plus verification: never accept an agent result just because it looks plausible.
 - Make the next change concrete and small: one new behavior, one observable boundary, one test.
+- Split every goal into debuggable tasks with acceptance criteria before execution.
 - Build evals early: non-deterministic behavior needs scenario tests with expected outcomes.
 - Prefer partial autonomy: agents propose and prepare; critical actions stay behind approval gates.
 
@@ -54,7 +55,7 @@ The current integration slice is:
 ```text
 GoalEnvelope
   -> Gateway RoutingDecision
-  -> State ProjectRecord + TaskRecord
+  -> State ProjectRecord + TaskRecord with acceptance criteria
   -> Control Plane LocalWorldView + active AgentSoul
   -> Memory Context Assembly
   -> Agent Runtime AgentResult

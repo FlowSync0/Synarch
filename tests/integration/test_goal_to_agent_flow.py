@@ -207,6 +207,8 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert submission_response.status_code == 201
     submission = submission_response.json()
     assert "agent-finance" in submission["routing_decision"]["target_agents"]
+    assert len(submission["tasks"]) == 4
+    assert all(task["acceptance_criteria"] for task in submission["tasks"])
     project = submission["project"]
 
     timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
@@ -215,6 +217,8 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
         "goal.received",
         "routing.decided",
         "project.created",
+        "task.created",
+        "task.created",
         "task.created",
         "task.created",
     ]

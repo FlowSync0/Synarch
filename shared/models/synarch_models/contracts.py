@@ -48,9 +48,12 @@ class ProjectIntent(SynarchModel):
 
 class TaskDraft(SynarchModel):
     title: str
+    description: str = ""
     assigned_agent_id: str
     depends_on: list[str] = Field(default_factory=list)
     priority: Priority = Priority.medium
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    sequence: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -147,9 +150,13 @@ class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str
     title: str
+    description: str = ""
     status: TaskStatus = TaskStatus.queued
     assigned_agent_id: str
     depends_on: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    parent_task_id: str | None = None
+    sequence: int = 0
     result: dict[str, Any] | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

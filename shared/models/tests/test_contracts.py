@@ -20,7 +20,13 @@ def test_goal_envelope_defaults() -> None:
 
 
 def test_agent_result_is_serializable() -> None:
-    task = TaskRecord(project_id="project_demo", title="Draft plan", assigned_agent_id="agent-dev")
+    task = TaskRecord(
+        project_id="project_demo",
+        title="Draft plan",
+        assigned_agent_id="agent-dev",
+        acceptance_criteria=["Plan has a verifiable next action."],
+        sequence=1,
+    )
     event = EventRecord(type=EventType.task_completed, source_agent_id="agent-dev")
     result = AgentResult(
         agent_id="agent-dev",
@@ -37,7 +43,13 @@ def test_agent_result_is_serializable() -> None:
 
 
 def test_task_run_result_captures_execution_boundary() -> None:
-    task = TaskRecord(project_id="project_demo", title="Draft plan", assigned_agent_id="agent-dev")
+    task = TaskRecord(
+        project_id="project_demo",
+        title="Draft plan",
+        assigned_agent_id="agent-dev",
+        acceptance_criteria=["Plan has a verifiable next action."],
+        sequence=1,
+    )
     world_view = LocalWorldView(agent_id="agent-dev", role="Code and infra", division="dev")
     memory_context = MemoryContext(
         agent_id="agent-dev",
@@ -84,6 +96,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
 
     assert payload["trace_id"] == "trace_123"
     assert payload["task"]["id"] == task.id
+    assert payload["task"]["acceptance_criteria"] == ["Plan has a verifiable next action."]
     assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["agent_result"]["status"] == "needs_review"

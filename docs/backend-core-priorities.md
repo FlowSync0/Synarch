@@ -99,6 +99,18 @@ Minimum required records:
 
 Every state-changing endpoint should write an audit record. Every model call should write a cost record.
 
+## Priority 7: Task Breakdown
+
+Objectives must become small ordered tasks before execution:
+
+- each task has acceptance criteria
+- dependencies are explicit
+- the runner executes only the next ready task
+- blocked tasks leave a precise debug boundary
+
+Large projects should later produce split requests when the task graph, context volume, cost, or
+external coordination load exceeds configured thresholds.
+
 ## Recommended Next Implementation
 
 Implement PostgreSQL repositories in `state-service` for:
