@@ -3,7 +3,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from synarch_models import EventRecord, ProjectRecord, TaskRecord
+from synarch_models import AgentResult, EventRecord, ProjectRecord, TaskRecord
 
 
 class StateServiceUnavailable(Exception):
@@ -39,6 +39,23 @@ class StateClient(Protocol):
         headers: dict[str, str],
     ) -> EventRecord: ...
 
+    def list_tasks(self) -> list[TaskRecord]: ...
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord: ...
+
+    def record_task_result(
+        self,
+        task_id: str,
+        result: AgentResult,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord: ...
+
 
 @dataclass(frozen=True)
 class HttpStateClient:
@@ -72,7 +89,55 @@ class HttpStateClient:
         response = self._post("/events", event.model_dump(mode="json"), headers)
         return EventRecord.model_validate(response.json())
 
-    def _post(self, path: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
+    def list_tasks(self) -> list[TaskRecord]:
+        response = self._get("/tasks")
+        return [TaskRecord.model_validate(task) for task in response.json()]
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        response = self._post(f"/tasks/{task_id}/start", None, headers)
+        return TaskRecord.model_validate(response.json())
+
+    def record_task_result(
+        self,
+        task_id: str,
+        result: AgentResult,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        response = self._post(
+            f"/tasks/{task_id}/results",
+            result.model_dump(mode="json"),
+            headers,
+        )
+        return TaskRecord.model_validate(response.json())
+
+    def _get(self, path: str) -> httpx.Response:
+        try:
+            response = httpx.get(
+                f"{self.base_url.rstrip('/')}{path}",
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as error:
+            raise StateServiceUnavailable(str(error)) from error
+
+        try:
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise StateServiceUnavailable(str(error)) from error
+
+        return response
+
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None,
+        headers: dict[str, str],
+    ) -> httpx.Response:
         try:
             response = httpx.post(
                 f"{self.base_url.rstrip('/')}{path}",

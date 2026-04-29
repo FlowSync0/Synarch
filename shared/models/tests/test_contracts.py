@@ -1,4 +1,14 @@
-from synarch_models import AgentResult, EventRecord, EventType, GoalEnvelope, TaskRecord, TaskStatus
+from synarch_models import (
+    AgentResult,
+    EventRecord,
+    EventType,
+    GoalEnvelope,
+    LocalWorldView,
+    MemoryContext,
+    TaskRecord,
+    TaskRunResult,
+    TaskStatus,
+)
 
 
 def test_goal_envelope_defaults() -> None:
@@ -23,3 +33,29 @@ def test_agent_result_is_serializable() -> None:
 
     assert payload["status"] == "completed"
     assert payload["events_emitted"][0]["type"] == "task.completed"
+
+
+def test_task_run_result_captures_execution_boundary() -> None:
+    task = TaskRecord(project_id="project_demo", title="Draft plan", assigned_agent_id="agent-dev")
+    world_view = LocalWorldView(agent_id="agent-dev", role="Code and infra", division="dev")
+    memory_context = MemoryContext(agent_id="agent-dev", project_id=task.project_id)
+    agent_result = AgentResult(
+        agent_id="agent-dev",
+        task_id=task.id,
+        status=TaskStatus.needs_review,
+        summary="Task prepared for review.",
+    )
+    result = TaskRunResult(
+        trace_id="trace_123",
+        task=task,
+        world_view=world_view,
+        memory_context=memory_context,
+        agent_result=agent_result,
+    )
+
+    payload = result.model_dump(mode="json")
+
+    assert payload["trace_id"] == "trace_123"
+    assert payload["task"]["id"] == task.id
+    assert payload["world_view"]["agent_id"] == "agent-dev"
+    assert payload["agent_result"]["status"] == "needs_review"

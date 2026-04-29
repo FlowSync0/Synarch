@@ -5,10 +5,19 @@ from synarch_agent_runtime.main import app as agent_runtime_app
 from synarch_control_plane.main import app as control_plane_app
 from synarch_event_service.main import app as event_service_app
 from synarch_gateway.main import app as gateway_app
-from synarch_gateway.main import get_state_client
+from synarch_gateway.main import get_state_client, get_task_runner
 from synarch_gateway.state_client import StateServiceRequestError
+from synarch_gateway.task_runner import TaskRunner, TaskRunnerRequestError
 from synarch_memory_service.main import app as memory_service_app
-from synarch_models import EventRecord, ProjectRecord, TaskRecord
+from synarch_models import (
+    AgentResult,
+    AgentTaskRequest,
+    EventRecord,
+    LocalWorldView,
+    MemoryContext,
+    ProjectRecord,
+    TaskRecord,
+)
 from synarch_state_service.main import app as state_service_app
 from synarch_state_service.main import reset_repositories
 
@@ -62,6 +71,72 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return EventRecord.model_validate(response.json())
 
+    def list_tasks(self) -> list[TaskRecord]:
+        response = self.client.get("/tasks")
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return [TaskRecord.model_validate(task) for task in response.json()]
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        response = self.client.post(f"/tasks/{task_id}/start", headers=headers)
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return TaskRecord.model_validate(response.json())
+
+    def record_task_result(
+        self,
+        task_id: str,
+        result: AgentResult,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        response = self.client.post(
+            f"/tasks/{task_id}/results",
+            json=result.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return TaskRecord.model_validate(response.json())
+
+
+class ControlPlaneTestClient:
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+
+    def get_world_view(self, agent_id: str) -> LocalWorldView:
+        response = self.client.get(f"/agents/{agent_id}/world-view")
+        if response.status_code != 200:
+            raise TaskRunnerRequestError(response.status_code, response.json())
+        return LocalWorldView.model_validate(response.json())
+
+
+class MemoryServiceTestClient:
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+
+    def assemble_context(self, context: MemoryContext) -> MemoryContext:
+        response = self.client.post("/context/assemble", json=context.model_dump(mode="json"))
+        if response.status_code != 200:
+            raise TaskRunnerRequestError(response.status_code, response.json())
+        return MemoryContext.model_validate(response.json())
+
+
+class AgentRuntimeTestClient:
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        response = self.client.post("/tasks/run", json=request.model_dump(mode="json"))
+        if response.status_code != 200:
+            raise TaskRunnerRequestError(response.status_code, response.json())
+        return AgentResult.model_validate(response.json())
+
 
 @pytest.mark.integration
 def test_goal_to_agent_result_flow_across_current_layers() -> None:
@@ -105,16 +180,6 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert audit_response.status_code == 200
     assert {record["actor_id"] for record in audit_response.json()} == {"integration-test"}
 
-    task = next(
-        task for task in submission["tasks"] if task["assigned_agent_id"] == "agent-finance"
-    )
-
-    world_view_response = control_plane.get(f"/agents/{task['assigned_agent_id']}/world-view")
-    assert world_view_response.status_code == 200
-    world_view = world_view_response.json()
-    assert world_view["agent_id"] == "agent-finance"
-    assert "payment.execute" in world_view["permissions"]["denied_tools"]
-
     memory_item_response = memory.post(
         "/memory-items",
         json={
@@ -126,42 +191,53 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     )
     assert memory_item_response.status_code == 201
 
-    context_response = memory.post(
-        "/context/assemble",
-        json={"agent_id": "agent-finance", "project_id": project["id"], "token_budget": 1200},
+    runner = TaskRunner(
+        state=StateServiceTestClient(state),
+        control_plane=ControlPlaneTestClient(control_plane),
+        memory=MemoryServiceTestClient(memory),
+        runtime=AgentRuntimeTestClient(agent_runtime),
     )
-    assert context_response.status_code == 200
-    memory_context = context_response.json()
-    assert memory_context["items"][0]["content"].startswith("Les paiements fournisseurs")
+    gateway_app.dependency_overrides[get_task_runner] = lambda: runner
+    try:
+        direction_run_response = gateway.post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": submission["trace_id"]},
+        )
+        finance_run_response = gateway.post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": submission["trace_id"]},
+        )
+    finally:
+        gateway_app.dependency_overrides.clear()
 
-    result_response = agent_runtime.post(
-        "/tasks/run",
-        json={"task": task, "world_view": world_view, "memory_context": memory_context},
+    assert direction_run_response.status_code == 200
+    direction_run = direction_run_response.json()
+    assert direction_run["task"]["assigned_agent_id"] == "agent-direction"
+    assert direction_run["task"]["status"] == "completed"
+
+    assert finance_run_response.status_code == 200
+    finance_run = finance_run_response.json()
+    assert finance_run["world_view"]["agent_id"] == "agent-finance"
+    assert "payment.execute" in finance_run["world_view"]["permissions"]["denied_tools"]
+    assert finance_run["memory_context"]["items"][0]["content"].startswith(
+        "Les paiements fournisseurs"
     )
-    assert result_response.status_code == 200
-    agent_result = result_response.json()
+
+    task = finance_run["task"]
+    agent_result = finance_run["agent_result"]
     assert agent_result["status"] == "needs_review"
     assert agent_result["events_emitted"]
-
-    result_record_response = state.post(
-        f"/tasks/{task['id']}/results",
-        headers={
-            "X-Synarch-Actor-Type": "agent",
-            "X-Synarch-Actor-Id": task["assigned_agent_id"],
-            "X-Synarch-Trace-Id": submission["trace_id"],
-        },
-        json=agent_result,
-    )
-    assert result_record_response.status_code == 200
-    recorded_task = result_record_response.json()
-    assert recorded_task["status"] == "needs_review"
-    assert recorded_task["result"]["summary"] == agent_result["summary"]
+    assert task["status"] == "needs_review"
+    assert task["result"]["summary"] == agent_result["summary"]
 
     state_timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
     assert state_timeline_response.status_code == 200
+    state_events = state_timeline_response.json()
+    assert "task.started" in [event["type"] for event in state_events]
+    assert "task.completed" in [event["type"] for event in state_events]
     assert any(
         event["type"] == "agent.reported" and event["payload"]["task_id"] == task["id"]
-        for event in state_timeline_response.json()
+        for event in state_events
     )
 
     event_response = events.post("/events", json=agent_result["events_emitted"][0])

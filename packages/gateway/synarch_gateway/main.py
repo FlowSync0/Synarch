@@ -1,6 +1,6 @@
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
@@ -15,6 +15,7 @@ from synarch_models import (
     RoutingDecision,
     TaskDraft,
     TaskRecord,
+    TaskRunResult,
 )
 
 from .state_client import (
@@ -22,6 +23,15 @@ from .state_client import (
     StateClient,
     StateServiceRequestError,
     StateServiceUnavailable,
+)
+from .task_runner import (
+    HttpAgentRuntimeClient,
+    HttpControlPlaneClient,
+    HttpMemoryClient,
+    NoReadyTask,
+    TaskRunner,
+    TaskRunnerRequestError,
+    TaskRunnerUnavailable,
 )
 
 
@@ -32,6 +42,7 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://localhost:8030"
     event_service_url: str = "http://localhost:8040"
     agent_runtime_url: str = "http://localhost:8050"
+    task_runner_memory_token_budget: int = 1200
 
 
 settings = Settings()
@@ -55,6 +66,25 @@ def get_state_client() -> StateClient:
     return HttpStateClient(
         settings.state_service_url,
         timeout_seconds=settings.state_service_timeout_seconds,
+    )
+
+
+def get_task_runner() -> TaskRunner:
+    return TaskRunner(
+        state=get_state_client(),
+        control_plane=HttpControlPlaneClient(
+            settings.control_plane_url,
+            timeout_seconds=settings.state_service_timeout_seconds,
+        ),
+        memory=HttpMemoryClient(
+            settings.memory_service_url,
+            timeout_seconds=settings.state_service_timeout_seconds,
+        ),
+        runtime=HttpAgentRuntimeClient(
+            settings.agent_runtime_url,
+            timeout_seconds=settings.state_service_timeout_seconds,
+        ),
+        memory_token_budget=settings.task_runner_memory_token_budget,
     )
 
 
@@ -91,6 +121,14 @@ def audit_headers(envelope: GoalEnvelope, trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.user.value,
         "x-synarch-actor-id": envelope.requester,
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def service_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-task-runner",
         "x-synarch-trace-id": trace_id,
     }
 
@@ -233,3 +271,19 @@ def submit_goal_to_state(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post("/tasks/run-next", response_model=TaskRunResult)
+def run_next_task(
+    request: Request,
+    runner: TaskRunner = Depends(get_task_runner),
+) -> TaskRunResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    try:
+        return runner.run_next(trace_id=trace_id, headers=service_headers(trace_id))
+    except NoReadyTask as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error

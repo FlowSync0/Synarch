@@ -306,3 +306,11 @@ class AgentResult(SynarchModel):
     events_emitted: list[EventRecord] = Field(default_factory=list)
     memory_candidates: list[MemoryItem] = Field(default_factory=list)
     summary: str
+
+
+class TaskRunResult(SynarchModel):
+    trace_id: str
+    task: TaskRecord
+    world_view: LocalWorldView
+    memory_context: MemoryContext
+    agent_result: AgentResult

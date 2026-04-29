@@ -301,6 +301,55 @@ def read_task(task_id: str) -> TaskRecord:
     return read_record(REPOSITORIES.tasks, task_id, "task")
 
 
+def incomplete_dependency_ids(task: TaskRecord) -> list[str]:
+    incomplete: list[str] = []
+    for dependency_id in task.depends_on:
+        dependency = REPOSITORIES.tasks.get(dependency_id)
+        if dependency is None or dependency.status != TaskStatus.completed:
+            incomplete.append(dependency_id)
+    return incomplete
+
+
+@app.post("/tasks/{task_id}/start", response_model=TaskRecord)
+def start_task(task_id: str, request: Request) -> TaskRecord:
+    task = read_record(REPOSITORIES.tasks, task_id, "task")
+    if task.status != TaskStatus.queued:
+        raise HTTPException(status_code=409, detail=f"Task is already {task.status}")
+
+    incomplete_dependencies = incomplete_dependency_ids(task)
+    if incomplete_dependencies:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task dependencies are not completed: {incomplete_dependencies}",
+        )
+
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    record = update_record(
+        REPOSITORIES.tasks,
+        task_id,
+        task.model_copy(update={"status": TaskStatus.running}),
+        "task",
+    )
+    create_domain_event(
+        EventRecord(
+            type=EventType.task_started,
+            source_agent_id=record.assigned_agent_id,
+            target=record.project_id,
+            payload={"task_id": record.id, "status": record.status},
+            trace_id=trace_id,
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="task.started",
+        target_type="task",
+        target_id=record.id,
+        payload={"project_id": record.project_id, "agent_id": record.assigned_agent_id},
+    )
+    return record
+
+
 def task_result_payload(result: AgentResult) -> dict[str, Any]:
     return {
         "agent_id": result.agent_id,

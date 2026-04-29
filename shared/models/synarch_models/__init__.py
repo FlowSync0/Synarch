@@ -26,6 +26,7 @@ from .contracts import (
     ServiceDefinition,
     TaskDraft,
     TaskRecord,
+    TaskRunResult,
     ToolCallRequest,
     ToolResult,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "ServiceKind",
     "TaskDraft",
     "TaskRecord",
+    "TaskRunResult",
     "TaskStatus",
     "ToolCallRequest",
     "ToolResult",

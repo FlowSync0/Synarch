@@ -36,6 +36,94 @@ def test_project_then_task_flow() -> None:
     assert task_response.json()["project_id"] == project["id"]
 
 
+def test_task_start_updates_status_and_writes_event_and_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_started"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Start queued task",
+            "goal": "Move a task from queued to running",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project_response.json()["id"],
+            "title": "Run this task",
+            "assigned_agent_id": "agent-dev",
+        },
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+
+    start_response = client.post(
+        f"/tasks/{task['id']}/start",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-task-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert start_response.status_code == 200
+    started_task = start_response.json()
+    assert started_task["status"] == "running"
+
+    events_response = client.get("/events", params={"trace_id": trace_id})
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert [event["type"] for event in events] == ["task.started"]
+    assert events[0]["payload"]["task_id"] == task["id"]
+
+    audit_response = client.get("/audit-logs", params={"trace_id": trace_id})
+    assert audit_response.status_code == 200
+    audit = audit_response.json()[0]
+    assert audit["actor_type"] == "service"
+    assert audit["action"] == "task.started"
+    assert audit["target_id"] == task["id"]
+
+
+def test_task_start_rejects_incomplete_dependencies() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Dependency gate",
+            "goal": "Do not start tasks before dependencies are completed",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+    first_task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project["id"],
+            "title": "Dependency",
+            "assigned_agent_id": "agent-direction",
+        },
+    )
+    assert first_task_response.status_code == 201
+    second_task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project["id"],
+            "title": "Blocked by dependency",
+            "assigned_agent_id": "agent-dev",
+            "depends_on": [first_task_response.json()["id"]],
+        },
+    )
+    assert second_task_response.status_code == 201
+
+    start_response = client.post(f"/tasks/{second_task_response.json()['id']}/start")
+
+    assert start_response.status_code == 409
+    assert start_response.json()["detail"].startswith("Task dependencies are not completed:")
+
+
 def test_task_result_updates_task_and_writes_event_and_audit() -> None:
     client = TestClient(app)
     trace_id = "trace_task_result_recorded"

@@ -40,9 +40,9 @@ through the dashboard.
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, and timeline events, plus sample metrics. | No cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
-| B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, keeps a planning route, and persists goals through `/goals/submit`. | Routing is keyword-based only and does not yet consult live control-plane policies. | Submit goal -> persisted project/tasks -> event timeline. |
+| B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, and runs ready tasks through `/tasks/run-next`. | Routing is keyword-based only and does not yet consult live control-plane policies. | Submit goal -> run ready tasks -> persisted result timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
-| D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`. | No persistent agent workers, no model gateway, no real execution loop, no approvals. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
+| D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`; gateway can invoke it through a deterministic runner. | No persistent worker process, no model gateway, no real LLM execution, no approval UI for task review. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
 | E. Project / Workflow | Next | Project/task contracts, durable repositories, task result recording, and timeline events exist. | No dependencies engine or task scheduling loop yet. | Agent result -> task status/result -> durable event/audit timeline. |
 | F. Memory & Context | Partial | Memory item endpoint and basic scoped context assembly exist. | In-memory only, no token budgeting, no compaction, no vector/graph retrieval. | Context assembly filters by agent/project/scope and enforces token budget. |
 | G. Execution & Tooling | Later | Tool contracts exist (`ToolCallRequest`, `ToolResult`). | No tool registry, permission enforcement, sandbox, or audit trail for tool calls. | Denied tool call fails before execution and records audit/event. |
@@ -246,6 +246,8 @@ Progress:
 - Done: gateway-generated trace IDs propagate into state-service events and audit logs for goal
   submission.
 - Done: task result recording writes traceable event and audit records.
+- Done: `/tasks/run-next` propagates the same trace ID through task start, runtime execution,
+  task result recording, events, and audit logs.
 
 Definition of done:
 
