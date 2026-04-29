@@ -10,6 +10,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentResult,
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
@@ -25,6 +26,7 @@ from synarch_models import (
     ProjectRecord,
     ServiceDefinition,
     TaskRecord,
+    TaskStatus,
 )
 from synarch_state_service.repositories import RecordRepository, StateRepositories
 
@@ -297,6 +299,112 @@ def list_tasks(project_id: str | None = None) -> list[TaskRecord]:
 @app.get("/tasks/{task_id}", response_model=TaskRecord)
 def read_task(task_id: str) -> TaskRecord:
     return read_record(REPOSITORIES.tasks, task_id, "task")
+
+
+def task_result_payload(result: AgentResult) -> dict[str, Any]:
+    return {
+        "agent_id": result.agent_id,
+        "summary": result.summary,
+        "actions_taken": result.actions_taken,
+        "sub_tasks_created": [
+            task_draft.model_dump(mode="json") for task_draft in result.sub_tasks_created
+        ],
+        "events_emitted": [event.model_dump(mode="json") for event in result.events_emitted],
+        "memory_candidates": [
+            memory_item.model_dump(mode="json") for memory_item in result.memory_candidates
+        ],
+    }
+
+
+def status_event_type(status: TaskStatus) -> EventType:
+    if status == TaskStatus.running:
+        return EventType.task_started
+    if status == TaskStatus.completed:
+        return EventType.task_completed
+    if status == TaskStatus.blocked:
+        return EventType.task_blocked
+    return EventType.agent_reported
+
+
+def task_status_event(task: TaskRecord, result: AgentResult, trace_id: str | None) -> EventRecord:
+    return EventRecord(
+        type=status_event_type(result.status),
+        source_agent_id=result.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "status": result.status,
+            "summary": result.summary,
+        },
+        trace_id=trace_id,
+    )
+
+
+def normalize_result_event(
+    event: EventRecord,
+    task: TaskRecord,
+    result: AgentResult,
+    trace_id: str | None,
+) -> EventRecord:
+    payload = {"task_id": task.id, **event.payload}
+    return event.model_copy(
+        update={
+            "source_agent_id": event.source_agent_id or result.agent_id,
+            "target": event.target or task.project_id,
+            "payload": payload,
+            "trace_id": event.trace_id or trace_id,
+        }
+    )
+
+
+@app.post("/tasks/{task_id}/results", response_model=TaskRecord)
+def record_task_result(
+    task_id: str,
+    result: AgentResult,
+    request: Request,
+) -> TaskRecord:
+    if result.task_id != task_id:
+        raise HTTPException(status_code=400, detail="Result task_id must match path")
+
+    task = read_record(REPOSITORIES.tasks, task_id, "task")
+    if result.agent_id != task.assigned_agent_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Result agent does not match assigned agent: {task.assigned_agent_id}",
+        )
+
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    updated_task = task.model_copy(
+        update={
+            "status": result.status,
+            "result": task_result_payload(result),
+        }
+    )
+    record = update_record(REPOSITORIES.tasks, task_id, updated_task, "task")
+
+    events = [
+        normalize_result_event(event, record, result, trace_id)
+        for event in result.events_emitted
+    ]
+    event_type = status_event_type(result.status)
+    if not any(event.type == event_type for event in events):
+        events.insert(0, task_status_event(record, result, trace_id))
+    for event in events:
+        create_domain_event(event)
+
+    write_audit_log(
+        audit_context,
+        action="task.result_recorded",
+        target_type="task",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "agent_id": result.agent_id,
+            "status": result.status,
+        },
+    )
+    return record
 
 
 @app.post("/events", response_model=EventRecord, status_code=201)

@@ -143,6 +143,27 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert agent_result["status"] == "needs_review"
     assert agent_result["events_emitted"]
 
+    result_record_response = state.post(
+        f"/tasks/{task['id']}/results",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": task["assigned_agent_id"],
+            "X-Synarch-Trace-Id": submission["trace_id"],
+        },
+        json=agent_result,
+    )
+    assert result_record_response.status_code == 200
+    recorded_task = result_record_response.json()
+    assert recorded_task["status"] == "needs_review"
+    assert recorded_task["result"]["summary"] == agent_result["summary"]
+
+    state_timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
+    assert state_timeline_response.status_code == 200
+    assert any(
+        event["type"] == "agent.reported" and event["payload"]["task_id"] == task["id"]
+        for event in state_timeline_response.json()
+    )
+
     event_response = events.post("/events", json=agent_result["events_emitted"][0])
     assert event_response.status_code == 202
 

@@ -26,6 +26,8 @@ jobs:
           python -m pip install pytest ruff mypy
       - name: Lint
         run: python -m ruff check .
+      - name: Typecheck
+        run: python -m mypy shared/models packages/gateway packages/control-plane packages/state-service packages/memory-service packages/event-service packages/agent-runtime --cache-dir /tmp/synarch-mypy-cache
       - name: Test
         run: python -m pytest
 

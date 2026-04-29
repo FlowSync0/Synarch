@@ -1,6 +1,6 @@
 # Synarch Roadmap
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
 
 This roadmap is the operating map for Synarch. The README explains the vision, and
 `docs/development-quality-gates.md` defines the verification discipline. This document answers:
@@ -15,17 +15,17 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
   memory-service, event-service, and agent-runtime.
 - Shared Pydantic contracts exist for goals, projects, tasks, agents, memory, events, tools,
   model providers, model policies, costs, audit logs, and lifecycle requests.
-- The state-service now exposes endpoints for company state, model routing state, cost records, and
-  audit logs, but those endpoints still use in-memory stores.
-- PostgreSQL schema coverage has started in `packages/state-service/migrations/0001_initial.sql`.
+- The state-service exposes endpoints for company state, model routing state, cost records, audit
+  logs, task results, and lifecycle requests through in-memory or PostgreSQL repositories.
+- PostgreSQL schema coverage is implemented in `packages/state-service/migrations/0001_initial.sql`.
 - A Next.js 16 / Tailwind CSS 4 dashboard exists. Projects, agents, lifecycle approvals, and
   timeline events now read backend APIs through TanStack Query and Next API proxies, with sample
   fallbacks when services are offline.
 - `make PYTHON=.venv\Scripts\python.exe verify` passes locally on Windows.
 
 The product is therefore testable through code, APIs, and the first live UI slices. It is not yet a
-complete live interface because cost, health, and goal submission flows are still mostly sample data
-or absent.
+complete live interface because cost, health, and goal submission flows are not yet fully wired
+through the dashboard.
 
 ## Status Legend
 
@@ -40,10 +40,10 @@ or absent.
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, and timeline events, plus sample metrics. | No cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
-| B. Orchestration | Partial | Gateway accepts `GoalEnvelope` and returns deterministic `RoutingDecision`. | Gateway does not yet create project/tasks/events across services. Routing is keyword-based only. | Submit goal -> persisted project/tasks -> event timeline. |
+| B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, keeps a planning route, and persists goals through `/goals/submit`. | Routing is keyword-based only and does not yet consult live control-plane policies. | Submit goal -> persisted project/tasks -> event timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`. | No persistent agent workers, no model gateway, no real execution loop, no approvals. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
-| E. Project / Workflow | Next | Project/task contracts and state-service endpoints exist. | State is in memory; no dependencies engine, lifecycle transitions, or restart survival. | Postgres-backed project/task/event repositories survive restart. |
+| E. Project / Workflow | Next | Project/task contracts, durable repositories, task result recording, and timeline events exist. | No dependencies engine or task scheduling loop yet. | Agent result -> task status/result -> durable event/audit timeline. |
 | F. Memory & Context | Partial | Memory item endpoint and basic scoped context assembly exist. | In-memory only, no token budgeting, no compaction, no vector/graph retrieval. | Context assembly filters by agent/project/scope and enforces token budget. |
 | G. Execution & Tooling | Later | Tool contracts exist (`ToolCallRequest`, `ToolResult`). | No tool registry, permission enforcement, sandbox, or audit trail for tool calls. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Later | Conceptual docs only. | No connectors, ingestion jobs, document provenance, or loaders. | Upload/source stub creates traceable knowledge item with provenance. |
@@ -76,7 +76,7 @@ Done already:
 
 - Monorepo layout exists.
 - CI exists for backend and frontend.
-- Backend `make verify` passes when `PYTHON` points to the local Windows venv.
+- Backend `make verify` runs Ruff, mypy, and pytest when `PYTHON` points to the local venv.
 - Frontend scripts exist for lint, route type generation, TypeScript checking, and production build.
 - Frontend stack is on Next.js 16, React 19.2, Tailwind CSS 4, and ESLint flat config.
 
@@ -84,7 +84,7 @@ Remaining:
 
 - Make Windows setup first-class in docs and Makefile.
 - Add a short `docs/testing.md` or update local development docs with Windows commands.
-- Decide whether CI should run `mypy`; config exists, but CI currently runs lint and tests only.
+- Document the recommended cache directories for sandboxed/local environments.
 
 Definition of done:
 
@@ -124,7 +124,7 @@ Progress:
 - Done: `make seed-state` creates default divisions and initial agents idempotently.
 - Done: state-changing endpoints write audit logs when `X-Synarch-Actor-Id` is provided.
 - Done: Docker Compose has a `state-migrations` one-shot service before `state-service`.
-- Next: run the restart-survival test against Docker PostgreSQL.
+- Done: restart-survival tests run against Docker PostgreSQL for projects and task results.
 
 Do not include yet:
 
@@ -182,7 +182,7 @@ Definition of done:
 
 ### M3. Goal To Project Slice
 
-Status: Partial.
+Status: Done for the deterministic baseline.
 
 Goal: a user goal becomes persisted work and visible timeline data.
 
@@ -190,13 +190,13 @@ Scope:
 
 - Gateway receives `GoalEnvelope`.
 - Gateway asks control-plane for available agents and policies.
-- Gateway creates project and tasks in state-service.
-- Gateway emits `goal.received`, `routing.decided`, `project.created`, and `task.created`.
+- Gateway creates project and tasks in state-service through `/goals/submit`.
+- Gateway records `goal.received`, `routing.decided`, `project.created`, and `task.created`.
 - Gateway returns a response that includes IDs, not only a draft decision.
 
 Definition of done:
 
-- POST `/goals` creates a persisted project and tasks.
+- POST `/goals/submit` creates a persisted project and tasks.
 - Replaying project state shows task list and event timeline.
 - Same input routes deterministically in tests.
 - Unknown or ambiguous goals remain owned by IA Direction.
@@ -220,6 +220,13 @@ Definition of done:
 - Project timeline can be rebuilt from events.
 - Failed event publishing is visible and retryable.
 
+Progress:
+
+- Done: state-service records durable domain events for goal submission, lifecycle requests,
+  lifecycle decisions, and task results.
+- Done: agent runtime results can be applied to a task and written into the state-service timeline
+  with the same trace ID.
+
 ### M5. Observability And Cost Ledger
 
 Status: Partial.
@@ -233,6 +240,12 @@ Scope:
 - Add OpenTelemetry FastAPI instrumentation.
 - Record `CostRecord` for every model call, even mocked ones.
 - Add audit logs for state changes, lifecycle decisions, and tool calls.
+
+Progress:
+
+- Done: gateway-generated trace IDs propagate into state-service events and audit logs for goal
+  submission.
+- Done: task result recording writes traceable event and audit records.
 
 Definition of done:
 

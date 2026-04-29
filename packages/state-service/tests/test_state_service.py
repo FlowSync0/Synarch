@@ -36,6 +36,119 @@ def test_project_then_task_flow() -> None:
     assert task_response.json()["project_id"] == project["id"]
 
 
+def test_task_result_updates_task_and_writes_event_and_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_result_recorded"
+
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Runtime result persistence",
+            "goal": "Record agent execution output against the task",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    project = project_response.json()
+
+    task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project["id"],
+            "title": "Prepare deterministic result",
+            "assigned_agent_id": "agent-dev",
+        },
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+
+    result_response = client.post(
+        f"/tasks/{task['id']}/results",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-dev",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "agent_id": "agent-dev",
+            "task_id": task["id"],
+            "status": "needs_review",
+            "actions_taken": ["Loaded LocalWorldView", "Prepared execution plan"],
+            "events_emitted": [
+                {
+                    "type": "agent.reported",
+                    "payload": {"mode": "stub-runtime"},
+                }
+            ],
+            "summary": "Runtime stub prepared the task for review.",
+        },
+    )
+
+    assert result_response.status_code == 200
+    updated_task = result_response.json()
+    assert updated_task["status"] == "needs_review"
+    assert updated_task["result"]["summary"] == "Runtime stub prepared the task for review."
+    assert updated_task["result"]["actions_taken"] == [
+        "Loaded LocalWorldView",
+        "Prepared execution plan",
+    ]
+
+    events_response = client.get("/events", params={"trace_id": trace_id})
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert [event["type"] for event in events] == ["agent.reported"]
+    assert events[0]["source_agent_id"] == "agent-dev"
+    assert events[0]["target"] == project["id"]
+    assert events[0]["payload"]["task_id"] == task["id"]
+
+    audit_response = client.get("/audit-logs", params={"trace_id": trace_id})
+    assert audit_response.status_code == 200
+    audit = audit_response.json()[0]
+    assert audit["actor_type"] == "agent"
+    assert audit["actor_id"] == "agent-dev"
+    assert audit["action"] == "task.result_recorded"
+    assert audit["target_id"] == task["id"]
+
+
+def test_task_result_rejects_wrong_agent() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Reject wrong agent result",
+            "goal": "Only the assigned agent can record a task result",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json={
+            "project_id": project_response.json()["id"],
+            "title": "Wrong agent must fail",
+            "assigned_agent_id": "agent-dev",
+        },
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+
+    result_response = client.post(
+        f"/tasks/{task['id']}/results",
+        json={
+            "agent_id": "agent-finance",
+            "task_id": task["id"],
+            "status": "completed",
+            "summary": "This agent is not assigned.",
+        },
+    )
+
+    assert result_response.status_code == 400
+    assert (
+        result_response.json()["detail"]
+        == "Result agent does not match assigned agent: agent-dev"
+    )
+
+
 def test_state_change_with_actor_headers_writes_audit_log() -> None:
     client = TestClient(app)
     trace_id = "trace_actor_project_create"
