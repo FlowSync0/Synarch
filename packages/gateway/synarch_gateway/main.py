@@ -1,12 +1,34 @@
-from fastapi import FastAPI
+from uuid import uuid4
+
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic_settings import BaseSettings
 
-from synarch_models import GoalEnvelope, HealthResponse, ProjectIntent, RoutingDecision, TaskDraft
+from synarch_models import (
+    ActorType,
+    EventRecord,
+    EventType,
+    GoalEnvelope,
+    GoalSubmissionResult,
+    HealthResponse,
+    ProjectIntent,
+    ProjectRecord,
+    RoutingDecision,
+    TaskDraft,
+    TaskRecord,
+)
+
+from .state_client import (
+    HttpStateClient,
+    StateClient,
+    StateServiceRequestError,
+    StateServiceUnavailable,
+)
 
 
 class Settings(BaseSettings):
     control_plane_url: str = "http://localhost:8010"
     state_service_url: str = "http://localhost:8020"
+    state_service_timeout_seconds: float = 5.0
     memory_service_url: str = "http://localhost:8030"
     event_service_url: str = "http://localhost:8040"
     agent_runtime_url: str = "http://localhost:8050"
@@ -29,27 +51,14 @@ def choose_agent(goal: str) -> tuple[str, str]:
     return "agent-direction", "No specialist route detected; Direction keeps ownership."
 
 
-@app.get("/healthz", response_model=HealthResponse)
-def healthz() -> HealthResponse:
-    return HealthResponse(service="gateway")
+def get_state_client() -> StateClient:
+    return HttpStateClient(
+        settings.state_service_url,
+        timeout_seconds=settings.state_service_timeout_seconds,
+    )
 
 
-@app.get("/")
-def read_root() -> dict[str, object]:
-    return {
-        "name": "Synarch Gateway",
-        "services": {
-            "control_plane": settings.control_plane_url,
-            "state": settings.state_service_url,
-            "memory": settings.memory_service_url,
-            "events": settings.event_service_url,
-            "agent_runtime": settings.agent_runtime_url,
-        },
-    }
-
-
-@app.post("/goals", response_model=RoutingDecision)
-def submit_goal(envelope: GoalEnvelope) -> RoutingDecision:
+def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
     agent_id, rationale = choose_agent(envelope.goal)
     project_intent = ProjectIntent(
         title=envelope.goal[:80],
@@ -76,3 +85,151 @@ def submit_goal(envelope: GoalEnvelope) -> RoutingDecision:
         target_agents=sorted({"agent-direction", agent_id}),
         rationale=rationale,
     )
+
+
+def audit_headers(envelope: GoalEnvelope, trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.user.value,
+        "x-synarch-actor-id": envelope.requester,
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def persist_goal_submission(
+    envelope: GoalEnvelope,
+    routing_decision: RoutingDecision,
+    trace_id: str,
+    state_client: StateClient,
+) -> GoalSubmissionResult:
+    headers = audit_headers(envelope, trace_id)
+    project = state_client.create_project(
+        ProjectRecord(
+            title=routing_decision.project_intent.title,
+            goal=routing_decision.project_intent.goal,
+            priority=routing_decision.project_intent.priority,
+            owner_agent_id=routing_decision.project_intent.owner_agent_id,
+        ),
+        headers=headers,
+    )
+
+    clarify_draft, specialist_draft = routing_decision.task_drafts
+    clarify_task = state_client.create_task(
+        TaskRecord(
+            project_id=project.id,
+            title=clarify_draft.title,
+            assigned_agent_id=clarify_draft.assigned_agent_id,
+        ),
+        headers=headers,
+    )
+    specialist_task = state_client.create_task(
+        TaskRecord(
+            project_id=project.id,
+            title=specialist_draft.title,
+            assigned_agent_id=specialist_draft.assigned_agent_id,
+            depends_on=[clarify_task.id],
+        ),
+        headers=headers,
+    )
+    tasks = [clarify_task, specialist_task]
+
+    events = [
+        state_client.create_event(event, headers=headers)
+        for event in goal_submission_events(envelope, routing_decision, project, tasks, trace_id)
+    ]
+
+    return GoalSubmissionResult(
+        trace_id=trace_id,
+        routing_decision=routing_decision,
+        project=project,
+        tasks=tasks,
+        events=events,
+    )
+
+
+def goal_submission_events(
+    envelope: GoalEnvelope,
+    routing_decision: RoutingDecision,
+    project: ProjectRecord,
+    tasks: list[TaskRecord],
+    trace_id: str,
+) -> list[EventRecord]:
+    return [
+        EventRecord(
+            type=EventType.goal_received,
+            target=project.id,
+            payload={
+                "goal": envelope.goal,
+                "priority": envelope.priority,
+                "requester": envelope.requester,
+                "constraints": envelope.constraints,
+            },
+            trace_id=trace_id,
+        ),
+        EventRecord(
+            type=EventType.routing_decided,
+            target=project.id,
+            payload={
+                "target_agents": routing_decision.target_agents,
+                "rationale": routing_decision.rationale,
+            },
+            trace_id=trace_id,
+        ),
+        EventRecord(
+            type=EventType.project_created,
+            target=project.id,
+            payload={"project_id": project.id, "title": project.title},
+            trace_id=trace_id,
+        ),
+        *[
+            EventRecord(
+                type=EventType.task_created,
+                target=project.id,
+                payload={
+                    "task_id": task.id,
+                    "assigned_agent_id": task.assigned_agent_id,
+                    "depends_on": task.depends_on,
+                },
+                trace_id=trace_id,
+            )
+            for task in tasks
+        ],
+    ]
+
+
+@app.get("/healthz", response_model=HealthResponse)
+def healthz() -> HealthResponse:
+    return HealthResponse(service="gateway")
+
+
+@app.get("/")
+def read_root() -> dict[str, object]:
+    return {
+        "name": "Synarch Gateway",
+        "services": {
+            "control_plane": settings.control_plane_url,
+            "state": settings.state_service_url,
+            "memory": settings.memory_service_url,
+            "events": settings.event_service_url,
+            "agent_runtime": settings.agent_runtime_url,
+        },
+    }
+
+
+@app.post("/goals", response_model=RoutingDecision)
+def submit_goal(envelope: GoalEnvelope) -> RoutingDecision:
+    return plan_goal(envelope)
+
+
+@app.post("/goals/submit", response_model=GoalSubmissionResult, status_code=201)
+def submit_goal_to_state(
+    envelope: GoalEnvelope,
+    state_client: StateClient = Depends(get_state_client),
+) -> GoalSubmissionResult:
+    trace_id = f"trace_{uuid4().hex[:12]}"
+    routing_decision = plan_goal(envelope)
+    try:
+        return persist_goal_submission(envelope, routing_decision, trace_id, state_client)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error

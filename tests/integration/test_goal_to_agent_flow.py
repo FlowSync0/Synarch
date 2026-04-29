@@ -5,12 +5,67 @@ from synarch_agent_runtime.main import app as agent_runtime_app
 from synarch_control_plane.main import app as control_plane_app
 from synarch_event_service.main import app as event_service_app
 from synarch_gateway.main import app as gateway_app
+from synarch_gateway.main import get_state_client
+from synarch_gateway.state_client import StateServiceRequestError
 from synarch_memory_service.main import app as memory_service_app
+from synarch_models import EventRecord, ProjectRecord, TaskRecord
 from synarch_state_service.main import app as state_service_app
+from synarch_state_service.main import reset_repositories
+
+
+class StateServiceTestClient:
+    def __init__(self, client: TestClient) -> None:
+        self.client = client
+
+    def create_project(
+        self,
+        project: ProjectRecord,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectRecord:
+        response = self.client.post(
+            "/projects",
+            json=project.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ProjectRecord.model_validate(response.json())
+
+    def create_task(
+        self,
+        task: TaskRecord,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        response = self.client.post(
+            "/tasks",
+            json=task.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return TaskRecord.model_validate(response.json())
+
+    def create_event(
+        self,
+        event: EventRecord,
+        *,
+        headers: dict[str, str],
+    ) -> EventRecord:
+        response = self.client.post(
+            "/events",
+            json=event.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return EventRecord.model_validate(response.json())
 
 
 @pytest.mark.integration
 def test_goal_to_agent_result_flow_across_current_layers() -> None:
+    reset_repositories()
     gateway = TestClient(gateway_app)
     control_plane = TestClient(control_plane_app)
     state = TestClient(state_service_app)
@@ -18,44 +73,41 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     events = TestClient(event_service_app)
     agent_runtime = TestClient(agent_runtime_app)
 
-    routing_response = gateway.post(
-        "/goals",
-        json={
-            "goal": "Traiter une facture fournisseur avec TVA et rapprochement bancaire",
-            "priority": "high",
-            "requester": "integration-test",
-        },
-    )
-    assert routing_response.status_code == 200
-    routing = routing_response.json()
-    assert "agent-finance" in routing["target_agents"]
+    gateway_app.dependency_overrides[get_state_client] = lambda: StateServiceTestClient(state)
+    try:
+        submission_response = gateway.post(
+            "/goals/submit",
+            json={
+                "goal": "Traiter une facture fournisseur avec TVA et rapprochement bancaire",
+                "priority": "high",
+                "requester": "integration-test",
+            },
+        )
+    finally:
+        gateway_app.dependency_overrides.clear()
 
-    project_response = state.post(
-        "/projects",
-        json={
-            "title": routing["project_intent"]["title"],
-            "goal": routing["project_intent"]["goal"],
-            "priority": routing["project_intent"]["priority"],
-            "owner_agent_id": routing["project_intent"]["owner_agent_id"],
-        },
-    )
-    assert project_response.status_code == 201
-    project = project_response.json()
+    assert submission_response.status_code == 201
+    submission = submission_response.json()
+    assert "agent-finance" in submission["routing_decision"]["target_agents"]
+    project = submission["project"]
 
-    specialist_draft = next(
-        draft for draft in routing["task_drafts"] if draft["assigned_agent_id"] == "agent-finance"
+    timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
+    assert timeline_response.status_code == 200
+    assert [event["type"] for event in timeline_response.json()] == [
+        "goal.received",
+        "routing.decided",
+        "project.created",
+        "task.created",
+        "task.created",
+    ]
+
+    audit_response = state.get("/audit-logs", params={"trace_id": submission["trace_id"]})
+    assert audit_response.status_code == 200
+    assert {record["actor_id"] for record in audit_response.json()} == {"integration-test"}
+
+    task = next(
+        task for task in submission["tasks"] if task["assigned_agent_id"] == "agent-finance"
     )
-    task_response = state.post(
-        "/tasks",
-        json={
-            "project_id": project["id"],
-            "title": specialist_draft["title"],
-            "assigned_agent_id": specialist_draft["assigned_agent_id"],
-            "depends_on": specialist_draft["depends_on"],
-        },
-    )
-    assert task_response.status_code == 201
-    task = task_response.json()
 
     world_view_response = control_plane.get(f"/agents/{task['assigned_agent_id']}/world-view")
     assert world_view_response.status_code == 200

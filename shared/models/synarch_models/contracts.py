@@ -143,6 +143,14 @@ class EventRecord(SynarchModel):
     trace_id: str | None = None
 
 
+class GoalSubmissionResult(SynarchModel):
+    trace_id: str
+    routing_decision: RoutingDecision
+    project: ProjectRecord
+    tasks: list[TaskRecord]
+    events: list[EventRecord]
+
+
 class MemoryItem(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("memory"))
     scope: str
