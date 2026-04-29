@@ -114,7 +114,11 @@ class FakeControlPlaneClient:
 
 
 class FakeMemoryClient:
+    def __init__(self) -> None:
+        self.contexts: list[MemoryContext] = []
+
     def assemble_context(self, context: MemoryContext) -> MemoryContext:
+        self.contexts.append(context)
         return context.model_copy(update={"summary": "Fake context assembled."})
 
 
@@ -208,10 +212,11 @@ def test_run_next_task_executes_first_ready_task() -> None:
             assigned_agent_id="agent-dev",
         )
     )
+    memory_client = FakeMemoryClient()
     runner = TaskRunner(
         state=state_client,
         control_plane=FakeControlPlaneClient(),
-        memory=FakeMemoryClient(),
+        memory=memory_client,
         runtime=FakeAgentRuntimeClient(),
     )
     app.dependency_overrides[get_task_runner] = lambda: runner
@@ -231,6 +236,12 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert payload["task"]["result"]["summary"] == "Runtime stub prepared the task for review."
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["memory_context"]["summary"] == "Fake context assembled."
+    assert memory_client.contexts[0].allowed_scopes == [
+        "global",
+        "division:dev",
+        "agent:agent-dev",
+        "project:project_demo",
+    ]
     assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
     assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
     assert payload["cost_records"][0]["total_cost"] > 0

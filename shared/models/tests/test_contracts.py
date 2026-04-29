@@ -39,7 +39,12 @@ def test_agent_result_is_serializable() -> None:
 def test_task_run_result_captures_execution_boundary() -> None:
     task = TaskRecord(project_id="project_demo", title="Draft plan", assigned_agent_id="agent-dev")
     world_view = LocalWorldView(agent_id="agent-dev", role="Code and infra", division="dev")
-    memory_context = MemoryContext(agent_id="agent-dev", project_id=task.project_id)
+    memory_context = MemoryContext(
+        agent_id="agent-dev",
+        project_id=task.project_id,
+        allowed_scopes=["global", "division:dev", "agent:agent-dev", "project:project_demo"],
+        tokens_used=42,
+    )
     agent_result = AgentResult(
         agent_id="agent-dev",
         task_id=task.id,
@@ -79,6 +84,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
 
     assert payload["trace_id"] == "trace_123"
     assert payload["task"]["id"] == task.id
+    assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["agent_result"]["status"] == "needs_review"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"

@@ -112,6 +112,7 @@ class TaskRunner:
                 agent_id=started_task.assigned_agent_id,
                 project_id=started_task.project_id,
                 token_budget=self.memory_token_budget,
+                allowed_scopes=memory_scopes_for_run(started_task, world_view),
             )
         )
         started_event = self.state.create_event(
@@ -228,6 +229,15 @@ def cost_record_for_run(
 
 def estimated_tokens(*texts: str) -> int:
     return max(1, (sum(len(text) for text in texts) + 3) // 4)
+
+
+def memory_scopes_for_run(task: TaskRecord, world_view: LocalWorldView) -> list[str]:
+    return [
+        "global",
+        f"division:{world_view.division}",
+        f"agent:{world_view.agent_id}",
+        f"project:{task.project_id}",
+    ]
 
 
 def model_call_started_event(

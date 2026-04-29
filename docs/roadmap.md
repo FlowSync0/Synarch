@@ -44,7 +44,7 @@ through the dashboard.
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`; gateway can invoke it through a deterministic runner. | No persistent worker process, no model gateway, no real LLM execution, no approval UI for task review. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
 | E. Project / Workflow | Next | Project/task contracts, durable repositories, task result recording, and timeline events exist. | No dependencies engine or task scheduling loop yet. | Agent result -> task status/result -> durable event/audit timeline. |
-| F. Memory & Context | Partial | Memory item endpoint and basic scoped context assembly exist. | In-memory only, no token budgeting, no compaction, no vector/graph retrieval. | Context assembly filters by agent/project/scope and enforces token budget. |
+| F. Memory & Context | Partial | Memory item endpoint, scoped context assembly, deterministic ranking, and token budget enforcement exist. | In-memory only; no compaction, candidate review, or vector/graph retrieval. | Store and review memory candidates from agent results. |
 | G. Execution & Tooling | Later | Tool contracts exist (`ToolCallRequest`, `ToolResult`). | No tool registry, permission enforcement, sandbox, or audit trail for tool calls. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Later | Conceptual docs only. | No connectors, ingestion jobs, document provenance, or loaders. | Upload/source stub creates traceable knowledge item with provenance. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields are modeled. Docker includes OTEL/Grafana stack. | No trace propagation, no OTEL instrumentation, no Langfuse, no cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, and audit. |
@@ -273,6 +273,14 @@ Scope:
 - Add token budget approximation.
 - Add deterministic ranking before vector search.
 - Add memory candidate review flow from `AgentResult`.
+
+Progress:
+
+- Done: memory context requests carry explicit allowed scopes.
+- Done: memory-service filters by scope, agent, and project, then ranks project, agent, division,
+  and global memory deterministically.
+- Done: context assembly enforces the requested token budget with a deterministic token estimate.
+- Done: task runner requests memory scopes from `LocalWorldView` and project context.
 
 Do not include yet:
 

@@ -166,8 +166,10 @@ class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None
     token_budget: int = 4000
+    allowed_scopes: list[str] = Field(default_factory=list)
     items: list[MemoryItem] = Field(default_factory=list)
     summary: str = ""
+    tokens_used: int = 0
 
 
 class ServiceDefinition(SynarchModel):
