@@ -3,7 +3,7 @@ from typing import Any, Protocol
 
 import httpx
 
-from synarch_models import AgentResult, EventRecord, ProjectRecord, TaskRecord
+from synarch_models import AgentResult, CostRecord, EventRecord, ProjectRecord, TaskRecord
 
 
 class StateServiceUnavailable(Exception):
@@ -55,6 +55,13 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> TaskRecord: ...
+
+    def create_cost_record(
+        self,
+        cost: CostRecord,
+        *,
+        headers: dict[str, str],
+    ) -> CostRecord: ...
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,15 @@ class HttpStateClient:
             headers,
         )
         return TaskRecord.model_validate(response.json())
+
+    def create_cost_record(
+        self,
+        cost: CostRecord,
+        *,
+        headers: dict[str, str],
+    ) -> CostRecord:
+        response = self._post("/cost-records", cost.model_dump(mode="json"), headers)
+        return CostRecord.model_validate(response.json())
 
     def _get(self, path: str) -> httpx.Response:
         try:

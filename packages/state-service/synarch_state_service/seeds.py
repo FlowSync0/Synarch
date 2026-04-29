@@ -4,8 +4,21 @@ import argparse
 import os
 from dataclasses import dataclass
 
-from synarch_models import AgentDefinition, CapabilityMap, DivisionRecord, PermissionBundle
+from synarch_models import (
+    AgentDefinition,
+    AiProviderType,
+    CapabilityMap,
+    DivisionRecord,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
+    PermissionBundle,
+)
 from synarch_state_service.repositories import StateRepositories
+
+LOCAL_RUNTIME_PROVIDER_ID = "provider-local-runtime-stub"
+LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
+LOCAL_RUNTIME_POLICY_ID = "policy-local-runtime-default"
 
 DEFAULT_DIVISIONS: tuple[DivisionRecord, ...] = (
     DivisionRecord(
@@ -130,16 +143,56 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
     ),
 )
 
+DEFAULT_MODEL_PROVIDERS: tuple[ModelProviderConfig, ...] = (
+    ModelProviderConfig(
+        id=LOCAL_RUNTIME_PROVIDER_ID,
+        name="Local Runtime Stub",
+        provider_type=AiProviderType.local,
+        default_model_id=LOCAL_RUNTIME_MODEL_ID,
+    ),
+)
+
+DEFAULT_MODEL_DEFINITIONS: tuple[ModelDefinition, ...] = (
+    ModelDefinition(
+        id=LOCAL_RUNTIME_MODEL_ID,
+        provider_id=LOCAL_RUNTIME_PROVIDER_ID,
+        display_name="Local Runtime Stub",
+        context_window=8000,
+        input_cost_per_million_tokens=0.01,
+        output_cost_per_million_tokens=0.02,
+        currency="USD",
+        supports_structured_output=True,
+    ),
+)
+
+DEFAULT_MODEL_POLICIES: tuple[ModelPolicy, ...] = (
+    ModelPolicy(
+        id=LOCAL_RUNTIME_POLICY_ID,
+        name="Local runtime default",
+        default_model_id=LOCAL_RUNTIME_MODEL_ID,
+        allowed_model_ids=[LOCAL_RUNTIME_MODEL_ID],
+        max_cost_per_task=0.01,
+        max_cost_per_day=1.0,
+        currency="USD",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class SeedSummary:
     divisions_created: int = 0
     agents_created: int = 0
+    model_providers_created: int = 0
+    model_definitions_created: int = 0
+    model_policies_created: int = 0
 
 
 def seed_repositories(repositories: StateRepositories) -> SeedSummary:
     divisions_created = 0
     agents_created = 0
+    model_providers_created = 0
+    model_definitions_created = 0
+    model_policies_created = 0
 
     for division in DEFAULT_DIVISIONS:
         if not repositories.divisions.exists(division.id):
@@ -151,7 +204,28 @@ def seed_repositories(repositories: StateRepositories) -> SeedSummary:
             repositories.agents.create(agent.id, agent)
             agents_created += 1
 
-    return SeedSummary(divisions_created=divisions_created, agents_created=agents_created)
+    for provider in DEFAULT_MODEL_PROVIDERS:
+        if not repositories.model_providers.exists(provider.id):
+            repositories.model_providers.create(provider.id, provider)
+            model_providers_created += 1
+
+    for model in DEFAULT_MODEL_DEFINITIONS:
+        if not repositories.model_definitions.exists(model.id):
+            repositories.model_definitions.create(model.id, model)
+            model_definitions_created += 1
+
+    for policy in DEFAULT_MODEL_POLICIES:
+        if not repositories.model_policies.exists(policy.id):
+            repositories.model_policies.create(policy.id, policy)
+            model_policies_created += 1
+
+    return SeedSummary(
+        divisions_created=divisions_created,
+        agents_created=agents_created,
+        model_providers_created=model_providers_created,
+        model_definitions_created=model_definitions_created,
+        model_policies_created=model_policies_created,
+    )
 
 
 def main() -> None:
@@ -169,7 +243,11 @@ def main() -> None:
     summary = seed_repositories(StateRepositories.postgres(args.database_url))
     print(
         "Seeded default state: "
-        f"{summary.divisions_created} divisions, {summary.agents_created} agents created."
+        f"{summary.divisions_created} divisions, "
+        f"{summary.agents_created} agents, "
+        f"{summary.model_providers_created} model providers, "
+        f"{summary.model_definitions_created} model definitions, "
+        f"{summary.model_policies_created} model policies created."
     )
 
 

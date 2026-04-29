@@ -440,6 +440,28 @@ def test_company_state_cost_and_audit_flow() -> None:
     assert costs_by_agent.status_code == 200
     assert [record["id"] for record in costs_by_agent.json()] == [cost["id"]]
 
+    costs_by_provider = client.get(
+        "/cost-records",
+        params={"provider_id": "provider-openrouter-state-test"},
+    )
+    assert costs_by_provider.status_code == 200
+    assert [record["id"] for record in costs_by_provider.json()] == [cost["id"]]
+
+    costs_by_model = client.get(
+        "/cost-records",
+        params={"model_id": "model-finance-state-test"},
+    )
+    assert costs_by_model.status_code == 200
+    assert [record["id"] for record in costs_by_model.json()] == [cost["id"]]
+
+    cost_events = client.get(
+        "/events",
+        params={"trace_id": trace_id, "event_type": "cost.recorded"},
+    )
+    assert cost_events.status_code == 200
+    assert cost_events.json()[0]["payload"]["cost_id"] == cost["id"]
+    assert cost_events.json()[0]["payload"]["total_cost"] == 0.000266
+
     audit_timeline = client.get("/audit-logs", params={"trace_id": trace_id})
     assert audit_timeline.status_code == 200
     assert audit_timeline.json()[0]["target_id"] == cost["id"]

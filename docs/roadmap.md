@@ -248,6 +248,8 @@ Progress:
 - Done: task result recording writes traceable event and audit records.
 - Done: `/tasks/run-next` propagates the same trace ID through task start, runtime execution,
   task result recording, events, and audit logs.
+- Done: every deterministic runner execution records a mock `CostRecord`, emits
+  `cost.recorded`, and makes the run queryable by project, agent, model, provider, and trace ID.
 
 Definition of done:
 

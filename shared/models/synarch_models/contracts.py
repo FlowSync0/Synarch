@@ -314,3 +314,4 @@ class TaskRunResult(SynarchModel):
     world_view: LocalWorldView
     memory_context: MemoryContext
     agent_result: AgentResult
+    cost_records: list[CostRecord] = Field(default_factory=list)

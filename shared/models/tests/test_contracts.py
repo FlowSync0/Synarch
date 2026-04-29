@@ -1,5 +1,6 @@
 from synarch_models import (
     AgentResult,
+    CostRecord,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -51,6 +52,19 @@ def test_task_run_result_captures_execution_boundary() -> None:
         world_view=world_view,
         memory_context=memory_context,
         agent_result=agent_result,
+        cost_records=[
+            CostRecord(
+                provider_id="provider-local-runtime-stub",
+                model_id="model-local-runtime-stub",
+                agent_id="agent-dev",
+                project_id=task.project_id,
+                task_id=task.id,
+                trace_id="trace_123",
+                input_tokens=120,
+                output_tokens=40,
+                total_cost=0.000002,
+            )
+        ],
     )
 
     payload = result.model_dump(mode="json")
@@ -59,3 +73,4 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["task"]["id"] == task.id
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["cost_records"][0]["trace_id"] == "trace_123"

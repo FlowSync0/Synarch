@@ -28,8 +28,9 @@ make dev-backend
 ```
 
 `docker compose up --build ...` runs the `state-migrations` one-shot service before `state-service`.
-That service applies ordered SQL migrations and then seeds default divisions and agents. The commands
-are idempotent, so they can run repeatedly against the same local database.
+That service applies ordered SQL migrations and then seeds default divisions, agents, and the local
+runtime model/cost baseline. The commands are idempotent, so they can run repeatedly against the
+same local database.
 
 Core service ports:
 
@@ -57,7 +58,7 @@ Windows PowerShell:
 make PYTHON=.venv\Scripts\python.exe migrate-state DATABASE_URL="postgresql+psycopg://synarch:synarch@localhost:5432/synarch"
 ```
 
-Seed default divisions and agents:
+Seed default divisions, agents, and the local runtime model/cost baseline:
 
 ```sh
 make seed-state DATABASE_URL=postgresql+psycopg://synarch:synarch@localhost:5432/synarch

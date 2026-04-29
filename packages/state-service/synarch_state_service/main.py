@@ -614,6 +614,24 @@ def create_cost_record(cost: CostRecord, request: Request) -> CostRecord:
     if not REPOSITORIES.model_providers.exists(cost.provider_id):
         raise HTTPException(status_code=400, detail=f"Unknown model provider: {cost.provider_id}")
     record = create_record(REPOSITORIES.cost_records, cost.id, cost)
+    create_domain_event(
+        EventRecord(
+            type=EventType.cost_recorded,
+            source_agent_id=record.agent_id,
+            target=record.project_id or record.task_id,
+            payload={
+                "cost_id": record.id,
+                "provider_id": record.provider_id,
+                "model_id": record.model_id,
+                "task_id": record.task_id,
+                "input_tokens": record.input_tokens,
+                "output_tokens": record.output_tokens,
+                "total_cost": record.total_cost,
+                "currency": record.currency,
+            },
+            trace_id=record.trace_id or request.headers.get("x-synarch-trace-id"),
+        )
+    )
     write_audit_log(
         audit_context,
         action="cost.recorded",
@@ -628,6 +646,8 @@ def create_cost_record(cost: CostRecord, request: Request) -> CostRecord:
 def list_cost_records(
     project_id: str | None = None,
     agent_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
     trace_id: str | None = None,
 ) -> list[CostRecord]:
     costs = REPOSITORIES.cost_records.list_records()
@@ -635,6 +655,10 @@ def list_cost_records(
         costs = [cost for cost in costs if cost.project_id == project_id]
     if agent_id is not None:
         costs = [cost for cost in costs if cost.agent_id == agent_id]
+    if provider_id is not None:
+        costs = [cost for cost in costs if cost.provider_id == provider_id]
+    if model_id is not None:
+        costs = [cost for cost in costs if cost.model_id == model_id]
     if trace_id is not None:
         costs = [cost for cost in costs if cost.trace_id == trace_id]
     return costs

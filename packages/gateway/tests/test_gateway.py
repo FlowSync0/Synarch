@@ -6,6 +6,7 @@ from synarch_gateway.task_runner import TaskRunner
 from synarch_models import (
     AgentResult,
     AgentTaskRequest,
+    CostRecord,
     EventRecord,
     LocalWorldView,
     MemoryContext,
@@ -20,6 +21,7 @@ class FakeStateClient:
         self.projects: list[ProjectRecord] = []
         self.tasks: list[TaskRecord] = []
         self.events: list[EventRecord] = []
+        self.costs: list[CostRecord] = []
         self.headers: list[dict[str, str]] = []
 
     def create_project(
@@ -84,6 +86,16 @@ class FakeStateClient:
         )
         self.tasks[self.tasks.index(task)] = recorded_task
         return recorded_task
+
+    def create_cost_record(
+        self,
+        cost: CostRecord,
+        *,
+        headers: dict[str, str],
+    ) -> CostRecord:
+        self.headers.append(headers)
+        self.costs.append(cost)
+        return cost
 
 
 class FailingStateClient(FakeStateClient):
@@ -214,6 +226,9 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert payload["task"]["result"]["summary"] == "Runtime stub prepared the task for review."
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["memory_context"]["summary"] == "Fake context assembled."
+    assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
+    assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
+    assert payload["cost_records"][0]["total_cost"] > 0
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
 
 

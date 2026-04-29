@@ -7,11 +7,17 @@ from synarch_event_service.main import app as event_service_app
 from synarch_gateway.main import app as gateway_app
 from synarch_gateway.main import get_state_client, get_task_runner
 from synarch_gateway.state_client import StateServiceRequestError
-from synarch_gateway.task_runner import TaskRunner, TaskRunnerRequestError
+from synarch_gateway.task_runner import (
+    LOCAL_RUNTIME_MODEL_ID,
+    LOCAL_RUNTIME_PROVIDER_ID,
+    TaskRunner,
+    TaskRunnerRequestError,
+)
 from synarch_memory_service.main import app as memory_service_app
 from synarch_models import (
     AgentResult,
     AgentTaskRequest,
+    CostRecord,
     EventRecord,
     LocalWorldView,
     MemoryContext,
@@ -104,6 +110,21 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return TaskRecord.model_validate(response.json())
 
+    def create_cost_record(
+        self,
+        cost: CostRecord,
+        *,
+        headers: dict[str, str],
+    ) -> CostRecord:
+        response = self.client.post(
+            "/cost-records",
+            json=cost.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return CostRecord.model_validate(response.json())
+
 
 class ControlPlaneTestClient:
     def __init__(self, client: TestClient) -> None:
@@ -147,6 +168,28 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     memory = TestClient(memory_service_app)
     events = TestClient(event_service_app)
     agent_runtime = TestClient(agent_runtime_app)
+
+    provider_response = state.post(
+        "/model-providers",
+        json={
+            "id": LOCAL_RUNTIME_PROVIDER_ID,
+            "name": "Local Runtime Stub",
+            "provider_type": "local",
+            "default_model_id": LOCAL_RUNTIME_MODEL_ID,
+        },
+    )
+    assert provider_response.status_code == 201
+    model_response = state.post(
+        "/model-definitions",
+        json={
+            "id": LOCAL_RUNTIME_MODEL_ID,
+            "provider_id": LOCAL_RUNTIME_PROVIDER_ID,
+            "display_name": "Local Runtime Stub",
+            "input_cost_per_million_tokens": 0.01,
+            "output_cost_per_million_tokens": 0.02,
+        },
+    )
+    assert model_response.status_code == 201
 
     gateway_app.dependency_overrides[get_state_client] = lambda: StateServiceTestClient(state)
     try:
@@ -214,6 +257,7 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     direction_run = direction_run_response.json()
     assert direction_run["task"]["assigned_agent_id"] == "agent-direction"
     assert direction_run["task"]["status"] == "completed"
+    assert direction_run["cost_records"][0]["total_cost"] > 0
 
     assert finance_run_response.status_code == 200
     finance_run = finance_run_response.json()
@@ -229,16 +273,25 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert agent_result["events_emitted"]
     assert task["status"] == "needs_review"
     assert task["result"]["summary"] == agent_result["summary"]
+    assert finance_run["cost_records"][0]["model_id"] == LOCAL_RUNTIME_MODEL_ID
+    assert finance_run["cost_records"][0]["task_id"] == task["id"]
 
     state_timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
     assert state_timeline_response.status_code == 200
     state_events = state_timeline_response.json()
     assert "task.started" in [event["type"] for event in state_events]
     assert "task.completed" in [event["type"] for event in state_events]
+    assert "cost.recorded" in [event["type"] for event in state_events]
     assert any(
         event["type"] == "agent.reported" and event["payload"]["task_id"] == task["id"]
         for event in state_events
     )
+    costs_response = state.get("/cost-records", params={"trace_id": submission["trace_id"]})
+    assert costs_response.status_code == 200
+    assert len(costs_response.json()) == 2
+    model_costs_response = state.get("/cost-records", params={"model_id": LOCAL_RUNTIME_MODEL_ID})
+    assert model_costs_response.status_code == 200
+    assert len(model_costs_response.json()) == 2
 
     event_response = events.post("/events", json=agent_result["events_emitted"][0])
     assert event_response.status_code == 202

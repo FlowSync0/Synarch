@@ -6,6 +6,7 @@ import httpx
 from synarch_models import (
     AgentResult,
     AgentTaskRequest,
+    CostRecord,
     LocalWorldView,
     MemoryContext,
     TaskRecord,
@@ -14,6 +15,11 @@ from synarch_models import (
 )
 
 from .state_client import StateClient
+
+LOCAL_RUNTIME_PROVIDER_ID = "provider-local-runtime-stub"
+LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
+LOCAL_RUNTIME_INPUT_COST_PER_MILLION = 0.01
+LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION = 0.02
 
 
 class NoReadyTask(Exception):
@@ -118,12 +124,23 @@ class TaskRunner:
             agent_result,
             headers=headers,
         )
+        cost_record = self.state.create_cost_record(
+            cost_record_for_run(
+                task=started_task,
+                world_view=world_view,
+                memory_context=memory_context,
+                agent_result=agent_result,
+                trace_id=trace_id,
+            ),
+            headers=headers,
+        )
         return TaskRunResult(
             trace_id=trace_id,
             task=recorded_task,
             world_view=world_view,
             memory_context=memory_context,
             agent_result=agent_result,
+            cost_records=[cost_record],
         )
 
 
@@ -139,6 +156,42 @@ def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
         ):
             return task
     return None
+
+
+def cost_record_for_run(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    memory_context: MemoryContext,
+    agent_result: AgentResult,
+    trace_id: str,
+) -> CostRecord:
+    input_tokens = estimated_tokens(
+        task.model_dump_json(),
+        world_view.model_dump_json(),
+        memory_context.model_dump_json(),
+    )
+    output_tokens = estimated_tokens(agent_result.model_dump_json())
+    total_cost = round(
+        (input_tokens * LOCAL_RUNTIME_INPUT_COST_PER_MILLION / 1_000_000)
+        + (output_tokens * LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION / 1_000_000),
+        8,
+    )
+    return CostRecord(
+        provider_id=LOCAL_RUNTIME_PROVIDER_ID,
+        model_id=LOCAL_RUNTIME_MODEL_ID,
+        agent_id=agent_result.agent_id,
+        project_id=task.project_id,
+        task_id=task.id,
+        trace_id=trace_id,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_cost=total_cost,
+    )
+
+
+def estimated_tokens(*texts: str) -> int:
+    return max(1, (sum(len(text) for text in texts) + 3) // 4)
 
 
 def get_json(url: str, timeout_seconds: float) -> Any:
