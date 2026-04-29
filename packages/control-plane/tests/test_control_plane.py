@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from synarch_control_plane.agent_sources import StateServiceAgentSource
@@ -26,7 +27,7 @@ def test_world_view_is_limited_to_agent_scope() -> None:
     assert "payment.execute" in payload["permissions"]["denied_tools"]
 
 
-def test_agents_can_be_read_from_state_service(monkeypatch) -> None:
+def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/agents":
             return httpx.Response(
@@ -51,7 +52,9 @@ def test_agents_can_be_read_from_state_service(monkeypatch) -> None:
     assert payload["manager"] == "agent-direction"
 
 
-def test_state_service_source_404_becomes_control_plane_404(monkeypatch) -> None:
+def test_state_service_source_404_becomes_control_plane_404(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"detail": "not found"})
 
@@ -64,7 +67,9 @@ def test_state_service_source_404_becomes_control_plane_404(monkeypatch) -> None
     assert response.status_code == 404
 
 
-def test_world_view_includes_state_backed_services_and_model_policy(monkeypatch) -> None:
+def test_world_view_includes_state_backed_services_and_model_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     finance_agent = AGENTS[1].model_copy(update={"model_policy_id": "policy-finance-default"})
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -109,7 +114,9 @@ def test_world_view_includes_state_backed_services_and_model_policy(monkeypatch)
     assert "default_model:model-finance" in payload["policies"]
 
 
-def test_lifecycle_requests_can_be_listed_from_state_service(monkeypatch) -> None:
+def test_lifecycle_requests_can_be_listed_from_state_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/agent-lifecycle-requests":
             assert request.url.params["status"] == "requested"
@@ -137,7 +144,9 @@ def test_lifecycle_requests_can_be_listed_from_state_service(monkeypatch) -> Non
     assert response.json()[0]["id"] == "lifecycle-create-reviewer"
 
 
-def test_lifecycle_request_creation_forwards_actor_headers(monkeypatch) -> None:
+def test_lifecycle_request_creation_forwards_actor_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -179,7 +188,9 @@ def test_lifecycle_request_creation_forwards_actor_headers(monkeypatch) -> None:
     }
 
 
-def test_lifecycle_decision_is_forwarded_to_state_service(monkeypatch) -> None:
+def test_lifecycle_decision_is_forwarded_to_state_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/agent-lifecycle-requests/lifecycle-create-dev/decisions"
         payload = json.loads(request.content)
@@ -219,7 +230,9 @@ def test_lifecycle_decision_is_forwarded_to_state_service(monkeypatch) -> None:
     assert response.json()["status"] == "applied"
 
 
-def test_lifecycle_write_conflict_is_preserved_from_state_service(monkeypatch) -> None:
+def test_lifecycle_write_conflict_is_preserved_from_state_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(409, json={"detail": "Lifecycle request is already applied"})
 

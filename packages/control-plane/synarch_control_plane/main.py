@@ -1,4 +1,5 @@
 import os
+from typing import NoReturn
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -66,7 +67,7 @@ def source_request_headers(request: Request) -> dict[str, str]:
     }
 
 
-def raise_source_error(error: AgentSourceRequestError) -> None:
+def raise_source_error(error: AgentSourceRequestError) -> NoReturn:
     raise HTTPException(status_code=error.status_code, detail=error.detail)
 
 
