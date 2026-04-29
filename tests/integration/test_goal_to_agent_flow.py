@@ -15,6 +15,7 @@ from synarch_gateway.task_runner import (
 )
 from synarch_memory_service.main import app as memory_service_app
 from synarch_models import (
+    AgentProjectAssignment,
     AgentResult,
     AgentTaskRequest,
     CostRecord,
@@ -22,6 +23,7 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     ProjectRecord,
+    ProjectWorkspace,
     TaskRecord,
 )
 from synarch_state_service.main import app as state_service_app
@@ -61,6 +63,36 @@ class StateServiceTestClient:
         if response.status_code != 201:
             raise StateServiceRequestError(response.status_code, response.json())
         return TaskRecord.model_validate(response.json())
+
+    def create_project_workspace(
+        self,
+        workspace: ProjectWorkspace,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectWorkspace:
+        response = self.client.post(
+            "/project-workspaces",
+            json=workspace.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ProjectWorkspace.model_validate(response.json())
+
+    def create_agent_project_assignment(
+        self,
+        assignment: AgentProjectAssignment,
+        *,
+        headers: dict[str, str],
+    ) -> AgentProjectAssignment:
+        response = self.client.post(
+            "/agent-project-assignments",
+            json=assignment.model_dump(mode="json"),
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return AgentProjectAssignment.model_validate(response.json())
 
     def create_event(
         self,
@@ -190,6 +222,20 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
         },
     )
     assert model_response.status_code == 201
+    for agent_id, division in [
+        ("agent-direction", "direction"),
+        ("agent-finance", "finance"),
+    ]:
+        agent_response = state.post(
+            "/agents",
+            json={
+                "id": agent_id,
+                "name": agent_id,
+                "role": "Integration participant",
+                "division": division,
+            },
+        )
+        assert agent_response.status_code == 201
 
     gateway_app.dependency_overrides[get_state_client] = lambda: StateServiceTestClient(state)
     try:
@@ -209,11 +255,19 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert "agent-finance" in submission["routing_decision"]["target_agents"]
     assert len(submission["tasks"]) == 4
     assert all(task["acceptance_criteria"] for task in submission["tasks"])
+    assert submission["workspace"]["memory_scope"] == f"project:{submission['project']['id']}"
+    assert {assignment["agent_id"] for assignment in submission["assignments"]} == {
+        "agent-direction",
+        "agent-finance",
+    }
     project = submission["project"]
 
     timeline_response = state.get("/events", params={"trace_id": submission["trace_id"]})
     assert timeline_response.status_code == 200
     assert [event["type"] for event in timeline_response.json()] == [
+        "project_workspace.created",
+        "agent_project.assigned",
+        "agent_project.assigned",
         "goal.received",
         "routing.decided",
         "project.created",

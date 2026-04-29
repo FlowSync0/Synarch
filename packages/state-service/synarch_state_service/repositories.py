@@ -6,6 +6,7 @@ from typing import Protocol
 from synarch_models import (
     AgentDefinition,
     AgentLifecycleRequest,
+    AgentProjectAssignment,
     AgentSoul,
     AuditLogRecord,
     CostRecord,
@@ -15,6 +16,7 @@ from synarch_models import (
     ModelPolicy,
     ModelProviderConfig,
     ProjectRecord,
+    ProjectWorkspace,
     ServiceDefinition,
     TaskRecord,
 )
@@ -60,6 +62,8 @@ class StateRepositories:
     agents: RecordRepository[AgentDefinition]
     agent_souls: RecordRepository[AgentSoul]
     projects: RecordRepository[ProjectRecord]
+    project_workspaces: RecordRepository[ProjectWorkspace]
+    agent_project_assignments: RecordRepository[AgentProjectAssignment]
     tasks: RecordRepository[TaskRecord]
     events: RecordRepository[EventRecord]
     services: RecordRepository[ServiceDefinition]
@@ -77,6 +81,8 @@ class StateRepositories:
             agents=InMemoryRecordRepository(),
             agent_souls=InMemoryRecordRepository(),
             projects=InMemoryRecordRepository(),
+            project_workspaces=InMemoryRecordRepository(),
+            agent_project_assignments=InMemoryRecordRepository(),
             tasks=InMemoryRecordRepository(),
             events=InMemoryRecordRepository(),
             services=InMemoryRecordRepository(),

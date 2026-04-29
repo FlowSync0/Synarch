@@ -195,6 +195,8 @@ Infra
 - **agents** : id, name, role, division, manager_id, status, capabilities, model, created_at
 - **agent_souls** : id, agent_id, version, identity, mission, responsibilities, boundaries, active
 - **projects** : id, title, goal, status, priority, owner_agent_id, created_at
+- **project_workspaces** : id, project_id, memory_scope, allowed_agent_ids, bridge_project_ids, active
+- **agent_project_assignments** : id, project_id, workspace_id, agent_id, assignment_role, active
 - **tasks** : id, project_id, title, status, assigned_agent_id, depends_on, acceptance_criteria, sequence, result, created_at
 - **events** : id, type, source_agent_id, target, payload, timestamp
 - **memory_items** : id, scope (global/division/agent/project), agent_id, content, embedding, created_at, expires_at
@@ -218,7 +220,7 @@ Chaque IA a : sa mémoire longue, ses documents propres, ses skills, son journal
 
 ## Principes Clés
 
-1. **Isolation des contextes** : Chaque division IA a sa propre mémoire. Finance ne pollue pas Dev.
+1. **Isolation des contextes** : Chaque projet a son `ProjectWorkspace`. Finance ne pollue pas Dev, et un projet ne pollue pas un autre.
 2. **Mémoire paginée** : Pas de rechargement d'historique complet. Compaction, résumés, retrieval ciblé.
 3. **Découpage vérifiable** : Aucun objectif ne devient une seule grosse tâche. Chaque tâche a des critères de réussite et une dépendance explicite.
 4. **World model partagé** : Chaque agent sait où il est dans l'org via `LocalWorldView` injecté par le Control Plane. Son `AgentSoul` reste borné et séparé de la mémoire, de l'historique et des skills.

@@ -5,6 +5,7 @@ from pydantic_settings import BaseSettings
 
 from synarch_models import (
     ActorType,
+    AgentProjectAssignment,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -12,6 +13,7 @@ from synarch_models import (
     HealthResponse,
     ProjectIntent,
     ProjectRecord,
+    ProjectWorkspace,
     RoutingDecision,
     TaskDraft,
     TaskRecord,
@@ -185,6 +187,28 @@ def persist_goal_submission(
         ),
         headers=headers,
     )
+    workspace = state_client.create_project_workspace(
+        ProjectWorkspace(
+            project_id=project.id,
+            name=project.title,
+            summary=project.goal,
+            memory_scope=f"project:{project.id}",
+            allowed_agent_ids=routing_decision.target_agents,
+        ),
+        headers=headers,
+    )
+    assignments = [
+        state_client.create_agent_project_assignment(
+            AgentProjectAssignment(
+                project_id=project.id,
+                workspace_id=workspace.id,
+                agent_id=agent_id,
+                assignment_role="owner" if agent_id == project.owner_agent_id else "contributor",
+            ),
+            headers=headers,
+        )
+        for agent_id in routing_decision.target_agents
+    ]
 
     tasks: list[TaskRecord] = []
     task_ids_by_draft_title: dict[str, str] = {}
@@ -216,6 +240,8 @@ def persist_goal_submission(
         trace_id=trace_id,
         routing_decision=routing_decision,
         project=project,
+        workspace=workspace,
+        assignments=assignments,
         tasks=tasks,
         events=events,
     )

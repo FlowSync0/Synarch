@@ -3,7 +3,15 @@ from typing import Any, Protocol
 
 import httpx
 
-from synarch_models import AgentResult, CostRecord, EventRecord, ProjectRecord, TaskRecord
+from synarch_models import (
+    AgentProjectAssignment,
+    AgentResult,
+    CostRecord,
+    EventRecord,
+    ProjectRecord,
+    ProjectWorkspace,
+    TaskRecord,
+)
 
 
 class StateServiceUnavailable(Exception):
@@ -31,6 +39,20 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> TaskRecord: ...
+
+    def create_project_workspace(
+        self,
+        workspace: ProjectWorkspace,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectWorkspace: ...
+
+    def create_agent_project_assignment(
+        self,
+        assignment: AgentProjectAssignment,
+        *,
+        headers: dict[str, str],
+    ) -> AgentProjectAssignment: ...
 
     def create_event(
         self,
@@ -86,6 +108,28 @@ class HttpStateClient:
     ) -> TaskRecord:
         response = self._post("/tasks", task.model_dump(mode="json"), headers)
         return TaskRecord.model_validate(response.json())
+
+    def create_project_workspace(
+        self,
+        workspace: ProjectWorkspace,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectWorkspace:
+        response = self._post("/project-workspaces", workspace.model_dump(mode="json"), headers)
+        return ProjectWorkspace.model_validate(response.json())
+
+    def create_agent_project_assignment(
+        self,
+        assignment: AgentProjectAssignment,
+        *,
+        headers: dict[str, str],
+    ) -> AgentProjectAssignment:
+        response = self._post(
+            "/agent-project-assignments",
+            assignment.model_dump(mode="json"),
+            headers,
+        )
+        return AgentProjectAssignment.model_validate(response.json())
 
     def create_event(
         self,

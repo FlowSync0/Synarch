@@ -40,6 +40,21 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
             return httpx.Response(200, json=AGENTS[1].model_dump(mode="json"))
         if request.url.path == "/agents/agent-finance/soul":
             return httpx.Response(200, json=AGENT_SOULS[1].model_dump(mode="json"))
+        if request.url.path == "/agent-project-assignments":
+            assert request.url.params["agent_id"] == "agent-finance"
+            assert request.url.params["active"] == "true"
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "assignment-finance-demo",
+                        "project_id": "project-finance-demo",
+                        "workspace_id": "workspace-finance-demo",
+                        "agent_id": "agent-finance",
+                        "assignment_role": "contributor",
+                    }
+                ],
+            )
         if request.url.path == "/services":
             return httpx.Response(200, json=[])
         return httpx.Response(404, json={"detail": "not found"})
@@ -55,6 +70,7 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
     assert payload["agent_id"] == "agent-finance"
     assert payload["manager"] == "agent-direction"
     assert payload["soul"]["id"] == "soul-agent-finance-v1"
+    assert payload["active_projects"] == ["project-finance-demo"]
 
 
 def test_state_service_source_404_becomes_control_plane_404(
@@ -84,6 +100,8 @@ def test_world_view_includes_state_backed_services_and_model_policy(
             return httpx.Response(200, json=finance_agent.model_dump(mode="json"))
         if request.url.path == "/agents/agent-finance/soul":
             return httpx.Response(404, json={"detail": "No active soul for agent: agent-finance"})
+        if request.url.path == "/agent-project-assignments":
+            return httpx.Response(200, json=[])
         if request.url.path == "/services":
             return httpx.Response(
                 200,

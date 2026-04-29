@@ -175,6 +175,8 @@ Progress:
 - Done: frontend timeline panel reads state-service events through the same live/fallback path.
 - Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
   execution task.
+- Done: goal submission creates a project workspace and active project assignments for routed
+  agents.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:
@@ -183,6 +185,7 @@ Definition of done:
 - A deactivated agent cannot receive new tasks.
 - `LocalWorldView` contains only allowed capabilities, tools, services, and policies.
 - New tasks have explicit acceptance criteria.
+- Agents only see active projects through explicit assignments.
 
 ### M3. Goal To Project Slice
 

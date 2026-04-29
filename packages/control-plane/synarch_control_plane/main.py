@@ -61,9 +61,7 @@ def source_request_headers(request: Request) -> dict[str, str]:
         "x-synarch-trace-id",
     )
     return {
-        header: request.headers[header]
-        for header in forwarded_headers
-        if header in request.headers
+        header: request.headers[header] for header in forwarded_headers if header in request.headers
     }
 
 
@@ -133,6 +131,7 @@ def read_world_view(agent_id: str) -> LocalWorldView:
     agents = list_agents_from_source()
     try:
         soul = AGENT_SOURCE.get_agent_soul(agent.id)
+        assignments = AGENT_SOURCE.list_agent_project_assignments(agent.id)
     except AgentSourceUnavailable as error:
         raise HTTPException(status_code=502, detail="Agent source unavailable") from error
     peers = [
@@ -147,6 +146,7 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         peers=peers,
         manager=agent.manager_id,
         soul=soul,
+        active_projects=[assignment.project_id for assignment in assignments],
         permissions=agent.permissions,
         capabilities=agent.capabilities,
         policies=world_view_policy_labels(agent),

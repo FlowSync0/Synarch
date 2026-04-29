@@ -111,6 +111,16 @@ Objectives must become small ordered tasks before execution:
 Large projects should later produce split requests when the task graph, context volume, cost, or
 external coordination load exceeds configured thresholds.
 
+## Priority 8: Project Workspaces
+
+Each project needs an isolated workspace before agents execute tasks:
+
+- `ProjectWorkspace`: project memory scope, allowed agents, explicit bridge project IDs
+- `AgentProjectAssignment`: which employee AI is currently attached to which project
+- `LocalWorldView.active_projects`: derived from active assignments, not prompt text
+
+Cross-project knowledge sharing must be explicit through bridges. The default is isolation.
+
 ## Recommended Next Implementation
 
 Implement PostgreSQL repositories in `state-service` for:

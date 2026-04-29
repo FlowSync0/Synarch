@@ -10,6 +10,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentProjectAssignment,
     AgentResult,
     AgentSoul,
     AgentStatus,
@@ -25,6 +26,7 @@ from synarch_models import (
     ModelPolicy,
     ModelProviderConfig,
     ProjectRecord,
+    ProjectWorkspace,
     ServiceDefinition,
     TaskRecord,
     TaskStatus,
@@ -185,6 +187,59 @@ def validate_task_breakdown(task: TaskRecord) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown parent task: {task.parent_task_id}",
+        )
+
+
+def validate_project_workspace(workspace: ProjectWorkspace) -> None:
+    if not REPOSITORIES.projects.exists(workspace.project_id):
+        raise HTTPException(status_code=400, detail=f"Unknown project: {workspace.project_id}")
+    unknown_agents = [
+        agent_id
+        for agent_id in workspace.allowed_agent_ids
+        if not REPOSITORIES.agents.exists(agent_id)
+    ]
+    if unknown_agents:
+        raise HTTPException(status_code=400, detail=f"Unknown workspace agents: {unknown_agents}")
+    active_workspace = active_project_workspace(workspace.project_id)
+    if active_workspace is not None and active_workspace.id != workspace.id and workspace.active:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Active workspace already exists for project: {workspace.project_id}",
+        )
+
+
+def active_project_workspace(project_id: str) -> ProjectWorkspace | None:
+    active_workspaces = [
+        workspace
+        for workspace in REPOSITORIES.project_workspaces.list_records()
+        if workspace.project_id == project_id and workspace.active
+    ]
+    if not active_workspaces:
+        return None
+    return sorted(
+        active_workspaces,
+        key=lambda workspace: workspace.created_at,
+        reverse=True,
+    )[0]
+
+
+def validate_agent_project_assignment(assignment: AgentProjectAssignment) -> None:
+    if not REPOSITORIES.projects.exists(assignment.project_id):
+        raise HTTPException(status_code=400, detail=f"Unknown project: {assignment.project_id}")
+    if not REPOSITORIES.agents.exists(assignment.agent_id):
+        raise HTTPException(status_code=400, detail=f"Unknown agent: {assignment.agent_id}")
+    workspace = REPOSITORIES.project_workspaces.get(assignment.workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=400, detail=f"Unknown workspace: {assignment.workspace_id}")
+    if workspace.project_id != assignment.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Assignment workspace must belong to the same project",
+        )
+    if assignment.active and assignment.agent_id not in workspace.allowed_agent_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is not allowed in workspace: {assignment.agent_id}",
         )
 
 
@@ -365,6 +420,130 @@ def list_projects() -> list[ProjectRecord]:
 @app.get("/projects/{project_id}", response_model=ProjectRecord)
 def read_project(project_id: str) -> ProjectRecord:
     return read_record(REPOSITORIES.projects, project_id, "project")
+
+
+@app.post("/project-workspaces", response_model=ProjectWorkspace, status_code=201)
+def create_project_workspace(
+    workspace: ProjectWorkspace,
+    request: Request,
+) -> ProjectWorkspace:
+    audit_context = audit_context_from_request(request)
+    validate_project_workspace(workspace)
+    record = create_record(REPOSITORIES.project_workspaces, workspace.id, workspace)
+    create_domain_event(
+        EventRecord(
+            type=EventType.project_workspace_created,
+            target=record.project_id,
+            payload={
+                "workspace_id": record.id,
+                "memory_scope": record.memory_scope,
+                "allowed_agent_ids": record.allowed_agent_ids,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="project_workspace.created",
+        target_type="project_workspace",
+        target_id=record.id,
+        payload={"project_id": record.project_id, "memory_scope": record.memory_scope},
+    )
+    return record
+
+
+@app.get("/project-workspaces", response_model=list[ProjectWorkspace])
+def list_project_workspaces(
+    project_id: str | None = None,
+    active: bool | None = None,
+) -> list[ProjectWorkspace]:
+    workspaces = REPOSITORIES.project_workspaces.list_records()
+    if project_id is not None:
+        workspaces = [workspace for workspace in workspaces if workspace.project_id == project_id]
+    if active is not None:
+        workspaces = [workspace for workspace in workspaces if workspace.active == active]
+    return workspaces
+
+
+@app.get("/project-workspaces/{workspace_id}", response_model=ProjectWorkspace)
+def read_project_workspace(workspace_id: str) -> ProjectWorkspace:
+    return read_record(REPOSITORIES.project_workspaces, workspace_id, "project workspace")
+
+
+@app.get("/projects/{project_id}/workspace", response_model=ProjectWorkspace)
+def read_active_project_workspace(project_id: str) -> ProjectWorkspace:
+    if not REPOSITORIES.projects.exists(project_id):
+        raise HTTPException(status_code=404, detail=f"Unknown project: {project_id}")
+    workspace = active_project_workspace(project_id)
+    if workspace is None:
+        raise HTTPException(
+            status_code=404, detail=f"No active workspace for project: {project_id}"
+        )
+    return workspace
+
+
+@app.post("/agent-project-assignments", response_model=AgentProjectAssignment, status_code=201)
+def create_agent_project_assignment(
+    assignment: AgentProjectAssignment,
+    request: Request,
+) -> AgentProjectAssignment:
+    audit_context = audit_context_from_request(request)
+    validate_agent_project_assignment(assignment)
+    record = create_record(REPOSITORIES.agent_project_assignments, assignment.id, assignment)
+    create_domain_event(
+        EventRecord(
+            type=EventType.agent_project_assigned,
+            source_agent_id=record.agent_id,
+            target=record.project_id,
+            payload={
+                "assignment_id": record.id,
+                "workspace_id": record.workspace_id,
+                "assignment_role": record.assignment_role,
+                "active": record.active,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="agent_project.assigned",
+        target_type="agent_project_assignment",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "workspace_id": record.workspace_id,
+            "agent_id": record.agent_id,
+            "assignment_role": record.assignment_role,
+        },
+    )
+    return record
+
+
+@app.get("/agent-project-assignments", response_model=list[AgentProjectAssignment])
+def list_agent_project_assignments(
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    active: bool | None = None,
+) -> list[AgentProjectAssignment]:
+    assignments = REPOSITORIES.agent_project_assignments.list_records()
+    if project_id is not None:
+        assignments = [
+            assignment for assignment in assignments if assignment.project_id == project_id
+        ]
+    if agent_id is not None:
+        assignments = [assignment for assignment in assignments if assignment.agent_id == agent_id]
+    if active is not None:
+        assignments = [assignment for assignment in assignments if assignment.active == active]
+    return assignments
+
+
+@app.get("/agent-project-assignments/{assignment_id}", response_model=AgentProjectAssignment)
+def read_agent_project_assignment(assignment_id: str) -> AgentProjectAssignment:
+    return read_record(
+        REPOSITORIES.agent_project_assignments,
+        assignment_id,
+        "agent project assignment",
+    )
 
 
 @app.post("/tasks", response_model=TaskRecord, status_code=201)

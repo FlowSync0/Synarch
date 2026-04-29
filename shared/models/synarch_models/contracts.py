@@ -146,6 +146,29 @@ class ProjectRecord(SynarchModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ProjectWorkspace(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("workspace"))
+    project_id: str
+    name: str
+    summary: str = ""
+    memory_scope: str
+    allowed_agent_ids: list[str] = Field(default_factory=list)
+    bridge_project_ids: list[str] = Field(default_factory=list)
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AgentProjectAssignment(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("assignment"))
+    project_id: str
+    workspace_id: str
+    agent_id: str
+    assignment_role: str = "contributor"
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str
@@ -175,6 +198,8 @@ class GoalSubmissionResult(SynarchModel):
     trace_id: str
     routing_decision: RoutingDecision
     project: ProjectRecord
+    workspace: ProjectWorkspace
+    assignments: list[AgentProjectAssignment] = Field(default_factory=list)
     tasks: list[TaskRecord]
     events: list[EventRecord]
 

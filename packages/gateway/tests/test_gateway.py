@@ -4,6 +4,7 @@ from synarch_gateway.main import app, get_state_client, get_task_runner
 from synarch_gateway.state_client import StateServiceUnavailable
 from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
 from synarch_models import (
+    AgentProjectAssignment,
     AgentResult,
     AgentTaskRequest,
     CostRecord,
@@ -11,6 +12,7 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     ProjectRecord,
+    ProjectWorkspace,
     TaskRecord,
     TaskStatus,
 )
@@ -19,6 +21,8 @@ from synarch_models import (
 class FakeStateClient:
     def __init__(self) -> None:
         self.projects: list[ProjectRecord] = []
+        self.workspaces: list[ProjectWorkspace] = []
+        self.assignments: list[AgentProjectAssignment] = []
         self.tasks: list[TaskRecord] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
@@ -33,6 +37,26 @@ class FakeStateClient:
         self.headers.append(headers)
         self.projects.append(project)
         return project
+
+    def create_project_workspace(
+        self,
+        workspace: ProjectWorkspace,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectWorkspace:
+        self.headers.append(headers)
+        self.workspaces.append(workspace)
+        return workspace
+
+    def create_agent_project_assignment(
+        self,
+        assignment: AgentProjectAssignment,
+        *,
+        headers: dict[str, str],
+    ) -> AgentProjectAssignment:
+        self.headers.append(headers)
+        self.assignments.append(assignment)
+        return assignment
 
     def create_task(
         self,
@@ -170,6 +194,12 @@ def test_goal_submit_persists_project_tasks_and_events() -> None:
     payload = response.json()
     assert payload["project"]["goal"] == "Traiter une facture fournisseur avec TVA"
     assert payload["project"]["owner_agent_id"] == "agent-direction"
+    assert payload["workspace"]["memory_scope"] == f"project:{payload['project']['id']}"
+    assert payload["workspace"]["allowed_agent_ids"] == ["agent-direction", "agent-finance"]
+    assert [assignment["agent_id"] for assignment in payload["assignments"]] == [
+        "agent-direction",
+        "agent-finance",
+    ]
     assert [task["assigned_agent_id"] for task in payload["tasks"]] == [
         "agent-direction",
         "agent-finance",
@@ -194,6 +224,8 @@ def test_goal_submit_persists_project_tasks_and_events() -> None:
     assert [event["payload"]["sequence"] for event in task_events] == [1, 2, 3, 4]
     assert {event["trace_id"] for event in payload["events"]} == {payload["trace_id"]}
     assert state_client.projects[0].id == payload["project"]["id"]
+    assert state_client.workspaces[0].project_id == payload["project"]["id"]
+    assert state_client.assignments[0].workspace_id == payload["workspace"]["id"]
     assert state_client.headers[0]["x-synarch-actor-id"] == "hugo"
     assert state_client.headers[0]["x-synarch-trace-id"] == payload["trace_id"]
 

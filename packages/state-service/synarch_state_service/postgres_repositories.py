@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 from synarch_models import (
     AgentDefinition,
     AgentLifecycleRequest,
+    AgentProjectAssignment,
     AgentSoul,
     AuditLogRecord,
     CostRecord,
@@ -19,6 +20,7 @@ from synarch_models import (
     ModelPolicy,
     ModelProviderConfig,
     ProjectRecord,
+    ProjectWorkspace,
     ServiceDefinition,
     TaskRecord,
 )
@@ -199,6 +201,37 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
             "projects",
             ProjectRecord,
             ("id", "title", "goal", "status", "priority", "owner_agent_id", "created_at"),
+        ),
+        project_workspaces=PostgresRecordRepository(
+            database_url,
+            "project_workspaces",
+            ProjectWorkspace,
+            (
+                "id",
+                "project_id",
+                "name",
+                "summary",
+                "memory_scope",
+                "allowed_agent_ids",
+                "bridge_project_ids",
+                "active",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        agent_project_assignments=PostgresRecordRepository(
+            database_url,
+            "agent_project_assignments",
+            AgentProjectAssignment,
+            (
+                "id",
+                "project_id",
+                "workspace_id",
+                "agent_id",
+                "assignment_role",
+                "active",
+                "created_at",
+            ),
         ),
         tasks=PostgresRecordRepository(
             database_url,

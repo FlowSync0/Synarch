@@ -9,6 +9,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentProjectAssignment,
     AgentSoul,
     ModelPolicy,
     ServiceDefinition,
@@ -34,6 +35,8 @@ class AgentSource(Protocol):
     def get_agent(self, agent_id: str) -> AgentDefinition | None: ...
 
     def get_agent_soul(self, agent_id: str) -> AgentSoul | None: ...
+
+    def list_agent_project_assignments(self, agent_id: str) -> list[AgentProjectAssignment]: ...
 
     def list_services(self) -> list[ServiceDefinition]: ...
 
@@ -76,6 +79,9 @@ class SeedAgentSource:
         return next(
             (soul for soul in AGENT_SOULS if soul.agent_id == agent_id and soul.active), None
         )
+
+    def list_agent_project_assignments(self, agent_id: str) -> list[AgentProjectAssignment]:
+        return []
 
     def list_services(self) -> list[ServiceDefinition]:
         return []
@@ -136,6 +142,18 @@ class StateServiceAgentSource:
         if response is None:
             return None
         return AgentSoul.model_validate(response.json())
+
+    def list_agent_project_assignments(self, agent_id: str) -> list[AgentProjectAssignment]:
+        try:
+            response = httpx.get(
+                f"{self.base_url.rstrip('/')}/agent-project-assignments",
+                params={"agent_id": agent_id, "active": True},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise AgentSourceUnavailable(str(error)) from error
+        return [AgentProjectAssignment.model_validate(assignment) for assignment in response.json()]
 
     def list_services(self) -> list[ServiceDefinition]:
         try:

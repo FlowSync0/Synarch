@@ -102,3 +102,24 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["agent_result"]["status"] == "needs_review"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"
     assert payload["cost_records"][0]["trace_id"] == "trace_123"
+
+
+def test_project_workspace_and_assignment_isolate_project_context() -> None:
+    from synarch_models import AgentProjectAssignment, ProjectWorkspace
+
+    workspace = ProjectWorkspace(
+        project_id="project_supplier_search",
+        name="Supplier search workspace",
+        memory_scope="project:project_supplier_search",
+        allowed_agent_ids=["agent-direction", "agent-ops-sourcing"],
+    )
+    assignment = AgentProjectAssignment(
+        project_id=workspace.project_id,
+        workspace_id=workspace.id,
+        agent_id="agent-ops-sourcing",
+        assignment_role="owner",
+    )
+
+    assert workspace.memory_scope == "project:project_supplier_search"
+    assert assignment.workspace_id == workspace.id
+    assert assignment.active is True

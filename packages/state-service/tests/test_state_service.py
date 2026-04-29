@@ -359,6 +359,141 @@ def test_agent_soul_flow_records_identity_event_and_audit() -> None:
     assert audit["target_id"] == "soul-agent-finance-v1"
 
 
+def test_project_workspace_assignment_flow_records_events_and_active_scope() -> None:
+    client = TestClient(app)
+    trace_id = "trace_project_workspace_assignment"
+    for agent_id in ["agent-direction", "agent-ops-sourcing"]:
+        agent_response = client.post(
+            "/agents",
+            json={
+                "id": agent_id,
+                "name": agent_id,
+                "role": "Project participant",
+                "division": "ops-sourcing" if agent_id.endswith("sourcing") else "direction",
+            },
+        )
+        assert agent_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "id": "project-motor-sourcing",
+            "title": "Motor sourcing",
+            "goal": "Find qualified motor suppliers in China",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    workspace_response = client.post(
+        "/project-workspaces",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "workspace-motor-sourcing",
+            "project_id": "project-motor-sourcing",
+            "name": "Motor sourcing workspace",
+            "summary": "Isolated supplier search context.",
+            "memory_scope": "project:project-motor-sourcing",
+            "allowed_agent_ids": ["agent-direction", "agent-ops-sourcing"],
+        },
+    )
+    assert workspace_response.status_code == 201
+
+    assignment_response = client.post(
+        "/agent-project-assignments",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "assignment-motor-sourcing-ops",
+            "project_id": "project-motor-sourcing",
+            "workspace_id": "workspace-motor-sourcing",
+            "agent_id": "agent-ops-sourcing",
+            "assignment_role": "owner",
+        },
+    )
+    assert assignment_response.status_code == 201
+
+    active_workspace = client.get("/projects/project-motor-sourcing/workspace")
+    assert active_workspace.status_code == 200
+    assert active_workspace.json()["memory_scope"] == "project:project-motor-sourcing"
+
+    assignments = client.get(
+        "/agent-project-assignments",
+        params={"agent_id": "agent-ops-sourcing", "active": True},
+    )
+    assert assignments.status_code == 200
+    assert [assignment["project_id"] for assignment in assignments.json()] == [
+        "project-motor-sourcing"
+    ]
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "project_workspace.created",
+        "agent_project.assigned",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert {audit["action"] for audit in audits} == {
+        "project_workspace.created",
+        "agent_project.assigned",
+    }
+
+
+def test_project_assignment_requires_workspace_allowlist() -> None:
+    client = TestClient(app)
+    for agent_id in ["agent-direction", "agent-dev"]:
+        assert (
+            client.post(
+                "/agents",
+                json={
+                    "id": agent_id,
+                    "name": agent_id,
+                    "role": "Project participant",
+                    "division": "dev",
+                },
+            ).status_code
+            == 201
+        )
+    project_response = client.post(
+        "/projects",
+        json={
+            "id": "project-restricted",
+            "title": "Restricted",
+            "goal": "Prove workspace allowlist",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    workspace_response = client.post(
+        "/project-workspaces",
+        json={
+            "id": "workspace-restricted",
+            "project_id": "project-restricted",
+            "name": "Restricted workspace",
+            "memory_scope": "project:project-restricted",
+            "allowed_agent_ids": ["agent-direction"],
+        },
+    )
+    assert workspace_response.status_code == 201
+
+    assignment_response = client.post(
+        "/agent-project-assignments",
+        json={
+            "project_id": "project-restricted",
+            "workspace_id": "workspace-restricted",
+            "agent_id": "agent-dev",
+        },
+    )
+
+    assert assignment_response.status_code == 400
+    assert assignment_response.json()["detail"] == "Agent is not allowed in workspace: agent-dev"
+
+
 def test_state_change_rejects_unknown_actor_type_before_writing() -> None:
     client = TestClient(app)
 
