@@ -14,6 +14,8 @@ from synarch_models import (
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
+    ProjectSplitApplication,
+    ProjectSplitRequest,
     ProjectWorkspace,
     TaskRecord,
     TaskStatus,
@@ -29,6 +31,7 @@ class FakeStateClient:
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
+        self.split_applications: list[ProjectSplitApplication] = []
         self.headers: list[dict[str, str]] = []
 
     def create_project(
@@ -107,6 +110,59 @@ class FakeStateClient:
         )
         self.complexity_assessments.append(assessment)
         return assessment
+
+    def apply_project_split(
+        self,
+        split_request_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectSplitApplication:
+        self.headers.append(headers)
+        source_project = ProjectRecord(
+            id="project-large",
+            title="Large project",
+            goal="Split this approved project.",
+            owner_agent_id="agent-direction",
+        )
+        shard_project = ProjectRecord(
+            id="project-large-shard-planning",
+            title="Large project - planning",
+            goal="Shard of Large project.",
+            owner_agent_id="agent-direction",
+        )
+        shard_workspace = ProjectWorkspace(
+            id="workspace-large-shard-planning",
+            project_id=shard_project.id,
+            name=shard_project.title,
+            memory_scope=f"project:{shard_project.id}",
+            allowed_agent_ids=["agent-direction"],
+            bridge_project_ids=[source_project.id],
+        )
+        shard_task = TaskRecord(
+            id="task-large-shard-plan",
+            project_id=shard_project.id,
+            title="Define execution plan for Large project - planning",
+            assigned_agent_id="agent-direction",
+            acceptance_criteria=["Shard plan is explicit."],
+        )
+        application = ProjectSplitApplication(
+            request_id=split_request_id,
+            split_request=ProjectSplitRequest(
+                id=split_request_id,
+                project_id=source_project.id,
+                complexity_report_id="complexity-large",
+                requested_by="agent-direction",
+                reason="Project reached the split threshold.",
+                proposed_shard_titles=[shard_project.title],
+                status="applied",
+            ),
+            source_project_id=source_project.id,
+            shard_projects=[shard_project],
+            shard_workspaces=[shard_workspace],
+            shard_tasks=[shard_task],
+        )
+        self.split_applications.append(application)
+        return application
 
     def list_tasks(self) -> list[TaskRecord]:
         return self.tasks
@@ -278,6 +334,28 @@ def test_goal_submit_returns_bad_gateway_when_state_service_is_unavailable() -> 
 
     assert response.status_code == 502
     assert response.json()["detail"] == "State service unavailable"
+
+
+def test_gateway_applies_project_split_through_state_service() -> None:
+    state_client = FakeStateClient()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/project-split-requests/project-split-large/apply",
+            headers={"X-Synarch-Trace-Id": "trace_gateway_split_apply"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["request_id"] == "project-split-large"
+    assert payload["split_request"]["status"] == "applied"
+    assert payload["shard_projects"][0]["title"] == "Large project - planning"
+    assert state_client.split_applications[0].request_id == "project-split-large"
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-project-split-applier"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_gateway_split_apply"
 
 
 def test_run_next_task_executes_first_ready_task() -> None:

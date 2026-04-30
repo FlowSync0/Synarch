@@ -10,6 +10,7 @@ from synarch_models import (
     EventRecord,
     ProjectComplexityAssessment,
     ProjectRecord,
+    ProjectSplitApplication,
     ProjectWorkspace,
     TaskRecord,
 )
@@ -68,6 +69,13 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> ProjectComplexityAssessment: ...
+
+    def apply_project_split(
+        self,
+        split_request_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectSplitApplication: ...
 
     def list_tasks(self) -> list[TaskRecord]: ...
 
@@ -156,6 +164,15 @@ class HttpStateClient:
     ) -> ProjectComplexityAssessment:
         response = self._post(f"/projects/{project_id}/complexity-assessments", None, headers)
         return ProjectComplexityAssessment.model_validate(response.json())
+
+    def apply_project_split(
+        self,
+        split_request_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectSplitApplication:
+        response = self._post(f"/project-split-requests/{split_request_id}/apply", None, headers)
+        return ProjectSplitApplication.model_validate(response.json())
 
     def list_tasks(self) -> list[TaskRecord]:
         response = self._get("/tasks")

@@ -13,6 +13,7 @@ from synarch_models import (
     HealthResponse,
     ProjectIntent,
     ProjectRecord,
+    ProjectSplitApplication,
     ProjectWorkspace,
     RoutingDecision,
     TaskDraft,
@@ -175,6 +176,14 @@ def goal_submission_service_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-goal-submitter",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def project_split_applier_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-project-split-applier",
         "x-synarch-trace-id": trace_id,
     }
 
@@ -345,6 +354,28 @@ def submit_goal_to_state(
     routing_decision = plan_goal(envelope)
     try:
         return persist_goal_submission(envelope, routing_decision, trace_id, state_client)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post(
+    "/project-split-requests/{split_request_id}/apply",
+    response_model=ProjectSplitApplication,
+    status_code=201,
+)
+def apply_project_split_request(
+    split_request_id: str,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> ProjectSplitApplication:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    try:
+        return state_client.apply_project_split(
+            split_request_id,
+            headers=project_split_applier_headers(trace_id),
+        )
     except StateServiceRequestError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:

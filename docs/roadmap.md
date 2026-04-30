@@ -186,6 +186,7 @@ Progress:
   decision endpoint.
 - Done: approved project split requests can be applied into shard projects, shard workspaces,
   active assignments, and first planning tasks.
+- Done: gateway exposes project split application through the same public orchestration boundary.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:
