@@ -588,6 +588,128 @@ def test_project_complexity_assessment_skips_split_below_threshold() -> None:
     )
 
 
+def test_project_split_request_decision_updates_status_and_records_trace() -> None:
+    client = TestClient(app)
+    trace_id = "trace_project_split_decision"
+    for agent_id in ["agent-direction", "agent-dev"]:
+        assert (
+            client.post(
+                "/agents",
+                json={
+                    "id": agent_id,
+                    "name": agent_id,
+                    "role": "Project participant",
+                    "division": "dev",
+                },
+            ).status_code
+            == 201
+        )
+    assert (
+        client.post(
+            "/projects",
+            json={
+                "id": "project-split-decision",
+                "title": "Split decision",
+                "goal": "Approve or reject a generated project split request",
+                "owner_agent_id": "agent-direction",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/project-workspaces",
+            json={
+                "id": "workspace-split-decision",
+                "project_id": "project-split-decision",
+                "name": "Split decision workspace",
+                "memory_scope": "project:project-split-decision",
+                "allowed_agent_ids": ["agent-direction", "agent-dev"],
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-project-assignments",
+            json={
+                "id": "assignment-split-decision-dev",
+                "project_id": "project-split-decision",
+                "workspace_id": "workspace-split-decision",
+                "agent_id": "agent-dev",
+            },
+        ).status_code
+        == 201
+    )
+    for index in range(8):
+        assert (
+            client.post(
+                "/tasks",
+                json=task_payload("project-split-decision", f"Slice {index + 1}"),
+            ).status_code
+            == 201
+        )
+
+    assessment_response = client.post(
+        "/projects/project-split-decision/complexity-assessments",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-direction",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+    assert assessment_response.status_code == 201
+    split_request = assessment_response.json()["split_request"]
+
+    decision_response = client.post(
+        f"/project-split-requests/{split_request['id']}/decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "request_id": split_request["id"],
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "The project should be split before more execution work starts.",
+        },
+    )
+
+    assert decision_response.status_code == 201
+    decision = decision_response.json()
+    assert decision["status"] == "approved"
+    assert [event["type"] for event in decision["events_emitted"]] == ["approval.decided"]
+    assert decision["events_emitted"][0]["payload"]["decision_type"] == "project_split"
+    assert decision["events_emitted"][0]["payload"]["status"] == "approved"
+
+    stored_request = client.get(f"/project-split-requests/{split_request['id']}").json()
+    assert stored_request["status"] == "approved"
+
+    duplicate_decision = client.post(
+        f"/project-split-requests/{split_request['id']}/decisions",
+        json={
+            "request_id": split_request["id"],
+            "status": "rejected",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Do not split twice.",
+        },
+    )
+    assert duplicate_decision.status_code == 409
+    assert duplicate_decision.json()["detail"] == "Project split request is already approved"
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "project_complexity.reported",
+        "project_split.requested",
+        "approval.decided",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [audit["action"] for audit in audits] == [
+        "project_complexity.reported",
+        "project_split.requested",
+        "project_split_request.approved",
+    ]
+
+
 def test_project_assignment_requires_workspace_allowlist() -> None:
     client = TestClient(app)
     for agent_id in ["agent-direction", "agent-dev"]:

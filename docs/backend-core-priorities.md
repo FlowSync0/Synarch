@@ -116,6 +116,8 @@ Implemented baseline:
 - `ProjectComplexityReport`: deterministic score from open tasks, blocked tasks, active project
   assignments, and workspace bridges
 - `ProjectSplitRequest`: approval-ready request when the score reaches the split threshold
+- `ProjectSplitDecision`: approved/rejected decision with `approval.decided`, audit log, and stored
+  request status update
 
 ## Priority 8: Project Workspaces
 

@@ -28,6 +28,7 @@ from synarch_models import (
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
+    ProjectSplitDecision,
     ProjectSplitRequest,
     ProjectWorkspace,
     ServiceDefinition,
@@ -118,6 +119,14 @@ def audit_context_from_request(request: Request) -> AuditContext | None:
 
 
 def decision_audit_context(decision: AgentLifecycleDecision, request: Request) -> AuditContext:
+    return AuditContext(
+        actor_type=decision.decided_by_type,
+        actor_id=decision.decided_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def split_decision_audit_context(decision: ProjectSplitDecision, request: Request) -> AuditContext:
     return AuditContext(
         actor_type=decision.decided_by_type,
         actor_id=decision.decided_by_id,
@@ -757,6 +766,81 @@ def read_project_split_request(split_request_id: str) -> ProjectSplitRequest:
         split_request_id,
         "project split request",
     )
+
+
+def project_split_decided_event(
+    split_request: ProjectSplitRequest,
+    decision: ProjectSplitDecision,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.approval_decided,
+        source_agent_id=agent_event_source(decision.decided_by_type, decision.decided_by_id),
+        target=split_request.project_id,
+        payload={
+            "decision_type": "project_split",
+            "split_request_id": split_request.id,
+            "complexity_report_id": split_request.complexity_report_id,
+            "status": decision.status,
+            "rationale": decision.rationale,
+            "proposed_shard_titles": split_request.proposed_shard_titles,
+        },
+        trace_id=trace_id,
+    )
+
+
+@app.post(
+    "/project-split-requests/{split_request_id}/decisions",
+    response_model=ProjectSplitDecision,
+    status_code=201,
+)
+def decide_project_split_request(
+    split_request_id: str,
+    decision: ProjectSplitDecision,
+    request: Request,
+) -> ProjectSplitDecision:
+    if decision.request_id != split_request_id:
+        raise HTTPException(status_code=400, detail="Decision request_id must match path")
+    if decision.status not in {ApprovalStatus.approved, ApprovalStatus.rejected}:
+        raise HTTPException(
+            status_code=400,
+            detail="Project split decisions must be approved or rejected",
+        )
+
+    split_request = read_record(
+        REPOSITORIES.project_split_requests,
+        split_request_id,
+        "project split request",
+    )
+    if split_request.status != ApprovalStatus.requested:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Project split request is already {split_request.status}",
+        )
+
+    context = split_decision_audit_context(decision, request)
+    event = create_domain_event(
+        project_split_decided_event(split_request, decision, context.trace_id)
+    )
+    update_record(
+        REPOSITORIES.project_split_requests,
+        split_request_id,
+        split_request.model_copy(update={"status": decision.status}),
+        "project split request",
+    )
+    write_audit_log(
+        context,
+        action=f"project_split_request.{decision.status}",
+        target_type="project_split_request",
+        target_id=split_request_id,
+        payload={
+            "project_id": split_request.project_id,
+            "complexity_report_id": split_request.complexity_report_id,
+            "rationale": decision.rationale,
+        },
+    )
+
+    return decision.model_copy(update={"events_emitted": [event]})
 
 
 @app.post("/tasks", response_model=TaskRecord, status_code=201)

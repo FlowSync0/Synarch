@@ -236,6 +236,16 @@ class GoalSubmissionResult(SynarchModel):
     complexity_assessment: ProjectComplexityAssessment | None = None
 
 
+class ProjectSplitDecision(SynarchModel):
+    request_id: str
+    status: ApprovalStatus
+    decided_by_type: ActorType
+    decided_by_id: str
+    rationale: str
+    events_emitted: list[EventRecord] = Field(default_factory=list)
+    decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class MemoryItem(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("memory"))
     scope: str

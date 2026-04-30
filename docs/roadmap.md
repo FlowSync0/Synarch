@@ -1,6 +1,6 @@
 # Synarch Roadmap
 
-Last updated: 2026-04-29
+Last updated: 2026-04-30
 
 This roadmap is the operating map for Synarch. The README explains the vision, and
 `docs/development-quality-gates.md` defines the verification discipline. This document answers:
@@ -182,6 +182,8 @@ Progress:
   split when the current task/assignment/workspace score reaches the configured threshold.
 - Done: gateway goal submission triggers the state-service complexity assessment after persisting
   the project, workspace, assignments, tasks, and initial timeline events.
+- Done: project split requests can be approved or rejected through a traceable state-service
+  decision endpoint.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:
