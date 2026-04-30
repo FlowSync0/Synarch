@@ -696,17 +696,60 @@ def test_project_split_request_decision_updates_status_and_records_trace() -> No
     assert duplicate_decision.status_code == 409
     assert duplicate_decision.json()["detail"] == "Project split request is already approved"
 
+    apply_response = client.post(
+        f"/project-split-requests/{split_request['id']}/apply",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-project-split-applier",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert apply_response.status_code == 201
+    application = apply_response.json()
+    assert application["split_request"]["status"] == "applied"
+    assert [project["title"] for project in application["shard_projects"]] == [
+        "Split decision - planning",
+        "Split decision - execution",
+    ]
+    assert len(application["shard_workspaces"]) == 2
+    assert all(
+        workspace["bridge_project_ids"] == ["project-split-decision"]
+        for workspace in application["shard_workspaces"]
+    )
+    assert len(application["shard_assignments"]) == 4
+    assert {assignment["agent_id"] for assignment in application["shard_assignments"]} == {
+        "agent-direction",
+        "agent-dev",
+    }
+    assert len(application["shard_tasks"]) == 2
+    assert {task["assigned_agent_id"] for task in application["shard_tasks"]} == {"agent-direction"}
+    assert all(task["acceptance_criteria"] for task in application["shard_tasks"])
+    assert [event["type"] for event in application["events_emitted"]] == ["project_split.applied"]
+
+    applied_request = client.get(f"/project-split-requests/{split_request['id']}").json()
+    assert applied_request["status"] == "applied"
+
+    duplicate_apply = client.post(f"/project-split-requests/{split_request['id']}/apply")
+    assert duplicate_apply.status_code == 409
+    assert (
+        duplicate_apply.json()["detail"]
+        == "Project split request must be approved before application: applied"
+    )
+
     events = client.get("/events", params={"trace_id": trace_id}).json()
     assert [event["type"] for event in events] == [
         "project_complexity.reported",
         "project_split.requested",
         "approval.decided",
+        "project_split.applied",
     ]
     audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
     assert [audit["action"] for audit in audits] == [
         "project_complexity.reported",
         "project_split.requested",
         "project_split_request.approved",
+        "project_split_request.applied",
     ]
 
 

@@ -8,6 +8,8 @@ from synarch_models import (
     MemoryContext,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
+    ProjectRecord,
+    ProjectSplitApplication,
     ProjectSplitDecision,
     ProjectSplitRequest,
     TaskRecord,
@@ -156,12 +158,27 @@ def test_project_complexity_assessment_serializes_split_request() -> None:
         decided_by_id="local-user",
         rationale="The project should be split before more execution work starts.",
     )
+    application = ProjectSplitApplication(
+        request_id=split_request.id,
+        split_request=split_request.model_copy(update={"status": "applied"}),
+        source_project_id=split_request.project_id,
+        shard_projects=[
+            ProjectRecord(
+                title="Supplier search - planning",
+                goal="Shard of Supplier search.",
+                owner_agent_id="agent-direction",
+            )
+        ],
+    )
 
     payload = assessment.model_dump(mode="json")
     decision_payload = decision.model_dump(mode="json")
+    application_payload = application.model_dump(mode="json")
 
     assert payload["report"]["split_recommended"] is True
     assert payload["split_request"]["status"] == "requested"
     assert payload["split_request"]["complexity_report_id"] == report.id
     assert decision_payload["status"] == "approved"
     assert decision_payload["request_id"] == split_request.id
+    assert application_payload["split_request"]["status"] == "applied"
+    assert application_payload["shard_projects"][0]["title"] == "Supplier search - planning"

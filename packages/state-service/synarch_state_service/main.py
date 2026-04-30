@@ -28,6 +28,7 @@ from synarch_models import (
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
+    ProjectSplitApplication,
     ProjectSplitDecision,
     ProjectSplitRequest,
     ProjectWorkspace,
@@ -841,6 +842,186 @@ def decide_project_split_request(
     )
 
     return decision.model_copy(update={"events_emitted": [event]})
+
+
+def split_shard_titles(split_request: ProjectSplitRequest, project: ProjectRecord) -> list[str]:
+    if split_request.proposed_shard_titles:
+        return split_request.proposed_shard_titles
+    return [f"{project.title} - shard"]
+
+
+def split_allowed_agent_ids(project: ProjectRecord) -> list[str]:
+    workspace = active_project_workspace(project.id)
+    if workspace is None or not workspace.allowed_agent_ids:
+        return [project.owner_agent_id]
+    return list(dict.fromkeys([project.owner_agent_id, *workspace.allowed_agent_ids]))
+
+
+def split_assignment_agent_roles(
+    project: ProjectRecord, allowed_agent_ids: list[str]
+) -> dict[str, str]:
+    source_roles = {
+        assignment.agent_id: assignment.assignment_role
+        for assignment in active_project_assignments(project.id)
+        if assignment.agent_id in allowed_agent_ids
+    }
+    roles = {**source_roles, project.owner_agent_id: "owner"}
+    return {
+        agent_id: role
+        for agent_id, role in roles.items()
+        if agent_id in allowed_agent_ids and REPOSITORIES.agents.exists(agent_id)
+    }
+
+
+def split_applied_event(
+    split_request: ProjectSplitRequest,
+    shard_projects: list[ProjectRecord],
+    shard_tasks: list[TaskRecord],
+    context: AuditContext | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.project_split_applied,
+        source_agent_id=agent_event_source(context.actor_type, context.actor_id)
+        if context is not None
+        else None,
+        target=split_request.project_id,
+        payload={
+            "split_request_id": split_request.id,
+            "source_project_id": split_request.project_id,
+            "shard_project_ids": [project.id for project in shard_projects],
+            "shard_task_ids": [task.id for task in shard_tasks],
+        },
+        trace_id=context.trace_id if context is not None else None,
+    )
+
+
+@app.post(
+    "/project-split-requests/{split_request_id}/apply",
+    response_model=ProjectSplitApplication,
+    status_code=201,
+)
+def apply_project_split_request(
+    split_request_id: str,
+    request: Request,
+) -> ProjectSplitApplication:
+    split_request = read_record(
+        REPOSITORIES.project_split_requests,
+        split_request_id,
+        "project split request",
+    )
+    if split_request.status != ApprovalStatus.approved:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Project split request must be approved before application: "
+                f"{split_request.status}"
+            ),
+        )
+
+    source_project = read_record(REPOSITORIES.projects, split_request.project_id, "project")
+    allowed_agent_ids = split_allowed_agent_ids(source_project)
+    assignment_roles = split_assignment_agent_roles(source_project, allowed_agent_ids)
+    audit_context = audit_context_from_request(request)
+
+    shard_projects: list[ProjectRecord] = []
+    shard_workspaces: list[ProjectWorkspace] = []
+    shard_assignments: list[AgentProjectAssignment] = []
+    shard_tasks: list[TaskRecord] = []
+    for title in split_shard_titles(split_request, source_project):
+        shard_project_draft = ProjectRecord(
+            title=title,
+            goal=f"Shard of {source_project.title}: {split_request.reason}",
+            priority=source_project.priority,
+            owner_agent_id=source_project.owner_agent_id,
+        )
+        shard_project = create_record(
+            REPOSITORIES.projects,
+            shard_project_draft.id,
+            shard_project_draft,
+        )
+        shard_projects.append(shard_project)
+
+        shard_workspace_draft = ProjectWorkspace(
+            project_id=shard_project.id,
+            name=title,
+            summary=f"Shard created from split request {split_request.id}.",
+            memory_scope=f"project:{shard_project.id}",
+            allowed_agent_ids=allowed_agent_ids,
+            bridge_project_ids=[source_project.id],
+        )
+        shard_workspace = create_record(
+            REPOSITORIES.project_workspaces,
+            shard_workspace_draft.id,
+            shard_workspace_draft,
+        )
+        shard_workspaces.append(shard_workspace)
+
+        for agent_id, role in assignment_roles.items():
+            shard_assignment_draft = AgentProjectAssignment(
+                project_id=shard_project.id,
+                workspace_id=shard_workspace.id,
+                agent_id=agent_id,
+                assignment_role=role,
+            )
+            shard_assignments.append(
+                create_record(
+                    REPOSITORIES.agent_project_assignments,
+                    shard_assignment_draft.id,
+                    shard_assignment_draft,
+                )
+            )
+
+        shard_task_draft = TaskRecord(
+            project_id=shard_project.id,
+            title=f"Define execution plan for {title}",
+            description="Prepare the first executable task chain for this shard.",
+            assigned_agent_id=source_project.owner_agent_id,
+            acceptance_criteria=[
+                "Shard objective is restated with explicit scope.",
+                "Next executable tasks are decomposed before runtime execution.",
+            ],
+            sequence=1,
+        )
+        shard_tasks.append(
+            create_record(
+                REPOSITORIES.tasks,
+                shard_task_draft.id,
+                shard_task_draft,
+            )
+        )
+
+    updated_split_request = split_request.model_copy(update={"status": ApprovalStatus.applied})
+    update_record(
+        REPOSITORIES.project_split_requests,
+        split_request_id,
+        updated_split_request,
+        "project split request",
+    )
+    event = create_domain_event(
+        split_applied_event(updated_split_request, shard_projects, shard_tasks, audit_context)
+    )
+    write_audit_log(
+        audit_context,
+        action="project_split_request.applied",
+        target_type="project_split_request",
+        target_id=split_request_id,
+        payload={
+            "source_project_id": source_project.id,
+            "shard_project_ids": [project.id for project in shard_projects],
+            "shard_task_ids": [task.id for task in shard_tasks],
+        },
+    )
+
+    return ProjectSplitApplication(
+        request_id=split_request_id,
+        split_request=updated_split_request,
+        source_project_id=source_project.id,
+        shard_projects=shard_projects,
+        shard_workspaces=shard_workspaces,
+        shard_assignments=shard_assignments,
+        shard_tasks=shard_tasks,
+        events_emitted=[event],
+    )
 
 
 @app.post("/tasks", response_model=TaskRecord, status_code=201)

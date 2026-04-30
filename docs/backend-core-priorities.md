@@ -118,6 +118,8 @@ Implemented baseline:
 - `ProjectSplitRequest`: approval-ready request when the score reaches the split threshold
 - `ProjectSplitDecision`: approved/rejected decision with `approval.decided`, audit log, and stored
   request status update
+- `ProjectSplitApplication`: approved split requests create shard projects, shard workspaces,
+  active assignments, first planning tasks, `project_split.applied`, and audit log
 
 ## Priority 8: Project Workspaces
 

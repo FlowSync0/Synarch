@@ -184,6 +184,8 @@ Progress:
   the project, workspace, assignments, tasks, and initial timeline events.
 - Done: project split requests can be approved or rejected through a traceable state-service
   decision endpoint.
+- Done: approved project split requests can be applied into shard projects, shard workspaces,
+  active assignments, and first planning tasks.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:

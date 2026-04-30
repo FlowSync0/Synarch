@@ -246,6 +246,18 @@ class ProjectSplitDecision(SynarchModel):
     decided_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ProjectSplitApplication(SynarchModel):
+    request_id: str
+    split_request: ProjectSplitRequest
+    source_project_id: str
+    shard_projects: list[ProjectRecord] = Field(default_factory=list)
+    shard_workspaces: list[ProjectWorkspace] = Field(default_factory=list)
+    shard_assignments: list[AgentProjectAssignment] = Field(default_factory=list)
+    shard_tasks: list[TaskRecord] = Field(default_factory=list)
+    events_emitted: list[EventRecord] = Field(default_factory=list)
+    applied_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class MemoryItem(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("memory"))
     scope: str
