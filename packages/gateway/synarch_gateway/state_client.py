@@ -8,6 +8,7 @@ from synarch_models import (
     AgentResult,
     CostRecord,
     EventRecord,
+    ProjectComplexityAssessment,
     ProjectRecord,
     ProjectWorkspace,
     TaskRecord,
@@ -60,6 +61,13 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> EventRecord: ...
+
+    def assess_project_complexity(
+        self,
+        project_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectComplexityAssessment: ...
 
     def list_tasks(self) -> list[TaskRecord]: ...
 
@@ -139,6 +147,15 @@ class HttpStateClient:
     ) -> EventRecord:
         response = self._post("/events", event.model_dump(mode="json"), headers)
         return EventRecord.model_validate(response.json())
+
+    def assess_project_complexity(
+        self,
+        project_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectComplexityAssessment:
+        response = self._post(f"/projects/{project_id}/complexity-assessments", None, headers)
+        return ProjectComplexityAssessment.model_validate(response.json())
 
     def list_tasks(self) -> list[TaskRecord]:
         response = self._get("/tasks")

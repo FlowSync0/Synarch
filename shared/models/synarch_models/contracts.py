@@ -233,6 +233,7 @@ class GoalSubmissionResult(SynarchModel):
     assignments: list[AgentProjectAssignment] = Field(default_factory=list)
     tasks: list[TaskRecord]
     events: list[EventRecord]
+    complexity_assessment: ProjectComplexityAssessment | None = None
 
 
 class MemoryItem(SynarchModel):

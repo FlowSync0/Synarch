@@ -180,6 +180,8 @@ Progress:
   agents.
 - Done: state-service can persist deterministic project complexity reports and request a project
   split when the current task/assignment/workspace score reaches the configured threshold.
+- Done: gateway goal submission triggers the state-service complexity assessment after persisting
+  the project, workspace, assignments, tasks, and initial timeline events.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:

@@ -171,6 +171,14 @@ def service_headers(trace_id: str) -> dict[str, str]:
     }
 
 
+def goal_submission_service_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-goal-submitter",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
 def persist_goal_submission(
     envelope: GoalEnvelope,
     routing_decision: RoutingDecision,
@@ -235,6 +243,10 @@ def persist_goal_submission(
         state_client.create_event(event, headers=headers)
         for event in goal_submission_events(envelope, routing_decision, project, tasks, trace_id)
     ]
+    complexity_assessment = state_client.assess_project_complexity(
+        project.id,
+        headers=goal_submission_service_headers(trace_id),
+    )
 
     return GoalSubmissionResult(
         trace_id=trace_id,
@@ -244,6 +256,7 @@ def persist_goal_submission(
         assignments=assignments,
         tasks=tasks,
         events=events,
+        complexity_assessment=complexity_assessment,
     )
 
 

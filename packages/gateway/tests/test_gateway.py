@@ -11,6 +11,8 @@ from synarch_models import (
     EventRecord,
     LocalWorldView,
     MemoryContext,
+    ProjectComplexityAssessment,
+    ProjectComplexityReport,
     ProjectRecord,
     ProjectWorkspace,
     TaskRecord,
@@ -26,6 +28,7 @@ class FakeStateClient:
         self.tasks: list[TaskRecord] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
+        self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.headers: list[dict[str, str]] = []
 
     def create_project(
@@ -77,6 +80,33 @@ class FakeStateClient:
         self.headers.append(headers)
         self.events.append(event)
         return event
+
+    def assess_project_complexity(
+        self,
+        project_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectComplexityAssessment:
+        self.headers.append(headers)
+        assessment = ProjectComplexityAssessment(
+            report=ProjectComplexityReport(
+                project_id=project_id,
+                task_count=len([task for task in self.tasks if task.project_id == project_id]),
+                open_task_count=len(
+                    [
+                        task
+                        for task in self.tasks
+                        if task.project_id == project_id
+                        and task.status not in {TaskStatus.completed, TaskStatus.failed}
+                    ]
+                ),
+                score=4,
+                threshold=10,
+                split_recommended=False,
+            )
+        )
+        self.complexity_assessments.append(assessment)
+        return assessment
 
     def list_tasks(self) -> list[TaskRecord]:
         return self.tasks
@@ -223,11 +253,16 @@ def test_goal_submit_persists_project_tasks_and_events() -> None:
     task_events = payload["events"][3:]
     assert [event["payload"]["sequence"] for event in task_events] == [1, 2, 3, 4]
     assert {event["trace_id"] for event in payload["events"]} == {payload["trace_id"]}
+    assert payload["complexity_assessment"]["report"]["project_id"] == payload["project"]["id"]
+    assert payload["complexity_assessment"]["report"]["split_recommended"] is False
+    assert state_client.complexity_assessments[0].report.project_id == payload["project"]["id"]
     assert state_client.projects[0].id == payload["project"]["id"]
     assert state_client.workspaces[0].project_id == payload["project"]["id"]
     assert state_client.assignments[0].workspace_id == payload["workspace"]["id"]
     assert state_client.headers[0]["x-synarch-actor-id"] == "hugo"
     assert state_client.headers[0]["x-synarch-trace-id"] == payload["trace_id"]
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-goal-submitter"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == payload["trace_id"]
 
 
 def test_goal_submit_returns_bad_gateway_when_state_service_is_unavailable() -> None:

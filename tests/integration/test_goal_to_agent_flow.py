@@ -22,6 +22,7 @@ from synarch_models import (
     EventRecord,
     LocalWorldView,
     MemoryContext,
+    ProjectComplexityAssessment,
     ProjectRecord,
     ProjectWorkspace,
     TaskRecord,
@@ -108,6 +109,20 @@ class StateServiceTestClient:
         if response.status_code != 201:
             raise StateServiceRequestError(response.status_code, response.json())
         return EventRecord.model_validate(response.json())
+
+    def assess_project_complexity(
+        self,
+        project_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectComplexityAssessment:
+        response = self.client.post(
+            f"/projects/{project_id}/complexity-assessments",
+            headers=headers,
+        )
+        if response.status_code != 201:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ProjectComplexityAssessment.model_validate(response.json())
 
     def list_tasks(self) -> list[TaskRecord]:
         response = self.client.get("/tasks")
@@ -256,6 +271,10 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert len(submission["tasks"]) == 4
     assert all(task["acceptance_criteria"] for task in submission["tasks"])
     assert submission["workspace"]["memory_scope"] == f"project:{submission['project']['id']}"
+    assert (
+        submission["complexity_assessment"]["report"]["project_id"] == submission["project"]["id"]
+    )
+    assert submission["complexity_assessment"]["report"]["split_recommended"] is False
     assert {assignment["agent_id"] for assignment in submission["assignments"]} == {
         "agent-direction",
         "agent-finance",
@@ -275,11 +294,15 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
         "task.created",
         "task.created",
         "task.created",
+        "project_complexity.reported",
     ]
 
     audit_response = state.get("/audit-logs", params={"trace_id": submission["trace_id"]})
     assert audit_response.status_code == 200
-    assert {record["actor_id"] for record in audit_response.json()} == {"integration-test"}
+    assert {record["actor_id"] for record in audit_response.json()} == {
+        "gateway-goal-submitter",
+        "integration-test",
+    }
 
     memory_item_response = memory.post(
         "/memory-items",
