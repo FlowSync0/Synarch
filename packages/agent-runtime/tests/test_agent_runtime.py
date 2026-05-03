@@ -80,6 +80,13 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
                                 '{"status":"needs_review",'
                                 '"summary":"DeepSeek prepared the work package.",'
                                 '"actions_taken":["Reviewed task and context"],'
+                                '"sub_tasks_created":[{'
+                                '"title":"Verify supplier source",'
+                                '"description":"Check one supplier source before contact.",'
+                                '"assigned_agent_id":"agent-dev",'
+                                '"depends_on":[],'
+                                '"acceptance_criteria":["Source URL and blocker are recorded."],'
+                                '"sequence":1}],'
                                 '"memory_candidates":["Remember supplier MOQ constraint."]}'
                             )
                         }
@@ -117,6 +124,10 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
     assert payload["status"] == "needs_review"
     assert payload["summary"] == "DeepSeek prepared the work package."
     assert payload["actions_taken"] == ["Reviewed task and context"]
+    assert payload["sub_tasks_created"][0]["title"] == "Verify supplier source"
+    assert payload["sub_tasks_created"][0]["acceptance_criteria"] == [
+        "Source URL and blocker are recorded."
+    ]
     assert payload["memory_candidates"][0]["content"] == "Remember supplier MOQ constraint."
     assert payload["model_usage"] == {
         "provider_id": "provider-openrouter",

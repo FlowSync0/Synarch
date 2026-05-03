@@ -151,6 +151,8 @@ Implemented baseline:
   request status update
 - `ProjectSplitApplication`: approved split requests create shard projects, shard workspaces,
   active assignments, first planning tasks, `project_split.applied`, and audit log
+- `AgentResult.sub_tasks_created` is persisted by the task runner as child `TaskRecord` items with
+  `parent_task_id`, dependencies, acceptance criteria, and `task.created` timeline events.
 
 ## Priority 8: Project Workspaces
 

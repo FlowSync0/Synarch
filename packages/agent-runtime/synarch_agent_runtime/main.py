@@ -16,6 +16,7 @@ from synarch_models import (
     HealthResponse,
     MemoryItem,
     ModelUsage,
+    TaskDraft,
     TaskStatus,
 )
 
@@ -136,6 +137,7 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         task_id=request.task.id,
         status=status,
         actions_taken=parsed_actions(parsed),
+        sub_tasks_created=parsed_sub_tasks(parsed, request),
         events_emitted=[event],
         memory_candidates=parsed_memory_candidates(parsed, request),
         model_usage=usage,
@@ -151,8 +153,12 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
                 "role": "system",
                 "content": (
                     "You are a Synarch AI employee. Return only valid JSON with keys "
-                    "status, summary, actions_taken, and memory_candidates. "
+                    "status, summary, actions_taken, sub_tasks_created, and "
+                    "memory_candidates. "
                     "status must be one of completed, needs_review, blocked, failed. "
+                    "sub_tasks_created must be a list of small debuggable task objects "
+                    "with title, description, assigned_agent_id, depends_on, "
+                    "acceptance_criteria, and sequence. "
                     "Keep the answer operational and auditable."
                 ),
             },
@@ -219,6 +225,40 @@ def parsed_actions(parsed: dict[str, Any]) -> list[str]:
     return [str(action) for action in actions]
 
 
+def parsed_sub_tasks(
+    parsed: dict[str, Any],
+    request: AgentTaskRequest,
+) -> list[TaskDraft]:
+    raw_sub_tasks = parsed.get("sub_tasks_created", [])
+    if not isinstance(raw_sub_tasks, list):
+        return []
+
+    drafts: list[TaskDraft] = []
+    for index, raw_sub_task in enumerate(raw_sub_tasks, start=1):
+        if not isinstance(raw_sub_task, dict):
+            continue
+        title = raw_sub_task.get("title")
+        if not isinstance(title, str) or not title.strip():
+            continue
+        assigned_agent_id = raw_sub_task.get("assigned_agent_id")
+        if not isinstance(assigned_agent_id, str) or not assigned_agent_id.strip():
+            assigned_agent_id = request.world_view.agent_id
+        acceptance_criteria = string_list(raw_sub_task.get("acceptance_criteria"))
+        if not acceptance_criteria:
+            continue
+        drafts.append(
+            TaskDraft(
+                title=title.strip(),
+                description=string_value(raw_sub_task.get("description")),
+                assigned_agent_id=assigned_agent_id,
+                depends_on=string_list(raw_sub_task.get("depends_on")),
+                acceptance_criteria=acceptance_criteria,
+                sequence=integer_value(raw_sub_task.get("sequence"), index),
+            )
+        )
+    return drafts
+
+
 def parsed_memory_candidates(
     parsed: dict[str, Any],
     request: AgentTaskRequest,
@@ -245,6 +285,24 @@ def parsed_summary(parsed: dict[str, Any], content: str) -> str:
     if content.strip():
         return content.strip()[:1200]
     return "OpenRouter returned an empty response."
+
+
+def string_value(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
+
+
+def integer_value(value: Any, default: int) -> int:
+    if isinstance(value, int):
+        return value
+    return default
 
 
 def model_usage_from_response(

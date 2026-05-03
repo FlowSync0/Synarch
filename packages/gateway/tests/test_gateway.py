@@ -30,6 +30,7 @@ from synarch_models import (
     ProjectSplitApplication,
     ProjectSplitRequest,
     ProjectWorkspace,
+    TaskDraft,
     TaskRecord,
     TaskStatus,
 )
@@ -388,6 +389,40 @@ class FakeAgentRuntimeClient:
         )
 
 
+class SubTaskAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Split the next supplier workflow into debuggable tasks"],
+            sub_tasks_created=[
+                TaskDraft(
+                    title="Find supplier directories",
+                    description="Identify the first vetted supplier directory to inspect.",
+                    assigned_agent_id="agent-ops-sourcing",
+                    acceptance_criteria=["Directory URL and selection rationale are recorded."],
+                    sequence=1,
+                ),
+                TaskDraft(
+                    title="Contact first supplier",
+                    description="Prepare the first supplier contact step after source selection.",
+                    assigned_agent_id="agent-ops-sourcing",
+                    depends_on=["Find supplier directories"],
+                    acceptance_criteria=[
+                        "Contact channel, message, and stop condition are recorded."
+                    ],
+                    sequence=2,
+                ),
+            ],
+            summary="Created the next supplier workflow slices.",
+        )
+
+
 class FailingAgentRuntimeClient:
     def run_task(self, request: AgentTaskRequest) -> AgentResult:
         raise TaskRunnerUnavailable("runtime offline")
@@ -725,6 +760,76 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_run_next_task_persists_agent_created_sub_tasks() -> None:
+    state_client = FakeStateClient()
+    parent_task = TaskRecord(
+        id="task_parent",
+        project_id="project_sourcing",
+        title="Plan supplier outreach",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=["Next supplier workflow is split into debuggable tasks."],
+        sequence=3,
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_sourcing",
+            title="Supplier sourcing",
+            goal="Find reliable suppliers for a motor in China.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(parent_task)
+    runtime_client = SubTaskAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(
+            {
+                "agent-ops-sourcing": LocalWorldView(
+                    agent_id="agent-ops-sourcing",
+                    role="Ops sourcing",
+                    division="ops",
+                )
+            }
+        ),
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_sub_task_creation"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    created_sub_tasks = payload["created_sub_tasks"]
+    assert [task["title"] for task in created_sub_tasks] == [
+        "Find supplier directories",
+        "Contact first supplier",
+    ]
+    assert created_sub_tasks[0]["parent_task_id"] == parent_task.id
+    assert created_sub_tasks[0]["depends_on"] == [parent_task.id]
+    assert created_sub_tasks[1]["depends_on"] == [
+        parent_task.id,
+        created_sub_tasks[0]["id"],
+    ]
+    assert created_sub_tasks[1]["acceptance_criteria"] == [
+        "Contact channel, message, and stop condition are recorded."
+    ]
+    assert [event["type"] for event in payload["sub_task_events"]] == [
+        "task.created",
+        "task.created",
+    ]
+    assert [event.payload.get("parent_task_id") for event in state_client.events[-2:]] == [
+        parent_task.id,
+        parent_task.id,
+    ]
 
 
 def test_list_memory_items_filters_review_queue() -> None:

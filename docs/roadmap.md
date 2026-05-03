@@ -190,6 +190,8 @@ Progress:
 - Done: approved project split requests can be applied into shard projects, shard workspaces,
   active assignments, and first planning tasks.
 - Done: gateway exposes project split application through the same public orchestration boundary.
+- Done: task runner persists `AgentResult.sub_tasks_created` as child tasks with dependency links
+  and `task.created` events.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:

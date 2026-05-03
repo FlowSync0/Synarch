@@ -14,6 +14,7 @@ from synarch_models import (
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
+    TaskDraft,
     TaskRecord,
     TaskRunResult,
     TaskStatus,
@@ -276,6 +277,13 @@ class TaskRunner:
             trace_id=trace_id,
             headers=headers,
         )
+        created_sub_tasks, sub_task_events = self.persist_sub_tasks(
+            parent_task=recorded_task,
+            world_view=world_view,
+            agent_result=agent_result,
+            trace_id=trace_id,
+            headers=headers,
+        )
         return TaskRunResult(
             trace_id=trace_id,
             task=recorded_task,
@@ -284,6 +292,8 @@ class TaskRunner:
             memory_context=memory_context,
             agent_result=agent_result,
             model_call_events=[started_event, completed_event],
+            created_sub_tasks=created_sub_tasks,
+            sub_task_events=sub_task_events,
             memory_events=memory_events,
             cost_records=[cost_record],
         )
@@ -313,6 +323,38 @@ class TaskRunner:
             )
         return events
 
+    def persist_sub_tasks(
+        self,
+        *,
+        parent_task: TaskRecord,
+        world_view: LocalWorldView,
+        agent_result: AgentResult,
+        trace_id: str,
+        headers: dict[str, str],
+    ) -> tuple[list[TaskRecord], list[EventRecord]]:
+        created_tasks: list[TaskRecord] = []
+        events: list[EventRecord] = []
+        task_ids_by_title: dict[str, str] = {}
+        for index, draft in enumerate(agent_result.sub_tasks_created, start=1):
+            created_task = self.state.create_task(
+                child_task_record(parent_task, draft, index, task_ids_by_title),
+                headers=headers,
+            )
+            created_tasks.append(created_task)
+            task_ids_by_title[draft.title] = created_task.id
+            events.append(
+                self.state.create_event(
+                    sub_task_created_event(
+                        task=created_task,
+                        parent_task=parent_task,
+                        world_view=world_view,
+                        trace_id=trace_id,
+                    ),
+                    headers=headers,
+                )
+            )
+        return created_tasks, events
+
 
 def proposed_memory_candidates(
     *,
@@ -331,6 +373,49 @@ def proposed_memory_candidates(
         )
         for candidate in agent_result.memory_candidates
     ]
+
+
+def child_task_record(
+    parent_task: TaskRecord,
+    draft: TaskDraft,
+    index: int,
+    task_ids_by_title: dict[str, str],
+) -> TaskRecord:
+    sequence = draft.sequence or parent_task.sequence * 100 + index
+    return TaskRecord(
+        project_id=parent_task.project_id,
+        title=draft.title,
+        description=draft.description,
+        assigned_agent_id=draft.assigned_agent_id,
+        depends_on=child_task_dependencies(parent_task, draft, task_ids_by_title),
+        acceptance_criteria=draft.acceptance_criteria,
+        parent_task_id=parent_task.id,
+        sequence=sequence,
+    )
+
+
+def child_task_dependencies(
+    parent_task: TaskRecord,
+    draft: TaskDraft,
+    task_ids_by_title: dict[str, str],
+) -> list[str]:
+    dependencies = [parent_task.id]
+    dependencies.extend(
+        task_ids_by_title.get(dependency, dependency)
+        for dependency in draft.depends_on
+    )
+    return deduplicate(dependencies)
+
+
+def deduplicate(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
@@ -504,6 +589,29 @@ def memory_candidate_created_event(
             "memory_id": memory_item.id,
             "scope": memory_item.scope,
             "status": memory_item.status,
+        },
+        trace_id=trace_id,
+    )
+
+
+def sub_task_created_event(
+    *,
+    task: TaskRecord,
+    parent_task: TaskRecord,
+    world_view: LocalWorldView,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.task_created,
+        source_agent_id=world_view.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "parent_task_id": parent_task.id,
+            "assigned_agent_id": task.assigned_agent_id,
+            "depends_on": task.depends_on,
+            "acceptance_criteria": task.acceptance_criteria,
+            "sequence": task.sequence,
         },
         trace_id=trace_id,
     )

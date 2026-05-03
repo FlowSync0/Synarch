@@ -60,6 +60,7 @@ GoalEnvelope
   -> Control Plane LocalWorldView + active AgentSoul
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
+  -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created
   -> Event Service timeline
 ```
 
