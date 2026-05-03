@@ -1237,7 +1237,7 @@ def list_events(event_type: str | None = None, trace_id: str | None = None) -> l
         events = [event for event in events if event.type == event_type]
     if trace_id is not None:
         events = [event for event in events if event.trace_id == trace_id]
-    return events
+    return sorted(events, key=lambda event: event.timestamp)
 
 
 @app.get("/events/{event_id}", response_model=EventRecord)

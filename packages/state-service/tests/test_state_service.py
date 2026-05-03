@@ -122,6 +122,37 @@ def test_task_start_updates_status_and_writes_event_and_audit() -> None:
     assert audit["target_id"] == task["id"]
 
 
+def test_events_are_listed_chronologically_for_trace() -> None:
+    client = TestClient(app)
+    trace_id = "trace-event-order"
+
+    late_response = client.post(
+        "/events",
+        json={
+            "id": "event_late",
+            "type": "task.completed",
+            "target": "project-demo",
+            "timestamp": "2026-05-03T12:00:02Z",
+            "trace_id": trace_id,
+        },
+    )
+    early_response = client.post(
+        "/events",
+        json={
+            "id": "event_early",
+            "type": "task.started",
+            "target": "project-demo",
+            "timestamp": "2026-05-03T12:00:01Z",
+            "trace_id": trace_id,
+        },
+    )
+
+    assert late_response.status_code == 201
+    assert early_response.status_code == 201
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["id"] for event in events] == ["event_early", "event_late"]
+
+
 def test_task_start_rejects_incomplete_dependencies() -> None:
     client = TestClient(app)
     project_response = client.post(
