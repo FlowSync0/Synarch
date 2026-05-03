@@ -84,6 +84,12 @@ class ApprovalStatus(StrEnum):
     applied = "applied"
 
 
+class MemoryStatus(StrEnum):
+    proposed = "proposed"
+    approved = "approved"
+    rejected = "rejected"
+
+
 class ServiceKind(StrEnum):
     internal = "internal"
     external = "external"

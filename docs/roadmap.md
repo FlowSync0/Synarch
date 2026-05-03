@@ -45,7 +45,7 @@ through the dashboard.
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, task result recording, and timeline events exist. | No continuous scheduler loop or worker queue yet. | Agent result -> task status/result -> durable chronological event/audit timeline. |
-| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and gateway-persisted memory candidates exist. | No candidate review policy, compaction, vector search, graph retrieval, or hierarchical context database. | Produced memory candidate returns in the next task context with traceable event and cost logs. |
+| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and proposed memory candidates exist. | No human review UI, compaction, vector search, graph retrieval, or hierarchical context database. | Approve a proposed memory candidate and verify it appears in the next task context. |
 | G. Execution & Tooling | Later | Tool contracts exist (`ToolCallRequest`, `ToolResult`). | No tool registry, permission enforcement, sandbox, or audit trail for tool calls. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
@@ -299,8 +299,8 @@ Progress:
 - Done: context assembly enforces the requested token budget with a deterministic token estimate.
 - Done: task runner requests memory scopes from `LocalWorldView` and project context.
 - Done: memory items persist in PostgreSQL when `DATABASE_URL` is configured.
-- Done: gateway persists agent `memory_candidates` into project-scoped memory and emits
-  `memory.candidate_created`.
+- Done: gateway persists agent `memory_candidates` as project-scoped `proposed` memory and emits
+  `memory.candidate_created`; proposed/rejected memories are excluded from context assembly.
 - Done: system layer-status facts can be seeded into global memory for self-inspection tests.
 
 Do not include yet:

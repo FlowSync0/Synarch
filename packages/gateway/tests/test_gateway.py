@@ -448,6 +448,8 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert memory_client.items[0].scope == "project:project_demo"
     assert memory_client.items[0].agent_id == "agent-dev"
     assert memory_client.items[0].project_id == "project_demo"
+    assert memory_client.items[0].status == "proposed"
+    assert payload["agent_result"]["memory_candidates"][0]["status"] == "proposed"
     assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
     assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
     assert payload["cost_records"][0]["input_tokens"] == 123
@@ -465,6 +467,7 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert [event["type"] for event in payload["memory_events"]] == [
         "memory.candidate_created",
     ]
+    assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
 
 

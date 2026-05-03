@@ -4,11 +4,17 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 import psycopg
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from psycopg import rows
 from pydantic_settings import BaseSettings
 
-from synarch_models import HealthResponse, MemoryContext, MemoryItem
+from synarch_models import (
+    HealthResponse,
+    MemoryContext,
+    MemoryItem,
+    MemoryStatus,
+    MemoryStatusUpdate,
+)
 
 app = FastAPI(title="Synarch Memory Service", version="0.1.0")
 
@@ -25,6 +31,8 @@ settings = Settings()
 class MemoryStore(Protocol):
     def create(self, item: MemoryItem) -> MemoryItem: ...
 
+    def update_status(self, item_id: str, status: MemoryStatus) -> MemoryItem | None: ...
+
     def list_items(self) -> list[MemoryItem]: ...
 
     def reset(self) -> None: ...
@@ -37,6 +45,14 @@ class InMemoryMemoryStore:
     def create(self, item: MemoryItem) -> MemoryItem:
         self.items[item.id] = item
         return item
+
+    def update_status(self, item_id: str, status: MemoryStatus) -> MemoryItem | None:
+        item = self.items.get(item_id)
+        if item is None:
+            return None
+        updated = item.model_copy(update={"status": status})
+        self.items[item_id] = updated
+        return updated
 
     def list_items(self) -> list[MemoryItem]:
         return list(self.items.values())
@@ -54,14 +70,16 @@ class PostgresMemoryStore:
             connection.execute(
                 """
                 INSERT INTO memory_items (
-                  id, scope, agent_id, project_id, content, embedding, created_at, expires_at
+                  id, scope, agent_id, project_id, content,
+                  status, embedding, created_at, expires_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                   scope = EXCLUDED.scope,
                   agent_id = EXCLUDED.agent_id,
                   project_id = EXCLUDED.project_id,
                   content = EXCLUDED.content,
+                  status = EXCLUDED.status,
                   embedding = EXCLUDED.embedding,
                   created_at = EXCLUDED.created_at,
                   expires_at = EXCLUDED.expires_at
@@ -72,12 +90,40 @@ class PostgresMemoryStore:
                     item.agent_id,
                     item.project_id,
                     item.content,
+                    item.status,
                     vector_literal(item.embedding),
                     item.created_at,
                     item.expires_at,
                 ],
             )
         return item
+
+    def update_status(self, item_id: str, status: MemoryStatus) -> MemoryItem | None:
+        with psycopg.connect(
+            normalize_postgres_dsn(self.database_url),
+            row_factory=rows.dict_row,
+        ) as connection:
+            record = connection.execute(
+                """
+                UPDATE memory_items
+                SET status = %s
+                WHERE id = %s
+                RETURNING
+                  id,
+                  scope,
+                  agent_id,
+                  project_id,
+                  content,
+                  status,
+                  embedding::text AS embedding,
+                  created_at,
+                  expires_at
+                """,
+                [status, item_id],
+            ).fetchone()
+        if record is None:
+            return None
+        return MemoryItem.model_validate(deserialize_memory_row(record))
 
     def list_items(self) -> list[MemoryItem]:
         with psycopg.connect(
@@ -92,6 +138,7 @@ class PostgresMemoryStore:
                   agent_id,
                   project_id,
                   content,
+                  status,
                   embedding::text AS embedding,
                   created_at,
                   expires_at
@@ -129,13 +176,27 @@ def create_memory_item(item: MemoryItem) -> MemoryItem:
     return STORE.create(item)
 
 
+@app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)
+def update_memory_item_status(item_id: str, update: MemoryStatusUpdate) -> MemoryItem:
+    item = STORE.update_status(item_id, update.status)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory item not found")
+    return item
+
+
 @app.get("/memory-items", response_model=list[MemoryItem])
-def list_memory_items(scope: str | None = None, agent_id: str | None = None) -> list[MemoryItem]:
+def list_memory_items(
+    scope: str | None = None,
+    agent_id: str | None = None,
+    status: MemoryStatus | None = None,
+) -> list[MemoryItem]:
     items = STORE.list_items()
     if scope is not None:
         items = [item for item in items if item.scope == scope]
     if agent_id is not None:
         items = [item for item in items if item.agent_id == agent_id]
+    if status is not None:
+        items = [item for item in items if item.status == status]
     return items
 
 
@@ -163,6 +224,8 @@ def assemble_context(request: MemoryContext) -> MemoryContext:
 
 
 def is_visible(item: MemoryItem, request: MemoryContext) -> bool:
+    if item.status != MemoryStatus.approved:
+        return False
     allowed_scopes = set(request.allowed_scopes) or default_allowed_scopes(request)
     if item.scope not in allowed_scopes:
         return False

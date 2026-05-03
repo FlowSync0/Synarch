@@ -72,10 +72,11 @@
       "PostgreSQL-backed memory_items",
       "Scoped context assembly",
       "Deterministic ranking and token budget enforcement",
-      "Gateway persists agent memory candidates and emits memory.candidate_created"
+      "Gateway persists agent memory candidates as proposed and emits memory.candidate_created",
+      "Proposed and rejected memories are excluded from context assembly"
     ],
-    "main_gap": "No candidate review policy, compaction, vector search, graph retrieval, or hierarchical context database.",
-    "next_validation": "A produced memory candidate returns in the next task memory_context with traceable event and cost logs.",
+    "main_gap": "No human review UI, compaction, vector search, graph retrieval, or hierarchical context database.",
+    "next_validation": "Approve a proposed memory candidate and verify it appears in the next task context.",
     "source": "docs/roadmap.md"
   },
   {

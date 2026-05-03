@@ -6,6 +6,8 @@ from synarch_models import (
     GoalEnvelope,
     LocalWorldView,
     MemoryContext,
+    MemoryItem,
+    MemoryStatus,
     ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
@@ -117,6 +119,13 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["agent_result"]["status"] == "needs_review"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"
     assert payload["cost_records"][0]["trace_id"] == "trace_123"
+
+
+def test_memory_item_defaults_to_approved_status() -> None:
+    item = MemoryItem(scope="global", content="Company memory.")
+
+    assert item.status == MemoryStatus.approved
+    assert item.model_dump(mode="json")["status"] == "approved"
 
 
 def test_project_workspace_and_assignment_isolate_project_context() -> None:

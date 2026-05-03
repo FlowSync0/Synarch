@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS memory_items (
   agent_id TEXT REFERENCES agents(id),
   project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'approved',
   embedding vector(1536),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ

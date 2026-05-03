@@ -11,6 +11,7 @@ from .enums import (
     ApprovalStatus,
     EventType,
     LifecycleAction,
+    MemoryStatus,
     Priority,
     ServiceKind,
     TaskStatus,
@@ -262,11 +263,16 @@ class MemoryItem(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("memory"))
     scope: str
     content: str
+    status: MemoryStatus = MemoryStatus.approved
     agent_id: str | None = None
     project_id: str | None = None
     embedding: list[float] | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime | None = None
+
+
+class MemoryStatusUpdate(SynarchModel):
+    status: MemoryStatus
 
 
 class MemoryContext(SynarchModel):

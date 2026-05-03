@@ -12,6 +12,7 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     MemoryItem,
+    MemoryStatus,
     TaskRecord,
     TaskRunResult,
     TaskStatus,
@@ -188,6 +189,15 @@ class TaskRunner:
                 cost_records=[],
             )
 
+        agent_result = agent_result.model_copy(
+            update={
+                "memory_candidates": proposed_memory_candidates(
+                    task=started_task,
+                    world_view=world_view,
+                    agent_result=agent_result,
+                )
+            }
+        )
         cost_record = cost_record_for_run(
             task=started_task,
             world_view=world_view,
@@ -248,15 +258,7 @@ class TaskRunner:
     ) -> list[EventRecord]:
         events: list[EventRecord] = []
         for candidate in agent_result.memory_candidates:
-            memory_item = self.memory.create_memory_item(
-                candidate.model_copy(
-                    update={
-                        "scope": f"project:{task.project_id}",
-                        "agent_id": world_view.agent_id,
-                        "project_id": task.project_id,
-                    }
-                )
-            )
+            memory_item = self.memory.create_memory_item(candidate)
             events.append(
                 self.state.create_event(
                     memory_candidate_created_event(
@@ -269,6 +271,25 @@ class TaskRunner:
                 )
             )
         return events
+
+
+def proposed_memory_candidates(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    agent_result: AgentResult,
+) -> list[MemoryItem]:
+    return [
+        candidate.model_copy(
+            update={
+                "scope": f"project:{task.project_id}",
+                "agent_id": world_view.agent_id,
+                "project_id": task.project_id,
+                "status": MemoryStatus.proposed,
+            }
+        )
+        for candidate in agent_result.memory_candidates
+    ]
 
 
 def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
@@ -441,6 +462,7 @@ def memory_candidate_created_event(
             "task_id": task.id,
             "memory_id": memory_item.id,
             "scope": memory_item.scope,
+            "status": memory_item.status,
         },
         trace_id=trace_id,
     )

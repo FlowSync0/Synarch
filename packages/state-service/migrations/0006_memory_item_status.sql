@@ -1,0 +1,2 @@
+ALTER TABLE memory_items
+ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved';

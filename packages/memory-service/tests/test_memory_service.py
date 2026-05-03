@@ -112,3 +112,64 @@ def test_context_assembly_enforces_token_budget() -> None:
     context = context_response.json()
     assert [item["id"] for item in context["items"]] == ["memory-short"]
     assert context["tokens_used"] <= 3
+
+
+def test_proposed_memory_is_excluded_until_approved() -> None:
+    client = TestClient(app)
+    create_response = client.post(
+        "/memory-items",
+        json={
+            "id": "memory-candidate",
+            "scope": "global",
+            "content": "Candidate facts must be reviewed before use.",
+            "status": "proposed",
+        },
+    )
+    assert create_response.status_code == 201
+
+    proposed_context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "token_budget": 200,
+            "allowed_scopes": ["global"],
+        },
+    )
+    assert proposed_context_response.status_code == 200
+    assert proposed_context_response.json()["items"] == []
+
+    approve_response = client.patch(
+        "/memory-items/memory-candidate/status",
+        json={"status": "approved"},
+    )
+    assert approve_response.status_code == 200
+    assert approve_response.json()["status"] == "approved"
+
+    approved_context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "token_budget": 200,
+            "allowed_scopes": ["global"],
+        },
+    )
+    assert [item["id"] for item in approved_context_response.json()["items"]] == [
+        "memory-candidate"
+    ]
+
+    reject_response = client.patch(
+        "/memory-items/memory-candidate/status",
+        json={"status": "rejected"},
+    )
+    assert reject_response.status_code == 200
+    rejected_response = client.get("/memory-items", params={"status": "rejected"})
+    assert [item["id"] for item in rejected_response.json()] == ["memory-candidate"]
+    rejected_context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "token_budget": 200,
+            "allowed_scopes": ["global"],
+        },
+    )
+    assert rejected_context_response.json()["items"] == []
