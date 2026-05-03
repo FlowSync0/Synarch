@@ -163,6 +163,7 @@ Progress:
 - Done: Docker Compose points control-plane at state-service after migrations and seeds.
 - Done: `LocalWorldView` includes state-backed model policy labels and available service IDs.
 - Done: `LocalWorldView` includes the active state-backed `AgentSoul` for stable agent identity.
+- Done: `LocalWorldView` exposes explicit org relationships: manager, peers, and direct reports.
 - Done: state-service records agent lifecycle requests and emits `approval.requested` events.
 - Done: approved lifecycle decisions apply agent creation/deactivation, emit `approval.decided`
   plus agent events, and write audit logs.

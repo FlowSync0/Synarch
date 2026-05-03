@@ -155,10 +155,14 @@ Infra
 ```json
 {
   "agent_id": "string",
+  "name": "string",
   "role": "string",
   "division": "string",
   "peers": ["agent_id"],
   "manager": "agent_id",
+  "manager_agent_id": "agent_id",
+  "peer_agent_ids": ["agent_id"],
+  "direct_report_agent_ids": ["agent_id"],
   "soul": {
     "identity": "string",
     "mission": "string",

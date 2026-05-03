@@ -125,10 +125,14 @@ class AgentSoul(SynarchModel):
 
 class LocalWorldView(SynarchModel):
     agent_id: str
+    name: str | None = None
     role: str
     division: str
     peers: list[str] = Field(default_factory=list)
     manager: str | None = None
+    manager_agent_id: str | None = None
+    peer_agent_ids: list[str] = Field(default_factory=list)
+    direct_report_agent_ids: list[str] = Field(default_factory=list)
     soul: AgentSoul | None = None
     active_projects: list[str] = Field(default_factory=list)
     permissions: PermissionBundle = Field(default_factory=PermissionBundle)

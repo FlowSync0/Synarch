@@ -139,12 +139,19 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         for candidate in agents
         if candidate.division == agent.division and candidate.id != agent.id
     ]
+    direct_report_agent_ids = [
+        candidate.id for candidate in agents if candidate.manager_id == agent.id
+    ]
     return LocalWorldView(
         agent_id=agent.id,
+        name=agent.name,
         role=agent.role,
         division=agent.division,
         peers=peers,
         manager=agent.manager_id,
+        manager_agent_id=agent.manager_id,
+        peer_agent_ids=peers,
+        direct_report_agent_ids=direct_report_agent_ids,
         soul=soul,
         active_projects=[assignment.project_id for assignment in assignments],
         permissions=agent.permissions,

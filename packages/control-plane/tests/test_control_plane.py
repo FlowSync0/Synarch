@@ -23,7 +23,13 @@ def test_world_view_is_limited_to_agent_scope() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["agent_id"] == "agent-dev"
+    assert payload["name"] == "IA Dev"
     assert payload["division"] == "dev"
+    assert payload["manager"] == "agent-direction"
+    assert payload["manager_agent_id"] == "agent-direction"
+    assert payload["peers"] == []
+    assert payload["peer_agent_ids"] == []
+    assert payload["direct_report_agent_ids"] == []
     assert payload["soul"]["agent_id"] == "agent-dev"
     assert payload["soul"]["identity"].startswith("IA Dev")
     assert "payment.execute" in payload["permissions"]["denied_tools"]
@@ -68,7 +74,11 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
     assert response.status_code == 200
     payload = response.json()
     assert payload["agent_id"] == "agent-finance"
+    assert payload["name"] == "IA Finance"
     assert payload["manager"] == "agent-direction"
+    assert payload["manager_agent_id"] == "agent-direction"
+    assert payload["peer_agent_ids"] == []
+    assert payload["direct_report_agent_ids"] == []
     assert payload["soul"]["id"] == "soul-agent-finance-v1"
     assert payload["active_projects"] == ["project-finance-demo"]
 

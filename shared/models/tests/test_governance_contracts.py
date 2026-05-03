@@ -102,9 +102,14 @@ def test_agent_soul_captures_persistent_identity() -> None:
     )
     world_view = LocalWorldView(
         agent_id="agent-finance",
+        name="IA Finance",
         role="Compta, TVA, factures",
         division="finance",
         manager="agent-direction",
+        manager_agent_id="agent-direction",
+        peers=["agent-finance-analyst"],
+        peer_agent_ids=["agent-finance-analyst"],
+        direct_report_agent_ids=["agent-finance-intern"],
         soul=soul,
     )
 
@@ -114,6 +119,10 @@ def test_agent_soul_captures_persistent_identity() -> None:
     assert payload["soul"]["operating_principles"] == ["Keep financial actions auditable"]
     assert payload["soul"]["boundaries"] == ["Never execute payments"]
     assert payload["soul"]["created_by"] == "agent-direction"
+    assert payload["name"] == "IA Finance"
+    assert payload["manager_agent_id"] == "agent-direction"
+    assert payload["peer_agent_ids"] == ["agent-finance-analyst"]
+    assert payload["direct_report_agent_ids"] == ["agent-finance-intern"]
 
 
 def test_cost_and_audit_records_have_traceable_scope() -> None:
