@@ -19,6 +19,7 @@ from synarch_models import (
     ProjectIntent,
     ProjectRecord,
     ProjectSplitApplication,
+    ProjectTimeline,
     ProjectWorkspace,
     RoutingDecision,
     TaskDraft,
@@ -514,6 +515,78 @@ def list_audit_logs(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/projects/{project_id}/timeline", response_model=ProjectTimeline)
+def get_project_timeline(
+    project_id: str,
+    state_client: StateClient = Depends(get_state_client),
+    memory_client: MemoryClient = Depends(get_memory_client),
+) -> ProjectTimeline:
+    try:
+        project = state_client.get_project(project_id)
+        tasks = state_client.list_tasks(project_id=project_id)
+        task_ids = {task.id for task in tasks}
+        events = [
+            event
+            for event in state_client.list_events()
+            if event_belongs_to_project(event, project_id, task_ids)
+        ]
+        cost_records = state_client.list_cost_records(project_id=project_id)
+        trace_ids = {event.trace_id for event in events if event.trace_id is not None}
+        trace_ids.update(
+            cost.trace_id for cost in cost_records if cost.trace_id is not None
+        )
+        audit_logs = [
+            audit
+            for audit in state_client.list_audit_logs()
+            if audit_belongs_to_project(audit, project_id, task_ids, trace_ids)
+        ]
+        memory_items = memory_client.list_memory_items(project_id=project_id)
+        return ProjectTimeline(
+            project_id=project_id,
+            project=project,
+            tasks=tasks,
+            events=events,
+            cost_records=cost_records,
+            audit_logs=audit_logs,
+            memory_items=memory_items,
+            total_cost=sum(cost.total_cost for cost in cost_records),
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Project timeline dependency unavailable",
+        ) from error
+
+
+def event_belongs_to_project(
+    event: EventRecord,
+    project_id: str,
+    task_ids: set[str],
+) -> bool:
+    return (
+        event.target == project_id
+        or event.target in task_ids
+        or event.payload.get("project_id") == project_id
+        or event.payload.get("task_id") in task_ids
+    )
+
+
+def audit_belongs_to_project(
+    audit: AuditLogRecord,
+    project_id: str,
+    task_ids: set[str],
+    trace_ids: set[str],
+) -> bool:
+    return (
+        audit.target_id == project_id
+        or audit.target_id in task_ids
+        or audit.payload.get("project_id") == project_id
+        or audit.trace_id in trace_ids
+    )
 
 
 @app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)

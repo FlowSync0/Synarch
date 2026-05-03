@@ -195,8 +195,10 @@ class FakeStateClient:
             owner_agent_id="agent-direction",
         )
 
-    def list_tasks(self) -> list[TaskRecord]:
-        return self.tasks
+    def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
+        if project_id is None:
+            return self.tasks
+        return [task for task in self.tasks if task.project_id == project_id]
 
     def start_task(
         self,
@@ -682,6 +684,135 @@ def test_operational_records_are_listed_through_gateway() -> None:
     assert [cost["id"] for cost in costs_response.json()] == ["cost-model-call"]
     assert audits_response.status_code == 200
     assert [audit["id"] for audit in audits_response.json()] == ["audit-model-call"]
+
+
+def test_project_timeline_aggregates_project_records() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_demo",
+            title="Demo project",
+            goal="Track project execution.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task-demo",
+                project_id="project_demo",
+                title="Demo task",
+                assigned_agent_id="agent-direction",
+                acceptance_criteria=["Timeline contains project records."],
+            ),
+            TaskRecord(
+                id="task-other",
+                project_id="project_other",
+                title="Other task",
+                assigned_agent_id="agent-direction",
+                acceptance_criteria=["Other project task is excluded."],
+            ),
+        ]
+    )
+    state_client.events.extend(
+        [
+            EventRecord(
+                id="event-project",
+                type=EventType.task_created,
+                target="project_demo",
+                trace_id="trace_demo",
+            ),
+            EventRecord(
+                id="event-task",
+                type=EventType.model_call_completed,
+                target="task-demo",
+                trace_id="trace_demo",
+            ),
+            EventRecord(
+                id="event-other",
+                type=EventType.task_created,
+                target="project_other",
+                trace_id="trace_other",
+            ),
+        ]
+    )
+    state_client.costs.extend(
+        [
+            CostRecord(
+                id="cost-demo",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                project_id="project_demo",
+                trace_id="trace_demo",
+                total_cost=0.25,
+            ),
+            CostRecord(
+                id="cost-other",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                project_id="project_other",
+                trace_id="trace_other",
+                total_cost=1.0,
+            ),
+        ]
+    )
+    state_client.audit_logs.extend(
+        [
+            AuditLogRecord(
+                id="audit-project",
+                actor_type="user",
+                actor_id="hugo",
+                action="task.created",
+                target_type="task",
+                target_id="task-demo",
+                payload={"project_id": "project_demo"},
+                trace_id="trace_demo",
+            ),
+            AuditLogRecord(
+                id="audit-other",
+                actor_type="user",
+                actor_id="hugo",
+                action="task.created",
+                target_type="task",
+                target_id="task-other",
+                payload={"project_id": "project_other"},
+                trace_id="trace_other",
+            ),
+        ]
+    )
+    memory_client.items_by_id["memory-demo"] = MemoryItem(
+        id="memory-demo",
+        scope="project:project_demo",
+        content="Demo memory.",
+        project_id="project_demo",
+        status="proposed",
+    )
+    memory_client.items_by_id["memory-other"] = MemoryItem(
+        id="memory-other",
+        scope="project:project_other",
+        content="Other memory.",
+        project_id="project_other",
+        status="proposed",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).get("/projects/project_demo/timeline")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project_id"] == "project_demo"
+    assert payload["project"]["id"] == "project_demo"
+    assert [task["id"] for task in payload["tasks"]] == ["task-demo"]
+    assert [event["id"] for event in payload["events"]] == ["event-project", "event-task"]
+    assert [cost["id"] for cost in payload["cost_records"]] == ["cost-demo"]
+    assert [audit["id"] for audit in payload["audit_logs"]] == ["audit-project"]
+    assert [item["id"] for item in payload["memory_items"]] == ["memory-demo"]
+    assert payload["total_cost"] == 0.25
 
 
 def test_update_memory_item_status_records_gateway_event() -> None:

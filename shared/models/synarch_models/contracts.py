@@ -447,3 +447,15 @@ class TaskRunResult(SynarchModel):
     model_call_events: list[EventRecord] = Field(default_factory=list)
     memory_events: list[EventRecord] = Field(default_factory=list)
     cost_records: list[CostRecord] = Field(default_factory=list)
+
+
+class ProjectTimeline(SynarchModel):
+    project_id: str
+    project: ProjectRecord
+    tasks: list[TaskRecord] = Field(default_factory=list)
+    events: list[EventRecord] = Field(default_factory=list)
+    cost_records: list[CostRecord] = Field(default_factory=list)
+    audit_logs: list[AuditLogRecord] = Field(default_factory=list)
+    memory_items: list[MemoryItem] = Field(default_factory=list)
+    total_cost: float = 0.0
+    currency: str = "USD"
