@@ -8,6 +8,7 @@ from synarch_models import (
     ActorType,
     AgentProjectAssignment,
     AuditLogRecord,
+    CostBudgetEvaluation,
     CostRecord,
     CostSummary,
     CostSummaryGroup,
@@ -576,6 +577,53 @@ def cost_summary_currency(cost_records: list[CostRecord]) -> str:
     if len(currencies) == 1:
         return next(iter(currencies))
     return "mixed"
+
+
+@app.get("/cost-records/budget", response_model=CostBudgetEvaluation)
+def evaluate_cost_budget(
+    budget: float,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    trace_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> CostBudgetEvaluation:
+    if budget < 0:
+        raise HTTPException(status_code=400, detail="Budget must be greater than or equal to 0")
+    try:
+        cost_records = state_client.list_cost_records(
+            project_id=project_id,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            trace_id=trace_id,
+        )
+        return build_cost_budget_evaluation(cost_records, budget)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+def build_cost_budget_evaluation(
+    cost_records: list[CostRecord],
+    budget: float,
+) -> CostBudgetEvaluation:
+    spent = round(sum(cost.total_cost for cost in cost_records), 12)
+    remaining = round(budget - spent, 12)
+    usage_ratio = round(spent / budget, 12) if budget > 0 else 0.0
+    return CostBudgetEvaluation(
+        budget=budget,
+        spent=spent,
+        remaining=remaining,
+        usage_ratio=usage_ratio,
+        budget_exceeded=spent > budget,
+        record_count=len(cost_records),
+        input_tokens=sum(cost.input_tokens for cost in cost_records),
+        output_tokens=sum(cost.output_tokens for cost in cost_records),
+        currency=cost_summary_currency(cost_records),
+    )
 
 
 @app.get("/audit-logs", response_model=list[AuditLogRecord])

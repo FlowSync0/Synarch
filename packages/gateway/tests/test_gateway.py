@@ -769,6 +769,64 @@ def test_cost_summary_groups_filtered_records() -> None:
     ]
 
 
+def test_cost_budget_evaluation_uses_filtered_records() -> None:
+    state_client = FakeStateClient()
+    state_client.costs.extend(
+        [
+            CostRecord(
+                id="cost-1",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_demo",
+                input_tokens=100,
+                output_tokens=50,
+                total_cost=0.4,
+            ),
+            CostRecord(
+                id="cost-2",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-dev",
+                project_id="project_demo",
+                input_tokens=200,
+                output_tokens=100,
+                total_cost=0.7,
+            ),
+            CostRecord(
+                id="cost-other",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_other",
+                input_tokens=999,
+                output_tokens=999,
+                total_cost=9.0,
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/cost-records/budget",
+            params={"project_id": "project_demo", "budget": "1.0"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["budget"] == 1.0
+    assert payload["spent"] == 1.1
+    assert payload["remaining"] == -0.1
+    assert payload["usage_ratio"] == 1.1
+    assert payload["budget_exceeded"] is True
+    assert payload["record_count"] == 2
+    assert payload["input_tokens"] == 300
+    assert payload["output_tokens"] == 150
+
+
 def test_project_timeline_aggregates_project_records() -> None:
     state_client = FakeStateClient()
     memory_client = FakeMemoryClient()

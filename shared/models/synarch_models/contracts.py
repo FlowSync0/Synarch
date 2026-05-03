@@ -385,6 +385,18 @@ class CostSummary(SynarchModel):
     currency: str = "USD"
 
 
+class CostBudgetEvaluation(SynarchModel):
+    budget: float
+    spent: float = 0.0
+    remaining: float = 0.0
+    usage_ratio: float = 0.0
+    budget_exceeded: bool = False
+    record_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    currency: str = "USD"
+
+
 class AuditLogRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("audit"))
     actor_type: ActorType
