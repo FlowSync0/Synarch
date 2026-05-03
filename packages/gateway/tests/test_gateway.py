@@ -7,8 +7,10 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AgentTaskRequest,
+    AuditLogRecord,
     CostRecord,
     EventRecord,
+    EventType,
     LocalWorldView,
     MemoryContext,
     MemoryItem,
@@ -34,6 +36,7 @@ class FakeStateClient:
         self.tasks: list[TaskRecord] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
+        self.audit_logs: list[AuditLogRecord] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.split_applications: list[ProjectSplitApplication] = []
         self.headers: list[dict[str, str]] = []
@@ -87,6 +90,19 @@ class FakeStateClient:
         self.headers.append(headers)
         self.events.append(event)
         return event
+
+    def list_events(
+        self,
+        *,
+        event_type: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[EventRecord]:
+        events = self.events
+        if event_type is not None:
+            events = [event for event in events if event.type == event_type]
+        if trace_id is not None:
+            events = [event for event in events if event.trace_id == trace_id]
+        return events
 
     def assess_project_complexity(
         self,
@@ -221,6 +237,47 @@ class FakeStateClient:
         self.headers.append(headers)
         self.costs.append(cost)
         return cost
+
+    def list_cost_records(
+        self,
+        *,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[CostRecord]:
+        costs = self.costs
+        if project_id is not None:
+            costs = [cost for cost in costs if cost.project_id == project_id]
+        if agent_id is not None:
+            costs = [cost for cost in costs if cost.agent_id == agent_id]
+        if provider_id is not None:
+            costs = [cost for cost in costs if cost.provider_id == provider_id]
+        if model_id is not None:
+            costs = [cost for cost in costs if cost.model_id == model_id]
+        if trace_id is not None:
+            costs = [cost for cost in costs if cost.trace_id == trace_id]
+        return costs
+
+    def list_audit_logs(
+        self,
+        *,
+        actor_id: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[AuditLogRecord]:
+        audits = self.audit_logs
+        if actor_id is not None:
+            audits = [audit for audit in audits if audit.actor_id == actor_id]
+        if target_type is not None:
+            audits = [audit for audit in audits if audit.target_type == target_type]
+        if target_id is not None:
+            audits = [audit for audit in audits if audit.target_id == target_id]
+        if trace_id is not None:
+            audits = [audit for audit in audits if audit.trace_id == trace_id]
+        return audits
 
 
 class FailingStateClient(FakeStateClient):
@@ -538,6 +595,93 @@ def test_list_memory_items_filters_review_queue() -> None:
 
     assert response.status_code == 200
     assert [item["id"] for item in response.json()] == ["memory-candidate"]
+
+
+def test_operational_records_are_listed_through_gateway() -> None:
+    state_client = FakeStateClient()
+    state_client.events.extend(
+        [
+            EventRecord(
+                id="event-model-call",
+                type=EventType.model_call_completed,
+                target="project_demo",
+                trace_id="trace_ops",
+            ),
+            EventRecord(
+                id="event-other",
+                type=EventType.task_created,
+                target="project_other",
+                trace_id="trace_other",
+            ),
+        ]
+    )
+    state_client.costs.extend(
+        [
+            CostRecord(
+                id="cost-model-call",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_demo",
+                trace_id="trace_ops",
+                total_cost=0.0005,
+            ),
+            CostRecord(
+                id="cost-other",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                project_id="project_other",
+                trace_id="trace_other",
+            ),
+        ]
+    )
+    state_client.audit_logs.extend(
+        [
+            AuditLogRecord(
+                id="audit-model-call",
+                actor_type="user",
+                actor_id="hugo",
+                action="cost.recorded",
+                target_type="cost_record",
+                target_id="cost-model-call",
+                trace_id="trace_ops",
+            ),
+            AuditLogRecord(
+                id="audit-other",
+                actor_type="service",
+                actor_id="gateway",
+                action="event.recorded",
+                target_type="event",
+                target_id="event-other",
+                trace_id="trace_other",
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        client = TestClient(app)
+        events_response = client.get(
+            "/events",
+            params={"event_type": "model_call.completed", "trace_id": "trace_ops"},
+        )
+        costs_response = client.get(
+            "/cost-records",
+            params={"project_id": "project_demo", "trace_id": "trace_ops"},
+        )
+        audits_response = client.get(
+            "/audit-logs",
+            params={"actor_id": "hugo", "trace_id": "trace_ops"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert events_response.status_code == 200
+    assert [event["id"] for event in events_response.json()] == ["event-model-call"]
+    assert costs_response.status_code == 200
+    assert [cost["id"] for cost in costs_response.json()] == ["cost-model-call"]
+    assert audits_response.status_code == 200
+    assert [audit["id"] for audit in audits_response.json()] == ["audit-model-call"]
 
 
 def test_update_memory_item_status_records_gateway_event() -> None:

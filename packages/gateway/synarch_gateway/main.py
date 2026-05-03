@@ -6,6 +6,8 @@ from pydantic_settings import BaseSettings
 from synarch_models import (
     ActorType,
     AgentProjectAssignment,
+    AuditLogRecord,
+    CostRecord,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -451,6 +453,67 @@ def list_memory_items(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except TaskRunnerUnavailable as error:
         raise HTTPException(status_code=502, detail="Memory service unavailable") from error
+
+
+@app.get("/events", response_model=list[EventRecord])
+def list_events(
+    event_type: EventType | None = None,
+    trace_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[EventRecord]:
+    try:
+        return state_client.list_events(
+            event_type=event_type.value if event_type is not None else None,
+            trace_id=trace_id,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/cost-records", response_model=list[CostRecord])
+def list_cost_records(
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    trace_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[CostRecord]:
+    try:
+        return state_client.list_cost_records(
+            project_id=project_id,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            trace_id=trace_id,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/audit-logs", response_model=list[AuditLogRecord])
+def list_audit_logs(
+    actor_id: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    trace_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[AuditLogRecord]:
+    try:
+        return state_client.list_audit_logs(
+            actor_id=actor_id,
+            target_type=target_type,
+            target_id=target_id,
+            trace_id=trace_id,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
 
 
 @app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)

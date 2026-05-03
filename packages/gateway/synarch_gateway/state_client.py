@@ -6,6 +6,7 @@ import httpx
 from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
+    AuditLogRecord,
     CostRecord,
     EventRecord,
     ProjectComplexityAssessment,
@@ -63,6 +64,13 @@ class StateClient(Protocol):
         headers: dict[str, str],
     ) -> EventRecord: ...
 
+    def list_events(
+        self,
+        *,
+        event_type: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[EventRecord]: ...
+
     def assess_project_complexity(
         self,
         project_id: str,
@@ -102,6 +110,25 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> CostRecord: ...
+
+    def list_cost_records(
+        self,
+        *,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[CostRecord]: ...
+
+    def list_audit_logs(
+        self,
+        *,
+        actor_id: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[AuditLogRecord]: ...
 
 
 @dataclass(frozen=True)
@@ -157,6 +184,18 @@ class HttpStateClient:
     ) -> EventRecord:
         response = self._post("/events", event.model_dump(mode="json"), headers)
         return EventRecord.model_validate(response.json())
+
+    def list_events(
+        self,
+        *,
+        event_type: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[EventRecord]:
+        response = self._get(
+            "/events",
+            params=compact_params(event_type=event_type, trace_id=trace_id),
+        )
+        return [EventRecord.model_validate(event) for event in response.json()]
 
     def assess_project_complexity(
         self,
@@ -216,10 +255,56 @@ class HttpStateClient:
         response = self._post("/cost-records", cost.model_dump(mode="json"), headers)
         return CostRecord.model_validate(response.json())
 
-    def _get(self, path: str) -> httpx.Response:
+    def list_cost_records(
+        self,
+        *,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[CostRecord]:
+        response = self._get(
+            "/cost-records",
+            params=compact_params(
+                project_id=project_id,
+                agent_id=agent_id,
+                provider_id=provider_id,
+                model_id=model_id,
+                trace_id=trace_id,
+            ),
+        )
+        return [CostRecord.model_validate(cost) for cost in response.json()]
+
+    def list_audit_logs(
+        self,
+        *,
+        actor_id: str | None = None,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[AuditLogRecord]:
+        response = self._get(
+            "/audit-logs",
+            params=compact_params(
+                actor_id=actor_id,
+                target_type=target_type,
+                target_id=target_id,
+                trace_id=trace_id,
+            ),
+        )
+        return [AuditLogRecord.model_validate(audit) for audit in response.json()]
+
+    def _get(
+        self,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+    ) -> httpx.Response:
         try:
             response = httpx.get(
                 f"{self.base_url.rstrip('/')}{path}",
+                params=params,
                 timeout=self.timeout_seconds,
             )
         except httpx.HTTPError as error:
@@ -267,3 +352,7 @@ def response_detail(response: httpx.Response) -> Any:
     if isinstance(body, dict):
         return body.get("detail", body)
     return body
+
+
+def compact_params(**values: str | None) -> dict[str, str]:
+    return {key: value for key, value in values.items() if value is not None}
