@@ -114,6 +114,43 @@ def test_context_assembly_enforces_token_budget() -> None:
     assert context["tokens_used"] <= 3
 
 
+def test_list_memory_items_filters_by_project_and_status() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-project-proposed",
+            "scope": "project:project_demo",
+            "project_id": "project_demo",
+            "content": "Candidate fact for the demo project.",
+            "status": "proposed",
+        },
+        {
+            "id": "memory-project-approved",
+            "scope": "project:project_demo",
+            "project_id": "project_demo",
+            "content": "Approved fact for the demo project.",
+            "status": "approved",
+        },
+        {
+            "id": "memory-other-project",
+            "scope": "project:project_other",
+            "project_id": "project_other",
+            "content": "Candidate fact for another project.",
+            "status": "proposed",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    list_response = client.get(
+        "/memory-items",
+        params={"project_id": "project_demo", "status": "proposed"},
+    )
+
+    assert list_response.status_code == 200
+    assert [item["id"] for item in list_response.json()] == ["memory-project-proposed"]
+
+
 def test_proposed_memory_is_excluded_until_approved() -> None:
     client = TestClient(app)
     create_response = client.post(

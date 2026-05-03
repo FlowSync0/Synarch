@@ -51,6 +51,15 @@ class MemoryClient(Protocol):
 
     def create_memory_item(self, item: MemoryItem) -> MemoryItem: ...
 
+    def list_memory_items(
+        self,
+        *,
+        scope: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        status: MemoryStatus | None = None,
+    ) -> list[MemoryItem]: ...
+
     def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem: ...
 
 
@@ -91,6 +100,27 @@ class HttpMemoryClient:
             self.timeout_seconds,
         )
         return MemoryItem.model_validate(response)
+
+    def list_memory_items(
+        self,
+        *,
+        scope: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        status: MemoryStatus | None = None,
+    ) -> list[MemoryItem]:
+        params = memory_query_params(
+            scope=scope,
+            agent_id=agent_id,
+            project_id=project_id,
+            status=status,
+        )
+        response = get_json(
+            f"{self.base_url.rstrip('/')}/memory-items",
+            self.timeout_seconds,
+            params=params,
+        )
+        return [MemoryItem.model_validate(item) for item in response]
 
     def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem:
         response = patch_json(
@@ -479,9 +509,33 @@ def memory_candidate_created_event(
     )
 
 
-def get_json(url: str, timeout_seconds: float) -> Any:
+def memory_query_params(
+    *,
+    scope: str | None = None,
+    agent_id: str | None = None,
+    project_id: str | None = None,
+    status: MemoryStatus | None = None,
+) -> dict[str, str]:
+    params: dict[str, str] = {}
+    if scope is not None:
+        params["scope"] = scope
+    if agent_id is not None:
+        params["agent_id"] = agent_id
+    if project_id is not None:
+        params["project_id"] = project_id
+    if status is not None:
+        params["status"] = status.value
+    return params
+
+
+def get_json(
+    url: str,
+    timeout_seconds: float,
+    *,
+    params: dict[str, str] | None = None,
+) -> Any:
     try:
-        response = httpx.get(url, timeout=timeout_seconds)
+        response = httpx.get(url, params=params, timeout=timeout_seconds)
     except httpx.HTTPError as error:
         raise TaskRunnerUnavailable(str(error)) from error
     return checked_json(response)

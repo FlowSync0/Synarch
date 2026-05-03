@@ -12,6 +12,7 @@ from synarch_models import (
     GoalSubmissionResult,
     HealthResponse,
     MemoryItem,
+    MemoryStatus,
     MemoryStatusUpdate,
     ProjectIntent,
     ProjectRecord,
@@ -429,6 +430,27 @@ def run_next_task(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
+@app.get("/memory-items", response_model=list[MemoryItem])
+def list_memory_items(
+    scope: str | None = None,
+    agent_id: str | None = None,
+    project_id: str | None = None,
+    status: MemoryStatus | None = None,
+    memory_client: MemoryClient = Depends(get_memory_client),
+) -> list[MemoryItem]:
+    try:
+        return memory_client.list_memory_items(
+            scope=scope,
+            agent_id=agent_id,
+            project_id=project_id,
+            status=status,
+        )
+    except TaskRunnerRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except TaskRunnerUnavailable as error:
+        raise HTTPException(status_code=502, detail="Memory service unavailable") from error
 
 
 @app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)

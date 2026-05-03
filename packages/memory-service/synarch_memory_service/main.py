@@ -188,6 +188,7 @@ def update_memory_item_status(item_id: str, update: MemoryStatusUpdate) -> Memor
 def list_memory_items(
     scope: str | None = None,
     agent_id: str | None = None,
+    project_id: str | None = None,
     status: MemoryStatus | None = None,
 ) -> list[MemoryItem]:
     items = STORE.list_items()
@@ -195,6 +196,8 @@ def list_memory_items(
         items = [item for item in items if item.scope == scope]
     if agent_id is not None:
         items = [item for item in items if item.agent_id == agent_id]
+    if project_id is not None:
+        items = [item for item in items if item.project_id == project_id]
     if status is not None:
         items = [item for item in items if item.status == status]
     return items

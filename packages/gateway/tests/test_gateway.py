@@ -12,6 +12,7 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     MemoryItem,
+    MemoryStatus,
     MemoryStatusUpdate,
     ModelUsage,
     ProjectComplexityAssessment,
@@ -252,6 +253,25 @@ class FakeMemoryClient:
         self.items_by_id[item.id] = item
         return item
 
+    def list_memory_items(
+        self,
+        *,
+        scope: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        status: MemoryStatus | None = None,
+    ) -> list[MemoryItem]:
+        items = list(self.items_by_id.values())
+        if scope is not None:
+            items = [item for item in items if item.scope == scope]
+        if agent_id is not None:
+            items = [item for item in items if item.agent_id == agent_id]
+        if project_id is not None:
+            items = [item for item in items if item.project_id == project_id]
+        if status is not None:
+            items = [item for item in items if item.status == status]
+        return items
+
     def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem:
         item = self.items_by_id[item_id]
         updated = item.model_copy(update={"status": update.status})
@@ -478,6 +498,46 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_list_memory_items_filters_review_queue() -> None:
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-candidate"] = MemoryItem(
+        id="memory-candidate",
+        scope="project:project_demo",
+        content="Candidate memory.",
+        status="proposed",
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-approved"] = MemoryItem(
+        id="memory-approved",
+        scope="project:project_demo",
+        content="Approved memory.",
+        status="approved",
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-other-project"] = MemoryItem(
+        id="memory-other-project",
+        scope="project:project_other",
+        content="Other project candidate.",
+        status="proposed",
+        agent_id="agent-dev",
+        project_id="project_other",
+    )
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).get(
+            "/memory-items",
+            params={"project_id": "project_demo", "status": "proposed"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == ["memory-candidate"]
 
 
 def test_update_memory_item_status_records_gateway_event() -> None:
