@@ -77,6 +77,8 @@ class StateClient(Protocol):
         headers: dict[str, str],
     ) -> ProjectSplitApplication: ...
 
+    def get_project(self, project_id: str) -> ProjectRecord: ...
+
     def list_tasks(self) -> list[TaskRecord]: ...
 
     def start_task(
@@ -173,6 +175,10 @@ class HttpStateClient:
     ) -> ProjectSplitApplication:
         response = self._post(f"/project-split-requests/{split_request_id}/apply", None, headers)
         return ProjectSplitApplication.model_validate(response.json())
+
+    def get_project(self, project_id: str) -> ProjectRecord:
+        response = self._get(f"/projects/{project_id}")
+        return ProjectRecord.model_validate(response.json())
 
     def list_tasks(self) -> list[TaskRecord]:
         response = self._get("/tasks")

@@ -110,6 +110,7 @@ class TaskRunner:
             raise NoReadyTask("No queued task is ready to run")
 
         started_task = self.state.start_task(task.id, headers=headers)
+        project = self.state.get_project(started_task.project_id)
         world_view = self.control_plane.get_world_view(started_task.assigned_agent_id)
         memory_context = self.memory.assemble_context(
             MemoryContext(
@@ -134,6 +135,7 @@ class TaskRunner:
             agent_result = self.runtime.run_task(
                 AgentTaskRequest(
                     task=started_task,
+                    project=project,
                     world_view=world_view,
                     memory_context=memory_context,
                     provider_id=self.provider_id,
@@ -141,7 +143,7 @@ class TaskRunner:
                 )
             )
         except (TaskRunnerRequestError, TaskRunnerUnavailable) as error:
-            self.state.create_event(
+            failed_event = self.state.create_event(
                 model_call_failed_event(
                     task=started_task,
                     world_view=world_view,
@@ -152,7 +154,28 @@ class TaskRunner:
                 ),
                 headers=headers,
             )
-            raise
+            failure_result = AgentResult(
+                agent_id=world_view.agent_id,
+                task_id=started_task.id,
+                status=TaskStatus.failed,
+                actions_taken=["Model call failed before task completion."],
+                summary=f"Model call failed: {error}",
+            )
+            recorded_task = self.state.record_task_result(
+                started_task.id,
+                failure_result,
+                headers=headers,
+            )
+            return TaskRunResult(
+                trace_id=trace_id,
+                task=recorded_task,
+                project=project,
+                world_view=world_view,
+                memory_context=memory_context,
+                agent_result=failure_result,
+                model_call_events=[started_event, failed_event],
+                cost_records=[],
+            )
 
         cost_record = cost_record_for_run(
             task=started_task,
@@ -187,6 +210,7 @@ class TaskRunner:
         return TaskRunResult(
             trace_id=trace_id,
             task=recorded_task,
+            project=project,
             world_view=world_view,
             memory_context=memory_context,
             agent_result=agent_result,

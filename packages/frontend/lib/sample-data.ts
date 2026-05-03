@@ -31,8 +31,8 @@ export const overview = [
   },
   {
     label: "Tests backend",
-    value: "35",
-    detail: "passing",
+    value: "60",
+    detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
   {
@@ -43,7 +43,7 @@ export const overview = [
   },
   {
     label: "Approvals",
-    value: "3",
+    value: "0",
     detail: "lifecycle queue",
     tone: "warn" as Tone
   }

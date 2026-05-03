@@ -68,6 +68,7 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
         assert url == "https://openrouter.ai/api/v1/chat/completions"
         assert headers["Authorization"] == "Bearer test-key"
         assert json["model"] == "deepseek/deepseek-v4-flash"
+        assert json["reasoning"] == {"effort": "none", "exclude": True}
         assert timeout == runtime_main.settings.openrouter_timeout_seconds
         return httpx.Response(
             200,

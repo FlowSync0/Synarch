@@ -411,6 +411,7 @@ class ToolResult(SynarchModel):
 
 class AgentTaskRequest(SynarchModel):
     task: TaskRecord
+    project: ProjectRecord | None = None
     world_view: LocalWorldView
     memory_context: MemoryContext | None = None
     provider_id: str | None = None
@@ -433,6 +434,7 @@ class AgentResult(SynarchModel):
 class TaskRunResult(SynarchModel):
     trace_id: str
     task: TaskRecord
+    project: ProjectRecord | None = None
     world_view: LocalWorldView
     memory_context: MemoryContext
     agent_result: AgentResult

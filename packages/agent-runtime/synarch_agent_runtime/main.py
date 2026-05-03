@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     openrouter_max_output_tokens: int = 700
     openrouter_timeout_seconds: float = 45.0
     openrouter_reasoning_enabled: bool = False
+    openrouter_reasoning_effort: str = "none"
+    openrouter_reasoning_exclude: bool = True
     openrouter_input_cost_per_million_tokens: float = 0.0
     openrouter_output_cost_per_million_tokens: float = 0.0
     openrouter_currency: str = "USD"
@@ -159,6 +161,9 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
                 "content": json.dumps(
                     {
                         "task": request.task.model_dump(mode="json"),
+                        "project": request.project.model_dump(mode="json")
+                        if request.project is not None
+                        else None,
                         "world_view": request.world_view.model_dump(mode="json"),
                         "memory_context": request.memory_context.model_dump(mode="json")
                         if request.memory_context is not None
@@ -171,8 +176,15 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
         "max_tokens": request.max_output_tokens or settings.openrouter_max_output_tokens,
         "temperature": 0.2,
     }
+    reasoning: dict[str, Any] = {}
     if settings.openrouter_reasoning_enabled:
-        payload["reasoning"] = {"enabled": True}
+        reasoning["enabled"] = True
+    elif settings.openrouter_reasoning_effort:
+        reasoning["effort"] = settings.openrouter_reasoning_effort
+    if settings.openrouter_reasoning_exclude:
+        reasoning["exclude"] = True
+    if reasoning:
+        payload["reasoning"] = reasoning
     return payload
 
 

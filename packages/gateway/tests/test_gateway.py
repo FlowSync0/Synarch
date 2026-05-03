@@ -165,6 +165,17 @@ class FakeStateClient:
         self.split_applications.append(application)
         return application
 
+    def get_project(self, project_id: str) -> ProjectRecord:
+        for project in self.projects:
+            if project.id == project_id:
+                return project
+        return ProjectRecord(
+            id=project_id,
+            title="Demo project",
+            goal="Demo project goal.",
+            owner_agent_id="agent-direction",
+        )
+
     def list_tasks(self) -> list[TaskRecord]:
         return self.tasks
 
@@ -234,7 +245,11 @@ class FakeMemoryClient:
 
 
 class FakeAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
     def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
         return AgentResult(
             agent_id=request.world_view.agent_id,
             task_id=request.task.id,
@@ -368,6 +383,14 @@ def test_gateway_applies_project_split_through_state_service() -> None:
 
 def test_run_next_task_executes_first_ready_task() -> None:
     state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_demo",
+            title="Demo project",
+            goal="Deliver a verified backend slice.",
+            owner_agent_id="agent-direction",
+        )
+    )
     state_client.tasks.append(
         TaskRecord(
             project_id="project_demo",
@@ -377,11 +400,12 @@ def test_run_next_task_executes_first_ready_task() -> None:
         )
     )
     memory_client = FakeMemoryClient()
+    runtime_client = FakeAgentRuntimeClient()
     runner = TaskRunner(
         state=state_client,
         control_plane=FakeControlPlaneClient(),
         memory=memory_client,
-        runtime=FakeAgentRuntimeClient(),
+        runtime=runtime_client,
     )
     app.dependency_overrides[get_task_runner] = lambda: runner
 
@@ -396,6 +420,9 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["trace_id"] == "trace_gateway_runner_test"
+    assert payload["project"]["goal"] == "Deliver a verified backend slice."
+    assert runtime_client.requests[0].project is not None
+    assert runtime_client.requests[0].project.goal == "Deliver a verified backend slice."
     assert payload["task"]["status"] == "needs_review"
     assert payload["task"]["result"]["summary"] == "Runtime stub prepared the task for review."
     assert payload["world_view"]["agent_id"] == "agent-dev"
@@ -448,9 +475,17 @@ def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -
     finally:
         app.dependency_overrides.clear()
 
-    assert response.status_code == 502
-    assert response.json()["detail"] == "Task runner dependency unavailable"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["status"] == "failed"
+    assert payload["agent_result"]["status"] == "failed"
+    assert payload["cost_records"] == []
+    assert "runtime offline" in payload["agent_result"]["summary"]
     assert [event.type for event in state_client.events] == [
+        "model_call.started",
+        "model_call.failed",
+    ]
+    assert [event["type"] for event in payload["model_call_events"]] == [
         "model_call.started",
         "model_call.failed",
     ]
