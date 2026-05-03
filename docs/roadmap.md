@@ -43,12 +43,12 @@ through the dashboard.
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, and timeline events, plus sample metrics. | No cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, and runs ready tasks through `/tasks/run-next`. | Routing is keyword-based only and does not yet consult live control-plane policies. | Submit goal -> run ready tasks -> persisted result timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
-| D. Domain Agents | Partial | Agent runtime stub accepts `AgentTaskRequest` and returns typed `AgentResult`; gateway can invoke it through a deterministic runner. | No persistent worker process, no model gateway, no real LLM execution, no approval UI for task review. | Finance stub handles invoice intake deterministically and emits memory/event candidates. |
-| E. Project / Workflow | Next | Project/task contracts, durable repositories, task result recording, and timeline events exist. | No dependencies engine or task scheduling loop yet. | Agent result -> task status/result -> durable event/audit timeline. |
-| F. Memory & Context | Partial | Memory item endpoint, scoped context assembly, deterministic ranking, and token budget enforcement exist. | In-memory only; no compaction, candidate review, or vector/graph retrieval. | Store and review memory candidates from agent results. |
+| D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
+| E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, task result recording, and timeline events exist. | No continuous scheduler loop or worker queue yet. | Agent result -> task status/result -> durable chronological event/audit timeline. |
+| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and gateway-persisted memory candidates exist. | No candidate review policy, compaction, vector search, graph retrieval, or hierarchical context database. | Produced memory candidate returns in the next task context with traceable event and cost logs. |
 | G. Execution & Tooling | Later | Tool contracts exist (`ToolCallRequest`, `ToolResult`). | No tool registry, permission enforcement, sandbox, or audit trail for tool calls. | Denied tool call fails before execution and records audit/event. |
-| H. Data / Knowledge | Later | Conceptual docs only. | No connectors, ingestion jobs, document provenance, or loaders. | Upload/source stub creates traceable knowledge item with provenance. |
-| I. Observability & Governance | Partial | Event, audit, cost, trace fields are modeled. Docker includes OTEL/Grafana stack. | No trace propagation, no OTEL instrumentation, no Langfuse, no cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, and audit. |
+| H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
+| I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
 
 ## Build Strategy
 
@@ -298,6 +298,10 @@ Progress:
   and global memory deterministically.
 - Done: context assembly enforces the requested token budget with a deterministic token estimate.
 - Done: task runner requests memory scopes from `LocalWorldView` and project context.
+- Done: memory items persist in PostgreSQL when `DATABASE_URL` is configured.
+- Done: gateway persists agent `memory_candidates` into project-scoped memory and emits
+  `memory.candidate_created`.
+- Done: system layer-status facts can be seeded into global memory for self-inspection tests.
 
 Do not include yet:
 

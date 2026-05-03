@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval lint typecheck verify migrate-state seed-state dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -40,6 +40,9 @@ migrate-state:
 
 seed-state:
 	$(PYTHON) -m synarch_state_service.seeds --database-url "$(DATABASE_URL)"
+
+seed-system-memory:
+	$(PYTHON) scripts/seed_system_memory.py
 
 dev-infra:
 	docker compose up postgres redis nats otel-collector prometheus grafana

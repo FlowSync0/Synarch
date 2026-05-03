@@ -1,0 +1,117 @@
+[
+  {
+    "id": "A",
+    "name": "Interface Layer",
+    "status": "partial",
+    "exists_now": [
+      "Next.js control surface",
+      "Live reads for projects, agents, lifecycle approvals, and timeline events",
+      "Sample metrics still present"
+    ],
+    "main_gap": "No live cost or health dashboard and no user-facing goal submission flow.",
+    "next_validation": "Dashboard creates a goal through gateway and shows the resulting project and timeline.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "B",
+    "name": "Orchestration Layer",
+    "status": "partial",
+    "exists_now": [
+      "Gateway accepts GoalEnvelope",
+      "Gateway persists goals through /goals/submit",
+      "Gateway runs ready tasks through /tasks/run-next"
+    ],
+    "main_gap": "Routing is keyword-based and does not yet consult live control-plane policies.",
+    "next_validation": "Submit goal, run ready tasks, and inspect durable result timeline.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "C",
+    "name": "Control Plane",
+    "status": "partial",
+    "exists_now": [
+      "Seeded agents, capabilities, permissions, and policies",
+      "Deterministic LocalWorldView",
+      "Active AgentSoul injection"
+    ],
+    "main_gap": "Organization changes are still limited and no LLM belongs inside this layer.",
+    "next_validation": "Create or update an agent in state, then verify control-plane world view.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "D",
+    "name": "Domain Agents Layer",
+    "status": "partial",
+    "exists_now": [
+      "Typed AgentTaskRequest and AgentResult contracts",
+      "Deterministic runtime stub",
+      "Interim OpenRouter runtime mode for deepseek/deepseek-v4-flash"
+    ],
+    "main_gap": "No persistent per-agent worker loop, Hermes wrapper, tool execution, or model-gateway service.",
+    "next_validation": "Run a narrow division workflow with typed output, event, cost, and memory candidate.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "E",
+    "name": "Project / Workflow Layer",
+    "status": "partial",
+    "exists_now": [
+      "Project, workspace, assignment, task, dependency, and result records",
+      "Task started/completed/blocked/needs_review transitions",
+      "Project complexity reports and split requests"
+    ],
+    "main_gap": "No continuous scheduler loop or worker queue for autonomous task execution.",
+    "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "F",
+    "name": "Memory & Context Layer",
+    "status": "partial",
+    "exists_now": [
+      "PostgreSQL-backed memory_items",
+      "Scoped context assembly",
+      "Deterministic ranking and token budget enforcement",
+      "Gateway persists agent memory candidates and emits memory.candidate_created"
+    ],
+    "main_gap": "No candidate review policy, compaction, vector search, graph retrieval, or hierarchical context database.",
+    "next_validation": "A produced memory candidate returns in the next task memory_context with traceable event and cost logs.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "G",
+    "name": "Execution & Tooling Layer",
+    "status": "later",
+    "exists_now": [
+      "ToolCallRequest and ToolResult contracts"
+    ],
+    "main_gap": "No tool registry, permission check before execution, sandbox, or audit trail for tool calls.",
+    "next_validation": "Denied tool call fails before execution and records audit/event.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "H",
+    "name": "Data / Knowledge Layer",
+    "status": "partial",
+    "exists_now": [
+      "Conceptual docs",
+      "Structured system facts for Synarch layer status"
+    ],
+    "main_gap": "No external connectors, ingestion jobs, document provenance, or loaders.",
+    "next_validation": "Seed system facts into memory and verify they appear in context assembly with source metadata.",
+    "source": "docs/roadmap.md"
+  },
+  {
+    "id": "I",
+    "name": "Observability & Governance Layer",
+    "status": "partial",
+    "exists_now": [
+      "Events, audit logs, cost records, and trace IDs",
+      "Model call started/completed/failed events",
+      "Chronological event API responses"
+    ],
+    "main_gap": "No OpenTelemetry instrumentation, Langfuse traces, or live cost dashboard.",
+    "next_validation": "One request has the same trace ID across gateway, state, runtime, event, cost, memory, and audit.",
+    "source": "docs/roadmap.md"
+  }
+]
