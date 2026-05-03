@@ -17,6 +17,7 @@ from synarch_models import (
     GoalEnvelope,
     GoalSubmissionResult,
     HealthResponse,
+    LocalWorldView,
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
@@ -29,6 +30,8 @@ from synarch_models import (
     TaskDraft,
     TaskRecord,
     TaskRunResult,
+    ToolCallRequest,
+    ToolResult,
 )
 
 from .state_client import (
@@ -42,6 +45,7 @@ from .task_runner import (
     LOCAL_RUNTIME_MODEL_ID,
     LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION,
     LOCAL_RUNTIME_PROVIDER_ID,
+    ControlPlaneClient,
     HttpAgentRuntimeClient,
     HttpControlPlaneClient,
     HttpMemoryClient,
@@ -114,6 +118,13 @@ def get_task_runner() -> TaskRunner:
         model_id=settings.task_runner_model_id,
         input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
+    )
+
+
+def get_control_plane_client() -> ControlPlaneClient:
+    return HttpControlPlaneClient(
+        settings.control_plane_url,
+        timeout_seconds=settings.state_service_timeout_seconds,
     )
 
 
@@ -217,6 +228,14 @@ def project_split_applier_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-project-split-applier",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def tool_gate_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-tool-gate",
         "x-synarch-trace-id": trace_id,
     }
 
@@ -439,6 +458,122 @@ def run_next_task(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
+@app.post("/tools/call", response_model=ToolResult)
+def call_tool(
+    tool_call: ToolCallRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> ToolResult:
+    trace_id = tool_call.trace_id or request.headers.get(
+        "x-synarch-trace-id",
+        f"trace_{uuid4().hex[:12]}",
+    )
+    headers = tool_gate_headers(trace_id)
+    try:
+        world_view = control_plane.get_world_view(tool_call.agent_id)
+        error = tool_access_error(tool_call, world_view)
+        if error is not None:
+            state_client.create_event(
+                tool_call_event(tool_call, EventType.tool_failed, trace_id, error=error),
+                headers=headers,
+            )
+            state_client.create_audit_log(
+                tool_call_audit(tool_call, "tool.denied", trace_id, error=error),
+                headers=headers,
+            )
+            raise HTTPException(status_code=403, detail=error)
+
+        event = state_client.create_event(
+            tool_call_event(tool_call, EventType.tool_called, trace_id),
+            headers=headers,
+        )
+        audit = state_client.create_audit_log(
+            tool_call_audit(tool_call, "tool.allowed", trace_id),
+            headers=headers,
+        )
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            output={
+                "authorized": True,
+                "executed": False,
+                "trace_id": trace_id,
+                "event_id": event.id,
+                "audit_id": audit.id,
+                "service_id": tool_call.service_id,
+            },
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
+
+
+def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) -> str | None:
+    if tool_call.tool_name in world_view.permissions.denied_tools:
+        return f"Tool denied for agent: {tool_call.tool_name}"
+    if tool_call.tool_name not in world_view.permissions.allowed_tools:
+        return f"Tool not allowed for agent: {tool_call.tool_name}"
+    if (
+        tool_call.service_id is not None
+        and tool_call.service_id not in world_view.available_services
+    ):
+        return f"Service not available for agent: {tool_call.service_id}"
+    return None
+
+
+def tool_call_event(
+    tool_call: ToolCallRequest,
+    event_type: EventType,
+    trace_id: str,
+    *,
+    error: str | None = None,
+) -> EventRecord:
+    payload = tool_call_payload(tool_call)
+    if error is not None:
+        payload["error"] = error
+    return EventRecord(
+        type=event_type,
+        source_agent_id=tool_call.agent_id,
+        target=tool_call.task_id or tool_call.project_id or tool_call.tool_name,
+        payload=payload,
+        trace_id=trace_id,
+    )
+
+
+def tool_call_audit(
+    tool_call: ToolCallRequest,
+    action: str,
+    trace_id: str,
+    *,
+    error: str | None = None,
+) -> AuditLogRecord:
+    payload = tool_call_payload(tool_call)
+    if error is not None:
+        payload["error"] = error
+    return AuditLogRecord(
+        actor_type=ActorType.agent,
+        actor_id=tool_call.agent_id,
+        action=action,
+        target_type="tool",
+        target_id=tool_call.tool_name,
+        payload=payload,
+        trace_id=trace_id,
+    )
+
+
+def tool_call_payload(tool_call: ToolCallRequest) -> dict[str, object]:
+    return {
+        "agent_id": tool_call.agent_id,
+        "tool_name": tool_call.tool_name,
+        "service_id": tool_call.service_id,
+        "project_id": tool_call.project_id,
+        "task_id": tool_call.task_id,
+        "reason": tool_call.reason,
+        "argument_keys": sorted(tool_call.arguments.keys()),
+    }
 
 
 @app.get("/memory-items", response_model=list[MemoryItem])

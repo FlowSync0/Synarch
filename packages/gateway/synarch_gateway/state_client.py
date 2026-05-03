@@ -130,6 +130,13 @@ class StateClient(Protocol):
         trace_id: str | None = None,
     ) -> list[AuditLogRecord]: ...
 
+    def create_audit_log(
+        self,
+        audit: AuditLogRecord,
+        *,
+        headers: dict[str, str],
+    ) -> AuditLogRecord: ...
+
 
 @dataclass(frozen=True)
 class HttpStateClient:
@@ -294,6 +301,15 @@ class HttpStateClient:
             ),
         )
         return [AuditLogRecord.model_validate(audit) for audit in response.json()]
+
+    def create_audit_log(
+        self,
+        audit: AuditLogRecord,
+        *,
+        headers: dict[str, str],
+    ) -> AuditLogRecord:
+        response = self._post("/audit-logs", audit.model_dump(mode="json"), headers)
+        return AuditLogRecord.model_validate(response.json())
 
     def _get(
         self,

@@ -462,6 +462,10 @@ class ToolCallRequest(SynarchModel):
     tool_name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     reason: str
+    service_id: str | None = None
+    project_id: str | None = None
+    task_id: str | None = None
+    trace_id: str | None = None
 
 
 class ToolResult(SynarchModel):

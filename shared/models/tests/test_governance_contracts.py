@@ -16,6 +16,7 @@ from synarch_models import (
     ServiceDefinition,
     ServiceKind,
     SkillDefinition,
+    ToolCallRequest,
 )
 
 
@@ -201,3 +202,23 @@ def test_local_world_view_can_expose_state_backed_services_and_policies() -> Non
     assert payload["available_services"] == ["service-model-gateway"]
     assert payload["available_connector_ids"] == ["connector-email"]
     assert payload["available_skill_ids"] == ["invoice_ocr"]
+
+
+def test_tool_call_request_carries_execution_scope() -> None:
+    request = ToolCallRequest(
+        agent_id="agent-dev",
+        tool_name="git.read",
+        service_id="connector-github",
+        project_id="project_demo",
+        task_id="task_demo",
+        trace_id="trace_tool_demo",
+        reason="Inspect the repository before changing code.",
+        arguments={"path": "README.md"},
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["service_id"] == "connector-github"
+    assert payload["project_id"] == "project_demo"
+    assert payload["task_id"] == "task_demo"
+    assert payload["trace_id"] == "trace_tool_demo"

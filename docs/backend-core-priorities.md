@@ -123,6 +123,12 @@ Minimum required records:
 
 Every state-changing endpoint should write an audit record. Every model call should write a cost record.
 
+Implemented baseline:
+
+- Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
+- Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
+- Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
+
 ## Priority 7: Task Breakdown
 
 Objectives must become small ordered tasks before execution:

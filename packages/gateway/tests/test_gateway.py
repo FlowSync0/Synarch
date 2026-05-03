@@ -1,6 +1,12 @@
 from fastapi.testclient import TestClient
 
-from synarch_gateway.main import app, get_memory_client, get_state_client, get_task_runner
+from synarch_gateway.main import (
+    app,
+    get_control_plane_client,
+    get_memory_client,
+    get_state_client,
+    get_task_runner,
+)
 from synarch_gateway.state_client import StateServiceUnavailable
 from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
 from synarch_models import (
@@ -17,6 +23,7 @@ from synarch_models import (
     MemoryStatus,
     MemoryStatusUpdate,
     ModelUsage,
+    PermissionBundle,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
@@ -281,6 +288,16 @@ class FakeStateClient:
             audits = [audit for audit in audits if audit.trace_id == trace_id]
         return audits
 
+    def create_audit_log(
+        self,
+        audit: AuditLogRecord,
+        *,
+        headers: dict[str, str],
+    ) -> AuditLogRecord:
+        self.headers.append(headers)
+        self.audit_logs.append(audit)
+        return audit
+
 
 class FailingStateClient(FakeStateClient):
     def create_project(
@@ -293,7 +310,12 @@ class FailingStateClient(FakeStateClient):
 
 
 class FakeControlPlaneClient:
+    def __init__(self, world_views: dict[str, LocalWorldView] | None = None) -> None:
+        self.world_views = world_views or {}
+
     def get_world_view(self, agent_id: str) -> LocalWorldView:
+        if agent_id in self.world_views:
+            return self.world_views[agent_id]
         return LocalWorldView(agent_id=agent_id, role="Code and infra", division="dev")
 
 
@@ -479,6 +501,99 @@ def test_gateway_applies_project_split_through_state_service() -> None:
     assert state_client.split_applications[0].request_id == "project-split-large"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-project-split-applier"
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_gateway_split_apply"
+
+
+def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-dev": LocalWorldView(
+                agent_id="agent-dev",
+                role="Code and infra",
+                division="dev",
+                permissions=PermissionBundle(
+                    allowed_tools=["git.read", "event.emit"],
+                    denied_tools=["payment.execute"],
+                ),
+                available_services=["connector-github", "service-event-log"],
+                available_connector_ids=["connector-github"],
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_tool_allowed"},
+            json={
+                "agent_id": "agent-dev",
+                "tool_name": "git.read",
+                "service_id": "connector-github",
+                "project_id": "project_demo",
+                "task_id": "task_demo",
+                "reason": "Read code before editing.",
+                "arguments": {"path": "README.md"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["tool_name"] == "git.read"
+    assert payload["output"]["authorized"] is True
+    assert payload["output"]["executed"] is False
+    assert payload["output"]["trace_id"] == "trace_tool_allowed"
+    assert state_client.events[0].type == EventType.tool_called
+    assert state_client.events[0].target == "task_demo"
+    assert state_client.events[0].payload["argument_keys"] == ["path"]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+    assert state_client.audit_logs[0].actor_id == "agent-dev"
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-tool-gate"
+
+
+def test_tool_gate_denies_forbidden_tool_and_records_logs() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-finance": LocalWorldView(
+                agent_id="agent-finance",
+                role="Finance",
+                division="finance",
+                permissions=PermissionBundle(
+                    allowed_tools=["document.read", "ledger.write", "event.emit"],
+                    denied_tools=["payment.execute"],
+                ),
+                available_services=["service-ledger"],
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_tool_denied"},
+            json={
+                "agent_id": "agent-finance",
+                "tool_name": "payment.execute",
+                "service_id": "service-ledger",
+                "reason": "Try to pay an invoice.",
+                "arguments": {"invoice_id": "invoice_demo"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Tool denied for agent: payment.execute"
+    assert state_client.events[0].type == EventType.tool_failed
+    assert state_client.events[0].payload["error"] == "Tool denied for agent: payment.execute"
+    assert state_client.audit_logs[0].action == "tool.denied"
+    assert state_client.audit_logs[0].target_id == "payment.execute"
 
 
 def test_run_next_task_executes_first_ready_task() -> None:
