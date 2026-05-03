@@ -596,6 +596,59 @@ def test_tool_gate_denies_forbidden_tool_and_records_logs() -> None:
     assert state_client.audit_logs[0].target_id == "payment.execute"
 
 
+def test_tool_gate_executes_event_emit_adapter() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-direction": LocalWorldView(
+                agent_id="agent-direction",
+                role="Direction",
+                division="direction",
+                permissions=PermissionBundle(
+                    allowed_tools=["event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["service-event-log"],
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_event_emit_adapter"},
+            json={
+                "agent_id": "agent-direction",
+                "tool_name": "event.emit",
+                "service_id": "service-event-log",
+                "project_id": "project_demo",
+                "reason": "Report a project blocker.",
+                "arguments": {
+                    "type": "agent.reported",
+                    "target": "project_demo",
+                    "payload": {"summary": "Supplier response is blocked."},
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["executed"] is True
+    assert payload["output"]["adapter"] == "event.emit"
+    assert payload["output"]["emitted_event_type"] == "agent.reported"
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.agent_reported,
+    ]
+    assert state_client.events[1].source_agent_id == "agent-direction"
+    assert state_client.events[1].target == "project_demo"
+    assert state_client.events[1].payload == {"summary": "Supplier response is blocked."}
+
+
 def test_run_next_task_executes_first_ready_task() -> None:
     state_client = FakeStateClient()
     state_client.projects.append(

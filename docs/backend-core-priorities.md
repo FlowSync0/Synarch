@@ -128,6 +128,7 @@ Implemented baseline:
 - Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
+- `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.
 
 ## Priority 7: Task Breakdown
 

@@ -494,15 +494,21 @@ def call_tool(
             tool_call_audit(tool_call, "tool.allowed", trace_id),
             headers=headers,
         )
+        execution_output = execute_authorized_tool(
+            tool_call,
+            state_client=state_client,
+            headers=headers,
+            trace_id=trace_id,
+        )
         return ToolResult(
             tool_name=tool_call.tool_name,
             output={
                 "authorized": True,
-                "executed": False,
                 "trace_id": trace_id,
                 "event_id": event.id,
                 "audit_id": audit.id,
                 "service_id": tool_call.service_id,
+                **execution_output,
             },
         )
     except (StateServiceRequestError, TaskRunnerRequestError) as error:
@@ -522,6 +528,80 @@ def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) ->
     ):
         return f"Service not available for agent: {tool_call.service_id}"
     return None
+
+
+def execute_authorized_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    if tool_call.tool_name == "event.emit":
+        return execute_event_emit_tool(
+            tool_call,
+            state_client=state_client,
+            headers=headers,
+            trace_id=trace_id,
+        )
+    return {"executed": False, "adapter": None}
+
+
+def execute_event_emit_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    event_type = event_type_argument(tool_call)
+    payload = payload_argument(tool_call)
+    target = string_argument(tool_call, "target") or tool_call.task_id or tool_call.project_id
+    emitted_event = state_client.create_event(
+        EventRecord(
+            type=event_type,
+            source_agent_id=tool_call.agent_id,
+            target=target,
+            payload=payload,
+            trace_id=trace_id,
+        ),
+        headers=headers,
+    )
+    return {
+        "executed": True,
+        "adapter": "event.emit",
+        "emitted_event_id": emitted_event.id,
+        "emitted_event_type": emitted_event.type,
+    }
+
+
+def event_type_argument(tool_call: ToolCallRequest) -> EventType:
+    raw_event_type = tool_call.arguments.get("type")
+    if not isinstance(raw_event_type, str):
+        raise HTTPException(status_code=400, detail="event.emit requires string argument: type")
+    try:
+        return EventType(raw_event_type)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown event type for event.emit: {raw_event_type}",
+        ) from error
+
+
+def payload_argument(tool_call: ToolCallRequest) -> dict[str, object]:
+    raw_payload = tool_call.arguments.get("payload", {})
+    if not isinstance(raw_payload, dict):
+        raise HTTPException(status_code=400, detail="event.emit payload must be an object")
+    return raw_payload
+
+
+def string_argument(tool_call: ToolCallRequest, key: str) -> str | None:
+    raw_value = tool_call.arguments.get(key)
+    if raw_value is None:
+        return None
+    if not isinstance(raw_value, str):
+        raise HTTPException(status_code=400, detail=f"event.emit {key} must be a string")
+    return raw_value
 
 
 def tool_call_event(
