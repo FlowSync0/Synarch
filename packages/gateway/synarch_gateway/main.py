@@ -1,3 +1,4 @@
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -8,6 +9,8 @@ from synarch_models import (
     AgentProjectAssignment,
     AuditLogRecord,
     CostRecord,
+    CostSummary,
+    CostSummaryGroup,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -47,6 +50,8 @@ from .task_runner import (
     TaskRunnerRequestError,
     TaskRunnerUnavailable,
 )
+
+CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 
 
 class Settings(BaseSettings):
@@ -494,6 +499,83 @@ def list_cost_records(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/cost-records/summary", response_model=CostSummary)
+def summarize_cost_records(
+    group_by: CostSummaryGroupBy = "project",
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    trace_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> CostSummary:
+    try:
+        cost_records = state_client.list_cost_records(
+            project_id=project_id,
+            agent_id=agent_id,
+            provider_id=provider_id,
+            model_id=model_id,
+            trace_id=trace_id,
+        )
+        return build_cost_summary(cost_records, group_by)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+def build_cost_summary(
+    cost_records: list[CostRecord],
+    group_by: CostSummaryGroupBy,
+) -> CostSummary:
+    groups_by_key: dict[str, list[CostRecord]] = {}
+    for cost in cost_records:
+        group_key = cost_summary_group_key(cost, group_by)
+        groups_by_key.setdefault(group_key, []).append(cost)
+
+    groups = [
+        CostSummaryGroup(
+            group_key=group_key,
+            record_count=len(group_costs),
+            input_tokens=sum(cost.input_tokens for cost in group_costs),
+            output_tokens=sum(cost.output_tokens for cost in group_costs),
+            total_cost=sum(cost.total_cost for cost in group_costs),
+            currency=cost_summary_currency(group_costs),
+        )
+        for group_key, group_costs in sorted(groups_by_key.items())
+    ]
+    return CostSummary(
+        group_by=group_by,
+        groups=groups,
+        record_count=len(cost_records),
+        input_tokens=sum(cost.input_tokens for cost in cost_records),
+        output_tokens=sum(cost.output_tokens for cost in cost_records),
+        total_cost=sum(cost.total_cost for cost in cost_records),
+        currency=cost_summary_currency(cost_records),
+    )
+
+
+def cost_summary_group_key(cost: CostRecord, group_by: CostSummaryGroupBy) -> str:
+    match group_by:
+        case "project":
+            return cost.project_id or "unassigned"
+        case "agent":
+            return cost.agent_id or "unassigned"
+        case "model":
+            return cost.model_id
+        case "provider":
+            return cost.provider_id
+
+
+def cost_summary_currency(cost_records: list[CostRecord]) -> str:
+    currencies = {cost.currency for cost in cost_records}
+    if not currencies:
+        return "USD"
+    if len(currencies) == 1:
+        return next(iter(currencies))
+    return "mixed"
 
 
 @app.get("/audit-logs", response_model=list[AuditLogRecord])

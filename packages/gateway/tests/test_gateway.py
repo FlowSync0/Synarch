@@ -686,6 +686,89 @@ def test_operational_records_are_listed_through_gateway() -> None:
     assert [audit["id"] for audit in audits_response.json()] == ["audit-model-call"]
 
 
+def test_cost_summary_groups_filtered_records() -> None:
+    state_client = FakeStateClient()
+    state_client.costs.extend(
+        [
+            CostRecord(
+                id="cost-direction-1",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_demo",
+                input_tokens=100,
+                output_tokens=50,
+                total_cost=0.25,
+            ),
+            CostRecord(
+                id="cost-direction-2",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_demo",
+                input_tokens=40,
+                output_tokens=20,
+                total_cost=0.25,
+            ),
+            CostRecord(
+                id="cost-dev",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-dev",
+                project_id="project_demo",
+                input_tokens=10,
+                output_tokens=5,
+                total_cost=0.5,
+            ),
+            CostRecord(
+                id="cost-other-project",
+                provider_id="provider-openrouter",
+                model_id="deepseek/deepseek-v4-flash",
+                agent_id="agent-direction",
+                project_id="project_other",
+                input_tokens=999,
+                output_tokens=999,
+                total_cost=9.0,
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/cost-records/summary",
+            params={"project_id": "project_demo", "group_by": "agent"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["group_by"] == "agent"
+    assert payload["record_count"] == 3
+    assert payload["input_tokens"] == 150
+    assert payload["output_tokens"] == 75
+    assert payload["total_cost"] == 1.0
+    assert payload["groups"] == [
+        {
+            "group_key": "agent-dev",
+            "record_count": 1,
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_cost": 0.5,
+            "currency": "USD",
+        },
+        {
+            "group_key": "agent-direction",
+            "record_count": 2,
+            "input_tokens": 140,
+            "output_tokens": 70,
+            "total_cost": 0.5,
+            "currency": "USD",
+        },
+    ]
+
+
 def test_project_timeline_aggregates_project_records() -> None:
     state_client = FakeStateClient()
     memory_client = FakeMemoryClient()

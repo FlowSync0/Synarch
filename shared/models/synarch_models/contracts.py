@@ -366,6 +366,25 @@ class CostRecord(SynarchModel):
     recorded_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class CostSummaryGroup(SynarchModel):
+    group_key: str
+    record_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+
+class CostSummary(SynarchModel):
+    group_by: str
+    groups: list[CostSummaryGroup] = Field(default_factory=list)
+    record_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+
 class AuditLogRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("audit"))
     actor_type: ActorType
