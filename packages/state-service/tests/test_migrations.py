@@ -11,6 +11,7 @@ from synarch_state_service.migrations import (
 def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0001_initial.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0006_memory_item_status.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0007_services_skills_access.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

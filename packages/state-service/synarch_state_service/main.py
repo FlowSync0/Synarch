@@ -33,6 +33,7 @@ from synarch_models import (
     ProjectSplitRequest,
     ProjectWorkspace,
     ServiceDefinition,
+    SkillDefinition,
     TaskRecord,
     TaskStatus,
 )
@@ -181,6 +182,33 @@ def validate_agent_model_policy(agent: AgentDefinition) -> None:
             status_code=400,
             detail=f"Unknown model policy: {agent.model_policy_id}",
         )
+
+
+def validate_agent_access_references(
+    *,
+    owner_agent_id: str | None,
+    allowed_agent_ids: list[str],
+) -> None:
+    candidate_ids = [agent_id for agent_id in [owner_agent_id, *allowed_agent_ids] if agent_id]
+    unknown_agent_ids = [
+        agent_id for agent_id in candidate_ids if not REPOSITORIES.agents.exists(agent_id)
+    ]
+    if unknown_agent_ids:
+        raise HTTPException(status_code=400, detail=f"Unknown access agents: {unknown_agent_ids}")
+
+
+def validate_service_definition(service: ServiceDefinition) -> None:
+    validate_agent_access_references(
+        owner_agent_id=service.owner_agent_id,
+        allowed_agent_ids=service.allowed_agent_ids,
+    )
+
+
+def validate_skill_definition(skill: SkillDefinition) -> None:
+    validate_agent_access_references(
+        owner_agent_id=skill.owner_agent_id,
+        allowed_agent_ids=skill.allowed_agent_ids,
+    )
 
 
 def validate_task_breakdown(task: TaskRecord) -> None:
@@ -1248,6 +1276,7 @@ def read_event(event_id: str) -> EventRecord:
 @app.post("/services", response_model=ServiceDefinition, status_code=201)
 def create_service(service: ServiceDefinition, request: Request) -> ServiceDefinition:
     audit_context = audit_context_from_request(request)
+    validate_service_definition(service)
     record = create_record(REPOSITORIES.services, service.id, service)
     write_audit_log(
         audit_context,
@@ -1271,6 +1300,33 @@ def list_services(kind: str | None = None, enabled: bool | None = None) -> list[
 @app.get("/services/{service_id}", response_model=ServiceDefinition)
 def read_service(service_id: str) -> ServiceDefinition:
     return read_record(REPOSITORIES.services, service_id, "service")
+
+
+@app.post("/skills", response_model=SkillDefinition, status_code=201)
+def create_skill(skill: SkillDefinition, request: Request) -> SkillDefinition:
+    audit_context = audit_context_from_request(request)
+    validate_skill_definition(skill)
+    record = create_record(REPOSITORIES.skills, skill.id, skill)
+    write_audit_log(
+        audit_context,
+        action="skill.created",
+        target_type="skill",
+        target_id=record.id,
+    )
+    return record
+
+
+@app.get("/skills", response_model=list[SkillDefinition])
+def list_skills(enabled: bool | None = None) -> list[SkillDefinition]:
+    skills = REPOSITORIES.skills.list_records()
+    if enabled is not None:
+        skills = [skill for skill in skills if skill.enabled == enabled]
+    return skills
+
+
+@app.get("/skills/{skill_id}", response_model=SkillDefinition)
+def read_skill(skill_id: str) -> SkillDefinition:
+    return read_record(REPOSITORIES.skills, skill_id, "skill")
 
 
 @app.post("/model-providers", response_model=ModelProviderConfig, status_code=201)

@@ -9,6 +9,8 @@ from synarch_models import (
     AgentLifecycleRequest,
     HealthResponse,
     LocalWorldView,
+    ServiceDefinition,
+    SkillDefinition,
 )
 
 from .agent_sources import (
@@ -69,22 +71,75 @@ def raise_source_error(error: AgentSourceRequestError) -> NoReturn:
     raise HTTPException(status_code=error.status_code, detail=error.detail)
 
 
-def list_available_service_ids(agent: AgentDefinition) -> list[str]:
+def access_rule_matches_agent(
+    agent: AgentDefinition,
+    *,
+    allowed_agent_ids: list[str],
+    allowed_divisions: list[str],
+) -> bool:
+    if allowed_agent_ids and agent.id not in allowed_agent_ids:
+        return False
+    return not (allowed_divisions and agent.division not in allowed_divisions)
+
+
+def required_tools_are_allowed(agent: AgentDefinition, required_tools: list[str]) -> bool:
+    denied_tools = set(agent.permissions.denied_tools)
+    if denied_tools.intersection(required_tools):
+        return False
+    allowed_tools = set(agent.permissions.allowed_tools)
+    return not required_tools or set(required_tools).issubset(allowed_tools)
+
+
+def service_is_available_to_agent(agent: AgentDefinition, service: ServiceDefinition) -> bool:
+    if not service.enabled:
+        return False
+    if not access_rule_matches_agent(
+        agent,
+        allowed_agent_ids=service.allowed_agent_ids,
+        allowed_divisions=service.allowed_divisions,
+    ):
+        return False
+    if not required_tools_are_allowed(agent, service.capabilities):
+        return False
+    if service.owner_agent_id is None or service.owner_agent_id == agent.id:
+        return True
+    return bool(service.allowed_agent_ids or service.allowed_divisions or service.capabilities)
+
+
+def skill_is_available_to_agent(agent: AgentDefinition, skill: SkillDefinition) -> bool:
+    if not skill.enabled:
+        return False
+    if skill.id not in agent.capabilities.skills:
+        return False
+    if not access_rule_matches_agent(
+        agent,
+        allowed_agent_ids=skill.allowed_agent_ids,
+        allowed_divisions=skill.allowed_divisions,
+    ):
+        return False
+    return required_tools_are_allowed(agent, skill.required_tools)
+
+
+def list_available_services(agent: AgentDefinition) -> list[ServiceDefinition]:
     try:
         services = AGENT_SOURCE.list_services()
     except AgentSourceUnavailable as error:
         raise HTTPException(status_code=502, detail="Agent source unavailable") from error
 
-    allowed_tools = set(agent.permissions.allowed_tools)
-    return [
-        service.id
-        for service in services
-        if service.enabled
-        and (
-            service.owner_agent_id in {None, agent.id}
-            or bool(allowed_tools.intersection(service.capabilities))
-        )
-    ]
+    return [service for service in services if service_is_available_to_agent(agent, service)]
+
+
+def list_available_connector_ids(services: list[ServiceDefinition]) -> list[str]:
+    connector_kinds = {"external", "ai_provider", "tool_provider"}
+    return [service.id for service in services if service.kind in connector_kinds]
+
+
+def list_available_skill_ids(agent: AgentDefinition) -> list[str]:
+    try:
+        skills = AGENT_SOURCE.list_skills()
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
+    return [skill.id for skill in skills if skill_is_available_to_agent(agent, skill)]
 
 
 def world_view_policy_labels(agent: AgentDefinition) -> list[str]:
@@ -142,6 +197,7 @@ def read_world_view(agent_id: str) -> LocalWorldView:
     direct_report_agent_ids = [
         candidate.id for candidate in agents if candidate.manager_id == agent.id
     ]
+    available_services = list_available_services(agent)
     return LocalWorldView(
         agent_id=agent.id,
         name=agent.name,
@@ -157,7 +213,9 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         permissions=agent.permissions,
         capabilities=agent.capabilities,
         policies=world_view_policy_labels(agent),
-        available_services=list_available_service_ids(agent),
+        available_services=[service.id for service in available_services],
+        available_connector_ids=list_available_connector_ids(available_services),
+        available_skill_ids=list_available_skill_ids(agent),
     )
 
 

@@ -15,6 +15,7 @@ from synarch_models import (
     ModelUsage,
     ServiceDefinition,
     ServiceKind,
+    SkillDefinition,
 )
 
 
@@ -157,6 +158,16 @@ def test_cost_and_audit_records_have_traceable_scope() -> None:
         name="Model Gateway",
         kind=ServiceKind.internal,
         capabilities=["model.route", "cost.record", "model.policy.enforce"],
+        allowed_divisions=["dev"],
+        audit_required=True,
+        metadata={"connector_type": "internal"},
+    )
+    skill = SkillDefinition(
+        id="software_design",
+        name="Software design",
+        description="Plan technical implementation safely.",
+        required_tools=["git.read"],
+        allowed_divisions=["dev"],
     )
 
     assert usage.model_id == "deepseek/deepseek-v4-flash"
@@ -167,6 +178,10 @@ def test_cost_and_audit_records_have_traceable_scope() -> None:
         "cost.record",
         "model.policy.enforce",
     ]
+    assert service.model_dump(mode="json")["allowed_divisions"] == ["dev"]
+    assert service.model_dump(mode="json")["audit_required"] is True
+    assert service.model_dump(mode="json")["metadata"] == {"connector_type": "internal"}
+    assert skill.model_dump(mode="json")["required_tools"] == ["git.read"]
 
 
 def test_local_world_view_can_expose_state_backed_services_and_policies() -> None:
@@ -176,9 +191,13 @@ def test_local_world_view_can_expose_state_backed_services_and_policies() -> Non
         division="finance",
         policies=["least_privilege_tools", "model_policy:policy-finance-default"],
         available_services=["service-model-gateway"],
+        available_connector_ids=["connector-email"],
+        available_skill_ids=["invoice_ocr"],
     )
 
     payload = world_view.model_dump(mode="json")
 
     assert payload["policies"] == ["least_privilege_tools", "model_policy:policy-finance-default"]
     assert payload["available_services"] == ["service-model-gateway"]
+    assert payload["available_connector_ids"] == ["connector-email"]
+    assert payload["available_skill_ids"] == ["invoice_ocr"]

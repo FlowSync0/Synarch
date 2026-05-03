@@ -14,6 +14,9 @@ from synarch_models import (
     ModelPolicy,
     ModelProviderConfig,
     PermissionBundle,
+    ServiceDefinition,
+    ServiceKind,
+    SkillDefinition,
 )
 from synarch_state_service.repositories import StateRepositories
 
@@ -332,6 +335,198 @@ DEFAULT_MODEL_POLICIES: tuple[ModelPolicy, ...] = (
 )
 
 
+DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
+    ServiceDefinition(
+        id="service-project-control",
+        name="Project Control",
+        kind=ServiceKind.internal,
+        capabilities=["project.create", "task.create"],
+    ),
+    ServiceDefinition(
+        id="service-event-log",
+        name="Event Log",
+        kind=ServiceKind.internal,
+        capabilities=["event.emit"],
+    ),
+    ServiceDefinition(
+        id="connector-finance-documents",
+        name="Finance Documents",
+        kind=ServiceKind.tool_provider,
+        capabilities=["document.read"],
+        allowed_divisions=["finance"],
+        metadata={"connector_type": "document_store"},
+    ),
+    ServiceDefinition(
+        id="connector-github",
+        name="GitHub",
+        kind=ServiceKind.tool_provider,
+        capabilities=["git.read", "git.write"],
+        allowed_divisions=["dev"],
+        metadata={"connector_type": "source_control"},
+    ),
+    ServiceDefinition(
+        id="connector-spreadsheets",
+        name="Spreadsheets",
+        kind=ServiceKind.tool_provider,
+        capabilities=["spreadsheet.write"],
+        allowed_divisions=["ops-sourcing"],
+        metadata={"connector_type": "spreadsheet"},
+    ),
+    ServiceDefinition(
+        id="connector-supplier-web",
+        name="Supplier Web Search",
+        kind=ServiceKind.tool_provider,
+        capabilities=["web.search"],
+        allowed_divisions=["ops-sourcing"],
+        metadata={"connector_type": "supplier_research"},
+    ),
+    ServiceDefinition(
+        id="connector-documents",
+        name="Documents",
+        kind=ServiceKind.tool_provider,
+        capabilities=["document.read", "document.write"],
+        allowed_divisions=["admin-knowledge"],
+        metadata={"connector_type": "document_store"},
+    ),
+    ServiceDefinition(
+        id="service-ledger",
+        name="Ledger",
+        kind=ServiceKind.internal,
+        capabilities=["ledger.write"],
+        allowed_divisions=["finance"],
+    ),
+    ServiceDefinition(
+        id="service-shell-sandbox",
+        name="Shell Sandbox",
+        kind=ServiceKind.internal,
+        capabilities=["shell.sandbox"],
+        allowed_divisions=["dev"],
+    ),
+)
+
+DEFAULT_SKILLS: tuple[SkillDefinition, ...] = (
+    SkillDefinition(
+        id="goal_intake",
+        name="Goal Intake",
+        description="Clarify user goals before work is delegated.",
+        required_tools=["project.create", "event.emit"],
+        allowed_divisions=["direction"],
+    ),
+    SkillDefinition(
+        id="planning",
+        name="Planning",
+        description="Break objectives into ordered, auditable work.",
+        required_tools=["project.create", "task.create", "event.emit"],
+        allowed_divisions=["direction"],
+    ),
+    SkillDefinition(
+        id="arbitration",
+        name="Arbitration",
+        description="Resolve priority and ownership conflicts.",
+        required_tools=["event.emit"],
+        allowed_divisions=["direction"],
+    ),
+    SkillDefinition(
+        id="reporting",
+        name="Reporting",
+        description="Summarize progress, blockers, and required human decisions.",
+        required_tools=["event.emit"],
+        allowed_divisions=["direction"],
+    ),
+    SkillDefinition(
+        id="invoice_ocr",
+        name="Invoice OCR",
+        description="Extract durable accounting facts from invoices.",
+        required_tools=["document.read", "event.emit"],
+        allowed_divisions=["finance"],
+    ),
+    SkillDefinition(
+        id="accounting_entries",
+        name="Accounting Entries",
+        description="Prepare auditable accounting entries.",
+        required_tools=["ledger.write", "event.emit"],
+        allowed_divisions=["finance"],
+    ),
+    SkillDefinition(
+        id="bank_reconciliation",
+        name="Bank Reconciliation",
+        description="Prepare reconciliation work without executing payments.",
+        required_tools=["ledger.write", "event.emit"],
+        allowed_divisions=["finance"],
+    ),
+    SkillDefinition(
+        id="supplier_search",
+        name="Supplier Search",
+        description="Find supplier candidates and preserve source evidence.",
+        required_tools=["web.search", "event.emit"],
+        allowed_divisions=["ops-sourcing"],
+    ),
+    SkillDefinition(
+        id="rfq_comparison",
+        name="RFQ Comparison",
+        description="Compare supplier quotes with explicit assumptions.",
+        required_tools=["spreadsheet.write", "event.emit"],
+        allowed_divisions=["ops-sourcing"],
+    ),
+    SkillDefinition(
+        id="order_tracking",
+        name="Order Tracking",
+        description="Track supplier order state and surface blockers.",
+        required_tools=["event.emit"],
+        allowed_divisions=["ops-sourcing"],
+    ),
+    SkillDefinition(
+        id="software_design",
+        name="Software Design",
+        description="Plan technical implementation with verification gates.",
+        required_tools=["git.read", "event.emit"],
+        allowed_divisions=["dev"],
+    ),
+    SkillDefinition(
+        id="implementation",
+        name="Implementation",
+        description="Make scoped code changes and verify them.",
+        required_tools=["git.read", "git.write", "shell.sandbox", "event.emit"],
+        allowed_divisions=["dev"],
+    ),
+    SkillDefinition(
+        id="debugging",
+        name="Debugging",
+        description="Investigate failures and keep reproduction steps explicit.",
+        required_tools=["git.read", "shell.sandbox", "event.emit"],
+        allowed_divisions=["dev"],
+    ),
+    SkillDefinition(
+        id="ci_cd",
+        name="CI/CD",
+        description="Prepare verified delivery and deployment changes.",
+        required_tools=["git.read", "shell.sandbox", "event.emit"],
+        allowed_divisions=["dev"],
+    ),
+    SkillDefinition(
+        id="document_management",
+        name="Document Management",
+        description="Read, organize, and write company documents.",
+        required_tools=["document.read", "document.write", "event.emit"],
+        allowed_divisions=["admin-knowledge"],
+    ),
+    SkillDefinition(
+        id="internal_search",
+        name="Internal Search",
+        description="Retrieve durable internal knowledge with source boundaries.",
+        required_tools=["document.read", "event.emit"],
+        allowed_divisions=["admin-knowledge"],
+    ),
+    SkillDefinition(
+        id="procedure_drafting",
+        name="Procedure Drafting",
+        description="Draft reusable internal procedures from verified facts.",
+        required_tools=["document.read", "document.write", "event.emit"],
+        allowed_divisions=["admin-knowledge"],
+    ),
+)
+
+
 @dataclass(frozen=True)
 class SeedSummary:
     divisions_created: int = 0
@@ -340,6 +535,8 @@ class SeedSummary:
     model_providers_created: int = 0
     model_definitions_created: int = 0
     model_policies_created: int = 0
+    services_created: int = 0
+    skills_created: int = 0
 
 
 def seed_repositories(repositories: StateRepositories) -> SeedSummary:
@@ -349,6 +546,8 @@ def seed_repositories(repositories: StateRepositories) -> SeedSummary:
     model_providers_created = 0
     model_definitions_created = 0
     model_policies_created = 0
+    services_created = 0
+    skills_created = 0
 
     for division in DEFAULT_DIVISIONS:
         if not repositories.divisions.exists(division.id):
@@ -380,6 +579,16 @@ def seed_repositories(repositories: StateRepositories) -> SeedSummary:
             repositories.model_policies.create(policy.id, policy)
             model_policies_created += 1
 
+    for service in DEFAULT_SERVICES:
+        if not repositories.services.exists(service.id):
+            repositories.services.create(service.id, service)
+            services_created += 1
+
+    for skill in DEFAULT_SKILLS:
+        if not repositories.skills.exists(skill.id):
+            repositories.skills.create(skill.id, skill)
+            skills_created += 1
+
     return SeedSummary(
         divisions_created=divisions_created,
         agents_created=agents_created,
@@ -387,6 +596,8 @@ def seed_repositories(repositories: StateRepositories) -> SeedSummary:
         model_providers_created=model_providers_created,
         model_definitions_created=model_definitions_created,
         model_policies_created=model_policies_created,
+        services_created=services_created,
+        skills_created=skills_created,
     )
 
 
@@ -410,7 +621,9 @@ def main() -> None:
         f"{summary.agent_souls_created} agent souls, "
         f"{summary.model_providers_created} model providers, "
         f"{summary.model_definitions_created} model definitions, "
-        f"{summary.model_policies_created} model policies created."
+        f"{summary.model_policies_created} model policies, "
+        f"{summary.services_created} services, "
+        f"{summary.skills_created} skills created."
     )
 
 

@@ -139,6 +139,8 @@ class LocalWorldView(SynarchModel):
     capabilities: CapabilityMap = Field(default_factory=CapabilityMap)
     policies: list[str] = Field(default_factory=list)
     available_services: list[str] = Field(default_factory=list)
+    available_connector_ids: list[str] = Field(default_factory=list)
+    available_skill_ids: list[str] = Field(default_factory=list)
 
 
 class ProjectRecord(SynarchModel):
@@ -297,7 +299,26 @@ class ServiceDefinition(SynarchModel):
     health_endpoint: str | None = "/healthz"
     capabilities: list[str] = Field(default_factory=list)
     owner_agent_id: str | None = None
+    allowed_agent_ids: list[str] = Field(default_factory=list)
+    allowed_divisions: list[str] = Field(default_factory=list)
+    audit_required: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+
+
+class SkillDefinition(SynarchModel):
+    id: str
+    name: str
+    description: str = ""
+    version: str = "0.1.0"
+    required_tools: list[str] = Field(default_factory=list)
+    owner_agent_id: str | None = None
+    allowed_agent_ids: list[str] = Field(default_factory=list)
+    allowed_divisions: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ModelProviderConfig(SynarchModel):

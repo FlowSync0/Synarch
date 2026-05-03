@@ -174,7 +174,10 @@ Infra
   "active_projects": [],
   "permissions": {},
   "capabilities": [],
-  "policies": []
+  "policies": [],
+  "available_services": ["service_id"],
+  "available_connector_ids": ["connector_id"],
+  "available_skill_ids": ["skill_id"]
 }
 ```
 

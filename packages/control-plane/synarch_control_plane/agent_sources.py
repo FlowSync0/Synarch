@@ -13,6 +13,7 @@ from synarch_models import (
     AgentSoul,
     ModelPolicy,
     ServiceDefinition,
+    SkillDefinition,
 )
 
 from .seed import AGENT_SOULS, AGENTS
@@ -39,6 +40,8 @@ class AgentSource(Protocol):
     def list_agent_project_assignments(self, agent_id: str) -> list[AgentProjectAssignment]: ...
 
     def list_services(self) -> list[ServiceDefinition]: ...
+
+    def list_skills(self) -> list[SkillDefinition]: ...
 
     def get_model_policy(self, policy_id: str) -> ModelPolicy | None: ...
 
@@ -84,6 +87,9 @@ class SeedAgentSource:
         return []
 
     def list_services(self) -> list[ServiceDefinition]:
+        return []
+
+    def list_skills(self) -> list[SkillDefinition]:
         return []
 
     def get_model_policy(self, policy_id: str) -> ModelPolicy | None:
@@ -166,6 +172,18 @@ class StateServiceAgentSource:
         except httpx.HTTPError as error:
             raise AgentSourceUnavailable(str(error)) from error
         return [ServiceDefinition.model_validate(service) for service in response.json()]
+
+    def list_skills(self) -> list[SkillDefinition]:
+        try:
+            response = httpx.get(
+                f"{self.base_url.rstrip('/')}/skills",
+                params={"enabled": True},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as error:
+            raise AgentSourceUnavailable(str(error)) from error
+        return [SkillDefinition.model_validate(skill) for skill in response.json()]
 
     def get_model_policy(self, policy_id: str) -> ModelPolicy | None:
         response = self._get_optional(f"/model-policies/{policy_id}")

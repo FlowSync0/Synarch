@@ -92,6 +92,14 @@ Each service/tool/provider must be visible as structured state:
 This is how an agent knows which company service it may communicate with. It is not prompt text; it is
 runtime state exposed through `LocalWorldView`.
 
+Implemented baseline:
+
+- `ServiceDefinition`: capabilities, connector kind, allowed agents/divisions, audit flag, metadata
+- `SkillDefinition`: required tools, allowed agents/divisions, owner, version, metadata
+- `LocalWorldView.available_services`: only services whose capability requirements fit the agent
+- `LocalWorldView.available_connector_ids`: allowed external/tool-provider connectors
+- `LocalWorldView.available_skill_ids`: registered skills matching the agent's capabilities and tools
+
 ## Priority 5: Agent Identity
 
 Each agent needs a bounded durable identity record:

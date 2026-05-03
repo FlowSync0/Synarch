@@ -25,6 +25,62 @@ def task_payload(
     return payload
 
 
+def test_service_and_skill_registry_capture_access_rules() -> None:
+    client = TestClient(app)
+
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-github-test",
+            "name": "GitHub",
+            "kind": "tool_provider",
+            "capabilities": ["git.read", "git.write"],
+            "allowed_divisions": ["dev"],
+            "audit_required": True,
+            "metadata": {"connector_type": "source_control"},
+        },
+    )
+    assert service_response.status_code == 201
+
+    skill_response = client.post(
+        "/skills",
+        json={
+            "id": "implementation-test",
+            "name": "Implementation",
+            "description": "Make scoped code changes.",
+            "required_tools": ["git.read", "git.write"],
+            "allowed_divisions": ["dev"],
+        },
+    )
+    assert skill_response.status_code == 201
+
+    services_response = client.get("/services", params={"kind": "tool_provider"})
+    skills_response = client.get("/skills", params={"enabled": True})
+
+    assert services_response.status_code == 200
+    assert services_response.json()[0]["allowed_divisions"] == ["dev"]
+    assert services_response.json()[0]["metadata"] == {"connector_type": "source_control"}
+    assert skills_response.status_code == 200
+    assert skills_response.json()[0]["required_tools"] == ["git.read", "git.write"]
+
+
+def test_service_registry_rejects_unknown_agent_access_rules() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/services",
+        json={
+            "id": "connector-private-test",
+            "name": "Private Connector",
+            "kind": "tool_provider",
+            "allowed_agent_ids": ["agent-missing"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Unknown access agents: ['agent-missing']"
+
+
 def test_project_then_task_flow() -> None:
     client = TestClient(app)
     project_response = client.post(

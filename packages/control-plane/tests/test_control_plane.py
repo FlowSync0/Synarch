@@ -63,6 +63,8 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
             )
         if request.url.path == "/services":
             return httpx.Response(200, json=[])
+        if request.url.path == "/skills":
+            return httpx.Response(200, json=[])
         return httpx.Response(404, json={"detail": "not found"})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -121,7 +123,45 @@ def test_world_view_includes_state_backed_services_and_model_policy(
                         "name": "Ledger",
                         "kind": "internal",
                         "capabilities": ["ledger.write"],
-                    }
+                    },
+                    {
+                        "id": "connector-finance-docs",
+                        "name": "Finance Documents",
+                        "kind": "tool_provider",
+                        "capabilities": ["document.read"],
+                        "allowed_divisions": ["finance"],
+                    },
+                    {
+                        "id": "connector-dev-github",
+                        "name": "GitHub",
+                        "kind": "tool_provider",
+                        "capabilities": ["git.read"],
+                        "allowed_divisions": ["dev"],
+                    },
+                ],
+            )
+        if request.url.path == "/skills":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": "invoice_ocr",
+                        "name": "Invoice OCR",
+                        "required_tools": ["document.read"],
+                        "allowed_divisions": ["finance"],
+                    },
+                    {
+                        "id": "software_design",
+                        "name": "Software Design",
+                        "required_tools": ["git.read"],
+                        "allowed_divisions": ["dev"],
+                    },
+                    {
+                        "id": "bank_reconciliation",
+                        "name": "Bank Reconciliation",
+                        "required_tools": ["payment.execute"],
+                        "allowed_divisions": ["finance"],
+                    },
                 ],
             )
         if request.url.path == "/model-policies/policy-finance-default":
@@ -145,6 +185,10 @@ def test_world_view_includes_state_backed_services_and_model_policy(
     assert response.status_code == 200
     payload = response.json()
     assert "service-ledger" in payload["available_services"]
+    assert "connector-finance-docs" in payload["available_services"]
+    assert "connector-dev-github" not in payload["available_services"]
+    assert payload["available_connector_ids"] == ["connector-finance-docs"]
+    assert payload["available_skill_ids"] == ["invoice_ocr"]
     assert "model_policy:policy-finance-default" in payload["policies"]
     assert "default_model:model-finance" in payload["policies"]
 

@@ -20,6 +20,7 @@ from synarch_models import (
     ProjectSplitRequest,
     ProjectWorkspace,
     ServiceDefinition,
+    SkillDefinition,
     TaskRecord,
 )
 
@@ -71,6 +72,7 @@ class StateRepositories:
     tasks: RecordRepository[TaskRecord]
     events: RecordRepository[EventRecord]
     services: RecordRepository[ServiceDefinition]
+    skills: RecordRepository[SkillDefinition]
     model_providers: RecordRepository[ModelProviderConfig]
     model_definitions: RecordRepository[ModelDefinition]
     model_policies: RecordRepository[ModelPolicy]
@@ -92,6 +94,7 @@ class StateRepositories:
             tasks=InMemoryRecordRepository(),
             events=InMemoryRecordRepository(),
             services=InMemoryRecordRepository(),
+            skills=InMemoryRecordRepository(),
             model_providers=InMemoryRecordRepository(),
             model_definitions=InMemoryRecordRepository(),
             model_policies=InMemoryRecordRepository(),
