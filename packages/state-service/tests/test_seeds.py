@@ -8,6 +8,8 @@ from synarch_state_service.seeds import (
     DEFAULT_MODEL_PROVIDERS,
     LOCAL_RUNTIME_MODEL_ID,
     LOCAL_RUNTIME_PROVIDER_ID,
+    OPENROUTER_DEEPSEEK_V4_MODEL_ID,
+    OPENROUTER_PROVIDER_ID,
     seed_repositories,
 )
 
@@ -29,6 +31,8 @@ def test_seed_repositories_creates_default_divisions_and_agents() -> None:
     assert repositories.agent_souls.exists("soul-agent-direction-v1")
     assert repositories.model_providers.exists(LOCAL_RUNTIME_PROVIDER_ID)
     assert repositories.model_definitions.exists(LOCAL_RUNTIME_MODEL_ID)
+    assert repositories.model_providers.exists(OPENROUTER_PROVIDER_ID)
+    assert repositories.model_definitions.exists(OPENROUTER_DEEPSEEK_V4_MODEL_ID)
 
 
 def test_seed_repositories_is_idempotent() -> None:

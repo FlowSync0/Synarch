@@ -20,6 +20,9 @@ from synarch_state_service.repositories import StateRepositories
 LOCAL_RUNTIME_PROVIDER_ID = "provider-local-runtime-stub"
 LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
 LOCAL_RUNTIME_POLICY_ID = "policy-local-runtime-default"
+OPENROUTER_PROVIDER_ID = "provider-openrouter"
+OPENROUTER_DEEPSEEK_V4_MODEL_ID = "deepseek/deepseek-v4-flash"
+OPENROUTER_DEEPSEEK_V4_POLICY_ID = "policy-openrouter-deepseek-v4-flash"
 
 DEFAULT_DIVISIONS: tuple[DivisionRecord, ...] = (
     DivisionRecord(
@@ -275,6 +278,14 @@ DEFAULT_MODEL_PROVIDERS: tuple[ModelProviderConfig, ...] = (
         provider_type=AiProviderType.local,
         default_model_id=LOCAL_RUNTIME_MODEL_ID,
     ),
+    ModelProviderConfig(
+        id=OPENROUTER_PROVIDER_ID,
+        name="OpenRouter",
+        provider_type=AiProviderType.openrouter,
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env_var="OPENROUTER_API_KEY",
+        default_model_id=OPENROUTER_DEEPSEEK_V4_MODEL_ID,
+    ),
 )
 
 DEFAULT_MODEL_DEFINITIONS: tuple[ModelDefinition, ...] = (
@@ -288,6 +299,15 @@ DEFAULT_MODEL_DEFINITIONS: tuple[ModelDefinition, ...] = (
         currency="USD",
         supports_structured_output=True,
     ),
+    ModelDefinition(
+        id=OPENROUTER_DEEPSEEK_V4_MODEL_ID,
+        provider_id=OPENROUTER_PROVIDER_ID,
+        display_name="DeepSeek V4 Flash via OpenRouter",
+        input_cost_per_million_tokens=0.0,
+        output_cost_per_million_tokens=0.0,
+        currency="USD",
+        supports_structured_output=True,
+    ),
 )
 
 DEFAULT_MODEL_POLICIES: tuple[ModelPolicy, ...] = (
@@ -296,6 +316,15 @@ DEFAULT_MODEL_POLICIES: tuple[ModelPolicy, ...] = (
         name="Local runtime default",
         default_model_id=LOCAL_RUNTIME_MODEL_ID,
         allowed_model_ids=[LOCAL_RUNTIME_MODEL_ID],
+        max_cost_per_task=0.01,
+        max_cost_per_day=1.0,
+        currency="USD",
+    ),
+    ModelPolicy(
+        id=OPENROUTER_DEEPSEEK_V4_POLICY_ID,
+        name="OpenRouter DeepSeek V4 Flash default",
+        default_model_id=OPENROUTER_DEEPSEEK_V4_MODEL_ID,
+        allowed_model_ids=[OPENROUTER_DEEPSEEK_V4_MODEL_ID],
         max_cost_per_task=0.01,
         max_cost_per_day=1.0,
         currency="USD",

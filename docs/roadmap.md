@@ -314,7 +314,7 @@ Definition of done:
 
 ### M7. Model Gateway
 
-Status: Later, but soon after M5.
+Status: Partial.
 
 Goal: agents never talk directly to model providers.
 
@@ -325,6 +325,14 @@ Scope:
 - Support provider adapters in this order: fake deterministic provider, OpenAI/OpenRouter, Ollama.
 - Enforce per-agent and per-project budget limits.
 - Record events, cost, trace IDs, and failures.
+
+Progress:
+
+- Done: agent-runtime has an interim OpenRouter adapter for `deepseek/deepseek-v4-flash`.
+- Done: OpenRouter API keys are read only from `OPENROUTER_API_KEY`.
+- Done: runtime responses can include `ModelUsage`; gateway turns that into durable `CostRecord`.
+- Next: extract provider routing into a real `packages/model-gateway` service and enforce
+  `ModelPolicy`.
 
 Definition of done:
 

@@ -913,8 +913,7 @@ def apply_project_split_request(
         raise HTTPException(
             status_code=409,
             detail=(
-                "Project split request must be approved before application: "
-                f"{split_request.status}"
+                f"Project split request must be approved before application: {split_request.status}"
             ),
         )
 
@@ -1121,6 +1120,9 @@ def task_result_payload(result: AgentResult) -> dict[str, Any]:
         "memory_candidates": [
             memory_item.model_dump(mode="json") for memory_item in result.memory_candidates
         ],
+        "model_usage": result.model_usage.model_dump(mode="json")
+        if result.model_usage is not None
+        else None,
     }
 
 

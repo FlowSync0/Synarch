@@ -42,6 +42,22 @@ Responsibilities:
 
 Agents should not hold provider API keys or know provider-specific request formats.
 
+Current interim slice:
+
+- agent-runtime can run in `AGENT_RUNTIME_MODE=openrouter`
+- OpenRouter calls use `OPENROUTER_API_KEY` from the environment, never committed config
+- default test model is `deepseek/deepseek-v4-flash`
+- runtime returns `ModelUsage`; gateway converts it into durable `CostRecord`
+
+Local OpenRouter smoke tests should be opt-in:
+
+```bash
+export OPENROUTER_API_KEY="..."
+export AGENT_RUNTIME_MODE=openrouter
+export TASK_RUNNER_PROVIDER_ID=provider-openrouter
+export TASK_RUNNER_MODEL_ID=deepseek/deepseek-v4-flash
+```
+
 ## Priority 3: Org Lifecycle
 
 AI employees are mutable runtime entities, not static files.

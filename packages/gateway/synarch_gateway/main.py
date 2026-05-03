@@ -28,6 +28,10 @@ from .state_client import (
     StateServiceUnavailable,
 )
 from .task_runner import (
+    LOCAL_RUNTIME_INPUT_COST_PER_MILLION,
+    LOCAL_RUNTIME_MODEL_ID,
+    LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION,
+    LOCAL_RUNTIME_PROVIDER_ID,
     HttpAgentRuntimeClient,
     HttpControlPlaneClient,
     HttpMemoryClient,
@@ -46,6 +50,10 @@ class Settings(BaseSettings):
     event_service_url: str = "http://localhost:8040"
     agent_runtime_url: str = "http://localhost:8050"
     task_runner_memory_token_budget: int = 1200
+    task_runner_provider_id: str = LOCAL_RUNTIME_PROVIDER_ID
+    task_runner_model_id: str = LOCAL_RUNTIME_MODEL_ID
+    task_runner_input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
+    task_runner_output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
 
 
 settings = Settings()
@@ -88,6 +96,10 @@ def get_task_runner() -> TaskRunner:
             timeout_seconds=settings.state_service_timeout_seconds,
         ),
         memory_token_budget=settings.task_runner_memory_token_budget,
+        provider_id=settings.task_runner_provider_id,
+        model_id=settings.task_runner_model_id,
+        input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
+        output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
     )
 
 

@@ -99,6 +99,10 @@ class TaskRunner:
     memory: MemoryClient
     runtime: AgentRuntimeClient
     memory_token_budget: int = 1200
+    provider_id: str = LOCAL_RUNTIME_PROVIDER_ID
+    model_id: str = LOCAL_RUNTIME_MODEL_ID
+    input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
+    output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
 
     def run_next(self, *, trace_id: str, headers: dict[str, str]) -> TaskRunResult:
         task = next_ready_task(self.state.list_tasks())
@@ -120,6 +124,8 @@ class TaskRunner:
                 task=started_task,
                 world_view=world_view,
                 memory_context=memory_context,
+                provider_id=self.provider_id,
+                model_id=self.model_id,
                 trace_id=trace_id,
             ),
             headers=headers,
@@ -130,6 +136,8 @@ class TaskRunner:
                     task=started_task,
                     world_view=world_view,
                     memory_context=memory_context,
+                    provider_id=self.provider_id,
+                    model_id=self.model_id,
                 )
             )
         except (TaskRunnerRequestError, TaskRunnerUnavailable) as error:
@@ -137,6 +145,8 @@ class TaskRunner:
                 model_call_failed_event(
                     task=started_task,
                     world_view=world_view,
+                    provider_id=self.provider_id,
+                    model_id=self.model_id,
                     trace_id=trace_id,
                     error=str(error),
                 ),
@@ -149,6 +159,10 @@ class TaskRunner:
             world_view=world_view,
             memory_context=memory_context,
             agent_result=agent_result,
+            provider_id=self.provider_id,
+            model_id=self.model_id,
+            input_cost_per_million_tokens=self.input_cost_per_million_tokens,
+            output_cost_per_million_tokens=self.output_cost_per_million_tokens,
             trace_id=trace_id,
         )
         completed_event = self.state.create_event(
@@ -201,8 +215,26 @@ def cost_record_for_run(
     world_view: LocalWorldView,
     memory_context: MemoryContext,
     agent_result: AgentResult,
+    provider_id: str,
+    model_id: str,
+    input_cost_per_million_tokens: float,
+    output_cost_per_million_tokens: float,
     trace_id: str,
 ) -> CostRecord:
+    if agent_result.model_usage is not None:
+        return CostRecord(
+            provider_id=agent_result.model_usage.provider_id,
+            model_id=agent_result.model_usage.model_id,
+            agent_id=agent_result.agent_id,
+            project_id=task.project_id,
+            task_id=task.id,
+            trace_id=trace_id,
+            input_tokens=agent_result.model_usage.input_tokens,
+            output_tokens=agent_result.model_usage.output_tokens,
+            total_cost=agent_result.model_usage.total_cost,
+            currency=agent_result.model_usage.currency,
+        )
+
     input_tokens = estimated_tokens(
         task.model_dump_json(),
         world_view.model_dump_json(),
@@ -210,13 +242,13 @@ def cost_record_for_run(
     )
     output_tokens = estimated_tokens(agent_result.model_dump_json())
     total_cost = round(
-        (input_tokens * LOCAL_RUNTIME_INPUT_COST_PER_MILLION / 1_000_000)
-        + (output_tokens * LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION / 1_000_000),
+        (input_tokens * input_cost_per_million_tokens / 1_000_000)
+        + (output_tokens * output_cost_per_million_tokens / 1_000_000),
         8,
     )
     return CostRecord(
-        provider_id=LOCAL_RUNTIME_PROVIDER_ID,
-        model_id=LOCAL_RUNTIME_MODEL_ID,
+        provider_id=provider_id,
+        model_id=model_id,
         agent_id=agent_result.agent_id,
         project_id=task.project_id,
         task_id=task.id,
@@ -245,6 +277,8 @@ def model_call_started_event(
     task: TaskRecord,
     world_view: LocalWorldView,
     memory_context: MemoryContext,
+    provider_id: str,
+    model_id: str,
     trace_id: str,
 ) -> EventRecord:
     return EventRecord(
@@ -253,8 +287,8 @@ def model_call_started_event(
         target=task.project_id,
         payload={
             "task_id": task.id,
-            "provider_id": LOCAL_RUNTIME_PROVIDER_ID,
-            "model_id": LOCAL_RUNTIME_MODEL_ID,
+            "provider_id": provider_id,
+            "model_id": model_id,
             "purpose": "task.run",
             "input_tokens_estimate": estimated_tokens(
                 task.model_dump_json(),
@@ -297,6 +331,8 @@ def model_call_failed_event(
     *,
     task: TaskRecord,
     world_view: LocalWorldView,
+    provider_id: str,
+    model_id: str,
     trace_id: str,
     error: str,
 ) -> EventRecord:
@@ -306,8 +342,8 @@ def model_call_failed_event(
         target=task.project_id,
         payload={
             "task_id": task.id,
-            "provider_id": LOCAL_RUNTIME_PROVIDER_ID,
-            "model_id": LOCAL_RUNTIME_MODEL_ID,
+            "provider_id": provider_id,
+            "model_id": model_id,
             "error": error,
         },
         trace_id=trace_id,

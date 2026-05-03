@@ -336,6 +336,15 @@ class ModelCallRequest(SynarchModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelUsage(SynarchModel):
+    provider_id: str
+    model_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+
 class CostRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("cost"))
     provider_id: str
@@ -404,6 +413,9 @@ class AgentTaskRequest(SynarchModel):
     task: TaskRecord
     world_view: LocalWorldView
     memory_context: MemoryContext | None = None
+    provider_id: str | None = None
+    model_id: str | None = None
+    max_output_tokens: int | None = None
 
 
 class AgentResult(SynarchModel):
@@ -414,6 +426,7 @@ class AgentResult(SynarchModel):
     sub_tasks_created: list[TaskDraft] = Field(default_factory=list)
     events_emitted: list[EventRecord] = Field(default_factory=list)
     memory_candidates: list[MemoryItem] = Field(default_factory=list)
+    model_usage: ModelUsage | None = None
     summary: str
 
 

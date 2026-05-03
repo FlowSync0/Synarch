@@ -1,5 +1,8 @@
+import httpx
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
+from synarch_agent_runtime import main as runtime_main
 from synarch_agent_runtime.main import app
 
 
@@ -47,3 +50,78 @@ def test_runtime_completes_direction_clarification_step() -> None:
     payload = response.json()
     assert payload["agent_id"] == "agent-direction"
     assert payload["status"] == "completed"
+
+
+def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "openrouter")
+    monkeypatch.setattr(runtime_main.settings, "openrouter_input_cost_per_million_tokens", 0.10)
+    monkeypatch.setattr(runtime_main.settings, "openrouter_output_cost_per_million_tokens", 0.20)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        assert url == "https://openrouter.ai/api/v1/chat/completions"
+        assert headers["Authorization"] == "Bearer test-key"
+        assert json["model"] == "deepseek/deepseek-v4-flash"
+        assert timeout == runtime_main.settings.openrouter_timeout_seconds
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"status":"needs_review",'
+                                '"summary":"DeepSeek prepared the work package.",'
+                                '"actions_taken":["Reviewed task and context"],'
+                                '"memory_candidates":["Remember supplier MOQ constraint."]}'
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_openrouter_demo",
+                "project_id": "project_demo",
+                "title": "Draft plan",
+                "assigned_agent_id": "agent-dev",
+                "acceptance_criteria": ["Plan has a verifiable next action."],
+            },
+            "world_view": {
+                "agent_id": "agent-dev",
+                "role": "Code and infra",
+                "division": "dev",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "needs_review"
+    assert payload["summary"] == "DeepSeek prepared the work package."
+    assert payload["actions_taken"] == ["Reviewed task and context"]
+    assert payload["memory_candidates"][0]["content"] == "Remember supplier MOQ constraint."
+    assert payload["model_usage"] == {
+        "provider_id": "provider-openrouter",
+        "model_id": "deepseek/deepseek-v4-flash",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "total_cost": 0.00002,
+        "currency": "USD",
+    }

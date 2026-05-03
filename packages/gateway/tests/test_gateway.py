@@ -11,6 +11,7 @@ from synarch_models import (
     EventRecord,
     LocalWorldView,
     MemoryContext,
+    ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
@@ -239,6 +240,13 @@ class FakeAgentRuntimeClient:
             task_id=request.task.id,
             status=TaskStatus.needs_review,
             actions_taken=["Loaded LocalWorldView", "Prepared execution plan"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=123,
+                output_tokens=45,
+                total_cost=0.000021,
+            ),
             summary="Runtime stub prepared the task for review.",
         )
 
@@ -400,7 +408,9 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
     assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
-    assert payload["cost_records"][0]["total_cost"] > 0
+    assert payload["cost_records"][0]["input_tokens"] == 123
+    assert payload["cost_records"][0]["output_tokens"] == 45
+    assert payload["cost_records"][0]["total_cost"] == 0.000021
     assert [event.type for event in state_client.events] == [
         "model_call.started",
         "model_call.completed",

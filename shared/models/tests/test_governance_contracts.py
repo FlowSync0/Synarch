@@ -12,6 +12,7 @@ from synarch_models import (
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
+    ModelUsage,
     ServiceDefinition,
     ServiceKind,
 )
@@ -116,16 +117,23 @@ def test_agent_soul_captures_persistent_identity() -> None:
 
 
 def test_cost_and_audit_records_have_traceable_scope() -> None:
+    usage = ModelUsage(
+        provider_id="provider-openrouter",
+        model_id="deepseek/deepseek-v4-flash",
+        input_tokens=1200,
+        output_tokens=350,
+        total_cost=0.000266,
+    )
     cost = CostRecord(
         provider_id="provider-openrouter",
-        model_id="openrouter/deepseek/deepseek-chat",
+        model_id=usage.model_id,
         agent_id="agent-finance",
         project_id="project_invoice",
         task_id="task_extract",
         trace_id="trace_123",
-        input_tokens=1200,
-        output_tokens=350,
-        total_cost=0.000266,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_cost=usage.total_cost,
     )
     audit = AuditLogRecord(
         actor_type=ActorType.agent,
@@ -142,6 +150,7 @@ def test_cost_and_audit_records_have_traceable_scope() -> None:
         capabilities=["model.route", "cost.record", "model.policy.enforce"],
     )
 
+    assert usage.model_id == "deepseek/deepseek-v4-flash"
     assert cost.model_dump(mode="json")["trace_id"] == "trace_123"
     assert audit.model_dump(mode="json")["actor_type"] == "agent"
     assert service.model_dump(mode="json")["capabilities"] == [

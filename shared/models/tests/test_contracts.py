@@ -6,6 +6,7 @@ from synarch_models import (
     GoalEnvelope,
     LocalWorldView,
     MemoryContext,
+    ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
@@ -39,6 +40,13 @@ def test_agent_result_is_serializable() -> None:
         task_id=task.id,
         status=TaskStatus.completed,
         events_emitted=[event],
+        model_usage=ModelUsage(
+            provider_id="provider-openrouter",
+            model_id="deepseek/deepseek-v4-flash",
+            input_tokens=10,
+            output_tokens=20,
+            total_cost=0.00001,
+        ),
         summary="Task completed.",
     )
 
@@ -46,6 +54,7 @@ def test_agent_result_is_serializable() -> None:
 
     assert payload["status"] == "completed"
     assert payload["events_emitted"][0]["type"] == "task.completed"
+    assert payload["model_usage"]["model_id"] == "deepseek/deepseek-v4-flash"
 
 
 def test_task_run_result_captures_execution_boundary() -> None:
