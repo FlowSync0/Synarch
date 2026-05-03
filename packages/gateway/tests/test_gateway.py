@@ -11,6 +11,7 @@ from synarch_models import (
     EventRecord,
     LocalWorldView,
     MemoryContext,
+    MemoryItem,
     ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
@@ -238,10 +239,15 @@ class FakeControlPlaneClient:
 class FakeMemoryClient:
     def __init__(self) -> None:
         self.contexts: list[MemoryContext] = []
+        self.items: list[MemoryItem] = []
 
     def assemble_context(self, context: MemoryContext) -> MemoryContext:
         self.contexts.append(context)
         return context.model_copy(update={"summary": "Fake context assembled."})
+
+    def create_memory_item(self, item: MemoryItem) -> MemoryItem:
+        self.items.append(item)
+        return item
 
 
 class FakeAgentRuntimeClient:
@@ -255,6 +261,12 @@ class FakeAgentRuntimeClient:
             task_id=request.task.id,
             status=TaskStatus.needs_review,
             actions_taken=["Loaded LocalWorldView", "Prepared execution plan"],
+            memory_candidates=[
+                MemoryItem(
+                    scope="global",
+                    content="Remember that this project needs explicit acceptance criteria.",
+                )
+            ],
             model_usage=ModelUsage(
                 provider_id=request.provider_id or "provider-local-runtime-stub",
                 model_id=request.model_id or "model-local-runtime-stub",
@@ -433,6 +445,9 @@ def test_run_next_task_executes_first_ready_task() -> None:
         "agent:agent-dev",
         "project:project_demo",
     ]
+    assert memory_client.items[0].scope == "project:project_demo"
+    assert memory_client.items[0].agent_id == "agent-dev"
+    assert memory_client.items[0].project_id == "project_demo"
     assert payload["cost_records"][0]["provider_id"] == "provider-local-runtime-stub"
     assert payload["cost_records"][0]["task_id"] == payload["task"]["id"]
     assert payload["cost_records"][0]["input_tokens"] == 123
@@ -441,10 +456,14 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert [event.type for event in state_client.events] == [
         "model_call.started",
         "model_call.completed",
+        "memory.candidate_created",
     ]
     assert [event["type"] for event in payload["model_call_events"]] == [
         "model_call.started",
         "model_call.completed",
+    ]
+    assert [event["type"] for event in payload["memory_events"]] == [
+        "memory.candidate_created",
     ]
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
 

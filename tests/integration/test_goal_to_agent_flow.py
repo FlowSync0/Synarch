@@ -22,8 +22,10 @@ from synarch_models import (
     EventRecord,
     LocalWorldView,
     MemoryContext,
+    MemoryItem,
     ProjectComplexityAssessment,
     ProjectRecord,
+    ProjectSplitApplication,
     ProjectWorkspace,
     TaskRecord,
 )
@@ -124,6 +126,14 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return ProjectComplexityAssessment.model_validate(response.json())
 
+    def apply_project_split(
+        self,
+        split_request_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> ProjectSplitApplication:
+        raise NotImplementedError(split_request_id)
+
     def get_project(self, project_id: str) -> ProjectRecord:
         response = self.client.get(f"/projects/{project_id}")
         if response.status_code != 200:
@@ -199,6 +209,12 @@ class MemoryServiceTestClient:
         if response.status_code != 200:
             raise TaskRunnerRequestError(response.status_code, response.json())
         return MemoryContext.model_validate(response.json())
+
+    def create_memory_item(self, item: MemoryItem) -> MemoryItem:
+        response = self.client.post("/memory-items", json=item.model_dump(mode="json"))
+        if response.status_code != 201:
+            raise TaskRunnerRequestError(response.status_code, response.json())
+        return MemoryItem.model_validate(response.json())
 
 
 class AgentRuntimeTestClient:

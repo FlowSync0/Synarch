@@ -11,6 +11,7 @@ from synarch_models import (
     EventType,
     LocalWorldView,
     MemoryContext,
+    MemoryItem,
     TaskRecord,
     TaskRunResult,
     TaskStatus,
@@ -46,6 +47,8 @@ class ControlPlaneClient(Protocol):
 class MemoryClient(Protocol):
     def assemble_context(self, context: MemoryContext) -> MemoryContext: ...
 
+    def create_memory_item(self, item: MemoryItem) -> MemoryItem: ...
+
 
 class AgentRuntimeClient(Protocol):
     def run_task(self, request: AgentTaskRequest) -> AgentResult: ...
@@ -76,6 +79,14 @@ class HttpMemoryClient:
             self.timeout_seconds,
         )
         return MemoryContext.model_validate(response)
+
+    def create_memory_item(self, item: MemoryItem) -> MemoryItem:
+        response = post_json(
+            f"{self.base_url.rstrip('/')}/memory-items",
+            item.model_dump(mode="json"),
+            self.timeout_seconds,
+        )
+        return MemoryItem.model_validate(response)
 
 
 @dataclass(frozen=True)
@@ -207,6 +218,13 @@ class TaskRunner:
             cost_record,
             headers=headers,
         )
+        memory_events = self.persist_memory_candidates(
+            task=recorded_task,
+            world_view=world_view,
+            agent_result=agent_result,
+            trace_id=trace_id,
+            headers=headers,
+        )
         return TaskRunResult(
             trace_id=trace_id,
             task=recorded_task,
@@ -215,8 +233,42 @@ class TaskRunner:
             memory_context=memory_context,
             agent_result=agent_result,
             model_call_events=[started_event, completed_event],
+            memory_events=memory_events,
             cost_records=[cost_record],
         )
+
+    def persist_memory_candidates(
+        self,
+        *,
+        task: TaskRecord,
+        world_view: LocalWorldView,
+        agent_result: AgentResult,
+        trace_id: str,
+        headers: dict[str, str],
+    ) -> list[EventRecord]:
+        events: list[EventRecord] = []
+        for candidate in agent_result.memory_candidates:
+            memory_item = self.memory.create_memory_item(
+                candidate.model_copy(
+                    update={
+                        "scope": f"project:{task.project_id}",
+                        "agent_id": world_view.agent_id,
+                        "project_id": task.project_id,
+                    }
+                )
+            )
+            events.append(
+                self.state.create_event(
+                    memory_candidate_created_event(
+                        task=task,
+                        world_view=world_view,
+                        memory_item=memory_item,
+                        trace_id=trace_id,
+                    ),
+                    headers=headers,
+                )
+            )
+        return events
 
 
 def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
@@ -369,6 +421,26 @@ def model_call_failed_event(
             "provider_id": provider_id,
             "model_id": model_id,
             "error": error,
+        },
+        trace_id=trace_id,
+    )
+
+
+def memory_candidate_created_event(
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    memory_item: MemoryItem,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.memory_candidate_created,
+        source_agent_id=world_view.agent_id,
+        target=task.project_id,
+        payload={
+            "task_id": task.id,
+            "memory_id": memory_item.id,
+            "scope": memory_item.scope,
         },
         trace_id=trace_id,
     )

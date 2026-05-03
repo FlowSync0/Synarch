@@ -439,4 +439,5 @@ class TaskRunResult(SynarchModel):
     memory_context: MemoryContext
     agent_result: AgentResult
     model_call_events: list[EventRecord] = Field(default_factory=list)
+    memory_events: list[EventRecord] = Field(default_factory=list)
     cost_records: list[CostRecord] = Field(default_factory=list)
