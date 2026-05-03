@@ -11,6 +11,8 @@ from synarch_models import (
     GoalEnvelope,
     GoalSubmissionResult,
     HealthResponse,
+    MemoryItem,
+    MemoryStatusUpdate,
     ProjectIntent,
     ProjectRecord,
     ProjectSplitApplication,
@@ -35,6 +37,7 @@ from .task_runner import (
     HttpAgentRuntimeClient,
     HttpControlPlaneClient,
     HttpMemoryClient,
+    MemoryClient,
     NoReadyTask,
     TaskRunner,
     TaskRunnerRequestError,
@@ -101,6 +104,13 @@ def get_task_runner() -> TaskRunner:
         model_id=settings.task_runner_model_id,
         input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
+    )
+
+
+def get_memory_client() -> MemoryClient:
+    return HttpMemoryClient(
+        settings.memory_service_url,
+        timeout_seconds=settings.state_service_timeout_seconds,
     )
 
 
@@ -197,6 +207,16 @@ def project_split_applier_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-project-split-applier",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def memory_reviewer_headers(request: Request, trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": request.headers.get(
+            "x-synarch-actor-type", ActorType.user.value
+        ),
+        "x-synarch-actor-id": request.headers.get("x-synarch-actor-id", "local-user"),
         "x-synarch-trace-id": trace_id,
     }
 
@@ -409,3 +429,44 @@ def run_next_task(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
+@app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)
+def update_memory_item_status(
+    item_id: str,
+    update: MemoryStatusUpdate,
+    request: Request,
+    memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
+) -> MemoryItem:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = memory_reviewer_headers(request, trace_id)
+    try:
+        memory_item = memory_client.update_memory_status(item_id, update)
+        state_client.create_event(
+            memory_status_updated_event(memory_item, trace_id),
+            headers=headers,
+        )
+        return memory_item
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory review dependency unavailable",
+        ) from error
+
+
+def memory_status_updated_event(memory_item: MemoryItem, trace_id: str) -> EventRecord:
+    return EventRecord(
+        type=EventType.memory_status_updated,
+        target=memory_item.project_id or memory_item.scope,
+        payload={
+            "memory_id": memory_item.id,
+            "scope": memory_item.scope,
+            "status": memory_item.status,
+            "project_id": memory_item.project_id,
+            "agent_id": memory_item.agent_id,
+        },
+        trace_id=trace_id,
+    )

@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from synarch_gateway.main import app, get_state_client, get_task_runner
+from synarch_gateway.main import app, get_memory_client, get_state_client, get_task_runner
 from synarch_gateway.state_client import StateServiceUnavailable
 from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
 from synarch_models import (
@@ -12,6 +12,7 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     MemoryItem,
+    MemoryStatusUpdate,
     ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
@@ -240,6 +241,7 @@ class FakeMemoryClient:
     def __init__(self) -> None:
         self.contexts: list[MemoryContext] = []
         self.items: list[MemoryItem] = []
+        self.items_by_id: dict[str, MemoryItem] = {}
 
     def assemble_context(self, context: MemoryContext) -> MemoryContext:
         self.contexts.append(context)
@@ -247,7 +249,14 @@ class FakeMemoryClient:
 
     def create_memory_item(self, item: MemoryItem) -> MemoryItem:
         self.items.append(item)
+        self.items_by_id[item.id] = item
         return item
+
+    def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem:
+        item = self.items_by_id[item_id]
+        updated = item.model_copy(update={"status": update.status})
+        self.items_by_id[item_id] = updated
+        return updated
 
 
 class FakeAgentRuntimeClient:
@@ -469,6 +478,49 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_update_memory_item_status_records_gateway_event() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-candidate"] = MemoryItem(
+        id="memory-candidate",
+        scope="project:project_demo",
+        content="Candidate memory.",
+        status="proposed",
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).patch(
+            "/memory-items/memory-candidate/status",
+            json={"status": "approved"},
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_memory_review_test",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "approved"
+    assert [event.type for event in state_client.events] == ["memory.status_updated"]
+    assert state_client.events[0].target == "project_demo"
+    assert state_client.events[0].payload == {
+        "memory_id": "memory-candidate",
+        "scope": "project:project_demo",
+        "status": "approved",
+        "project_id": "project_demo",
+        "agent_id": "agent-dev",
+    }
+    assert state_client.events[0].trace_id == "trace_memory_review_test"
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "hugo"
 
 
 def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -> None:

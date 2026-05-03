@@ -13,6 +13,7 @@ from synarch_models import (
     MemoryContext,
     MemoryItem,
     MemoryStatus,
+    MemoryStatusUpdate,
     TaskRecord,
     TaskRunResult,
     TaskStatus,
@@ -50,6 +51,8 @@ class MemoryClient(Protocol):
 
     def create_memory_item(self, item: MemoryItem) -> MemoryItem: ...
 
+    def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem: ...
+
 
 class AgentRuntimeClient(Protocol):
     def run_task(self, request: AgentTaskRequest) -> AgentResult: ...
@@ -85,6 +88,14 @@ class HttpMemoryClient:
         response = post_json(
             f"{self.base_url.rstrip('/')}/memory-items",
             item.model_dump(mode="json"),
+            self.timeout_seconds,
+        )
+        return MemoryItem.model_validate(response)
+
+    def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem:
+        response = patch_json(
+            f"{self.base_url.rstrip('/')}/memory-items/{item_id}/status",
+            update.model_dump(mode="json"),
             self.timeout_seconds,
         )
         return MemoryItem.model_validate(response)
@@ -479,6 +490,14 @@ def get_json(url: str, timeout_seconds: float) -> Any:
 def post_json(url: str, payload: dict[str, Any], timeout_seconds: float) -> Any:
     try:
         response = httpx.post(url, json=payload, timeout=timeout_seconds)
+    except httpx.HTTPError as error:
+        raise TaskRunnerUnavailable(str(error)) from error
+    return checked_json(response)
+
+
+def patch_json(url: str, payload: dict[str, Any], timeout_seconds: float) -> Any:
+    try:
+        response = httpx.patch(url, json=payload, timeout=timeout_seconds)
     except httpx.HTTPError as error:
         raise TaskRunnerUnavailable(str(error)) from error
     return checked_json(response)
