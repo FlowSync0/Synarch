@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -38,6 +38,9 @@ scheduler-tick:
 
 scheduler-loop:
 	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)" --loop --interval-seconds "$(SYNARCH_SCHEDULER_INTERVAL_SECONDS)"
+
+scheduler-worker:
+	docker compose up --build scheduler-worker
 
 lint:
 	$(PYTHON) -m ruff check .

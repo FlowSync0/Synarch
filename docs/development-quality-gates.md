@@ -65,7 +65,7 @@ GoalEnvelope
   -> Atomic task claim through state-service start endpoint
   -> Expired task lease recovery before each bounded ready-task batch
   -> Retry backoff prevents immediate re-execution after a lease expiry
-  -> Optional scheduler tick script for cron/server loops
+  -> Optional scheduler worker loop for cron/server execution
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Event Service timeline
 ```
@@ -93,9 +93,17 @@ Run one scheduler tick with:
 make scheduler-tick
 ```
 
-For a server loop, use `make scheduler-loop`; it still calls bounded gateway batches, so every loop
-has an explicit task limit and traceable result. Empty ticks are still recorded as `scheduler.tick`
-events and audit logs, which makes cron/server execution debuggable without needing a task to run.
+For a local server loop, use `make scheduler-loop`; it still calls bounded gateway batches, so every
+loop has an explicit task limit and traceable result. For the Docker worker service, use:
+
+```bash
+make scheduler-worker
+```
+
+The worker is not started by default because it may consume provider tokens when the runtime is in
+OpenRouter mode. Empty ticks are still recorded as `scheduler.tick` events and audit logs, which
+makes cron/server execution debuggable without needing a task to run. Worker stdout is structured
+JSON with `worker_id`, `tick`, `status`, timestamps, duration, and any tick error.
 If another scheduler claims a task first, the batch skips that task ID and keeps looking for ready
 work instead of failing the whole tick.
 Before each batch, the gateway asks state-service to recover expired leases. Expired tasks are

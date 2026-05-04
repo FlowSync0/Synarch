@@ -167,8 +167,11 @@ Implemented baseline:
 - State-service `/tasks/recover-expired-leases` requeues expired running tasks while attempts remain,
   sets `retry_after_at` with exponential backoff, and moves exhausted tasks to `needs_review` with
   `dead_letter_reason`, recording `task.lease_expired`.
-- `scripts/scheduler_tick.py` can run one bounded scheduler tick or a controlled server loop against
-  `/tasks/run-ready`, making cron-style execution possible without hiding autonomous behavior.
+- `scripts/scheduler_tick.py` and `synarch_gateway.scheduler_worker` can run one bounded scheduler
+  tick or a controlled server loop against `/tasks/run-ready`, making cron-style execution possible
+  without hiding autonomous behavior.
+- Docker Compose includes an opt-in `scheduler-worker` service that logs every tick as structured
+  JSON and keeps running after transient gateway failures.
 - Each scheduler tick is traceable through a `scheduler.tick` event and audit log, so an H24 loop can
   prove it checked for work even when it did not execute anything. Claim conflicts are returned in
   `skipped_task_ids` and included in the scheduler payload. Lease recoveries are included in

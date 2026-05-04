@@ -54,6 +54,23 @@ services:
       - event-service
       - agent-runtime
 
+  scheduler-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/gateway
+    command: python -m synarch_gateway.scheduler_worker --loop
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      SYNARCH_SCHEDULER_WORKER_ID: ${SYNARCH_SCHEDULER_WORKER_ID:-scheduler-worker-1}
+      SYNARCH_SCHEDULER_MAX_TASKS: ${SYNARCH_SCHEDULER_MAX_TASKS:-3}
+      SYNARCH_SCHEDULER_INTERVAL_SECONDS: ${SYNARCH_SCHEDULER_INTERVAL_SECONDS:-30}
+      SYNARCH_SCHEDULER_TIMEOUT_SECONDS: ${SYNARCH_SCHEDULER_TIMEOUT_SECONDS:-180}
+    depends_on:
+      - gateway
+
   control-plane:
     build:
       context: .
