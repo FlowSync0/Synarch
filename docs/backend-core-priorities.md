@@ -137,6 +137,7 @@ Objectives must become small ordered tasks before execution:
 - each task has acceptance criteria
 - dependencies are explicit
 - the runner executes only the next ready task
+- bounded runner batches can execute several ready tasks without becoming an uncontrolled daemon
 - blocked tasks leave a precise debug boundary
 
 Large projects should produce split requests when the task graph, context volume, cost, or external
@@ -153,6 +154,8 @@ Implemented baseline:
   active assignments, first planning tasks, `project_split.applied`, and audit log
 - `AgentResult.sub_tasks_created` is persisted by the task runner as child `TaskRecord` items with
   `parent_task_id`, dependencies, acceptance criteria, and `task.created` timeline events.
+- Gateway `/tasks/run-ready` executes a bounded ready-task batch, can be filtered by project, and
+  returns `max_tasks_reached` or `no_ready_task` as an explicit stop reason.
 
 ## Priority 8: Project Workspaces
 

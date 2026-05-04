@@ -74,10 +74,23 @@ task_payload="$(
 post_json "${STATE_SERVICE_URL}/projects" "$project_payload" >/dev/null
 post_json "${STATE_SERVICE_URL}/tasks" "$task_payload" >/dev/null
 
-run_response="$(
-  curl -fsS -X POST "${GATEWAY_URL}/tasks/${TASK_ID}/run" \
+batch_response="$(
+  curl -fsS -X POST "${GATEWAY_URL}/tasks/run-ready?project_id=${PROJECT_ID}&max_tasks=1" \
     -H "X-Synarch-Trace-Id: ${TRACE_ID}"
 )"
+
+printf "%s" "$batch_response" | jq -e \
+  --arg project_id "$PROJECT_ID" \
+  --arg trace_id "$TRACE_ID" \
+  '
+    (.trace_id == $trace_id) and
+    (.project_id == $project_id) and
+    (.max_tasks == 1) and
+    (.stop_reason == "max_tasks_reached") and
+    (.runs | length == 1)
+  ' >/dev/null
+
+run_response="$(printf "%s" "$batch_response" | jq -c '.runs[0]')"
 
 printf "%s" "$run_response" | jq -e \
   --arg project_id "$PROJECT_ID" \
@@ -120,11 +133,13 @@ printf "%s" "$run_response" | jq \
   --arg project_id "$PROJECT_ID" \
   --arg task_id "$TASK_ID" \
   --arg trace_id "$TRACE_ID" \
+  --arg stop_reason "$(printf "%s" "$batch_response" | jq -r '.stop_reason')" \
   '{
     passed: true,
     project_id: $project_id,
     task_id: $task_id,
     trace_id: $trace_id,
+    batch_stop_reason: $stop_reason,
     task_status: .task.status,
     agent_status: .agent_result.status,
     created_sub_tasks: [.created_sub_tasks[] | {id, title, depends_on, acceptance_criteria_count: (.acceptance_criteria | length)}],

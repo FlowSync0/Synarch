@@ -395,6 +395,28 @@ class FakeAgentRuntimeClient:
         )
 
 
+class CompletingAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Completed deterministic task"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=10,
+                output_tokens=5,
+                total_cost=0.000001,
+            ),
+            summary=f"Completed {request.task.title}.",
+        )
+
+
 class SubTaskAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -889,6 +911,145 @@ def test_run_task_by_id_executes_requested_task() -> None:
     assert state_client.tasks[0].status == TaskStatus.queued
     assert state_client.tasks[1].id == "task_requested"
     assert state_client.tasks[1].status == TaskStatus.needs_review
+
+
+def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.extend(
+        [
+            ProjectRecord(
+                id="project_batch",
+                title="Batch run",
+                goal="Run a small ready chain.",
+                owner_agent_id="agent-direction",
+            ),
+            ProjectRecord(
+                id="project_other",
+                title="Other project",
+                goal="Must not be run by a project-filtered batch.",
+                owner_agent_id="agent-direction",
+            ),
+        ]
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_batch_first",
+                project_id="project_batch",
+                title="First batch task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["First task completes."],
+                sequence=1,
+            ),
+            TaskRecord(
+                id="task_batch_second",
+                project_id="project_batch",
+                title="Second batch task",
+                assigned_agent_id="agent-dev",
+                depends_on=["task_batch_first"],
+                acceptance_criteria=["Second task completes after first."],
+                sequence=2,
+            ),
+            TaskRecord(
+                id="task_other_ready",
+                project_id="project_other",
+                title="Other ready task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Other task remains queued."],
+            ),
+        ]
+    )
+    runtime_client = CompletingAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_batch", "max_tasks": 5},
+            headers={"X-Synarch-Trace-Id": "trace_batch_run"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["trace_id"] == "trace_batch_run"
+    assert payload["project_id"] == "project_batch"
+    assert payload["max_tasks"] == 5
+    assert payload["stop_reason"] == "no_ready_task"
+    assert [run["task"]["id"] for run in payload["runs"]] == [
+        "task_batch_first",
+        "task_batch_second",
+    ]
+    assert [request.task.id for request in runtime_client.requests] == [
+        "task_batch_first",
+        "task_batch_second",
+    ]
+    assert [task.status for task in state_client.tasks] == [
+        TaskStatus.completed,
+        TaskStatus.completed,
+        TaskStatus.queued,
+    ]
+
+
+def test_run_ready_tasks_stops_at_max_tasks() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_limited",
+            title="Limited batch run",
+            goal="Stop after one task even when more work is ready.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_limited_first",
+                project_id="project_limited",
+                title="First limited task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["First task completes."],
+            ),
+            TaskRecord(
+                id="task_limited_second",
+                project_id="project_limited",
+                title="Second limited task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Second task waits for another batch."],
+            ),
+        ]
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=CompletingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_limited", "max_tasks": 1},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "max_tasks_reached"
+    assert [run["task"]["id"] for run in payload["runs"]] == ["task_limited_first"]
+    assert [task.status for task in state_client.tasks] == [
+        TaskStatus.completed,
+        TaskStatus.queued,
+    ]
 
 
 def test_list_memory_items_filters_review_queue() -> None:

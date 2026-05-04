@@ -61,6 +61,7 @@ GoalEnvelope
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
   -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created
+  -> Optional bounded ready-task batch through Gateway /tasks/run-ready
   -> Event Service timeline
 ```
 

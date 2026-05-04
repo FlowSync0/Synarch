@@ -16,6 +16,7 @@ from synarch_models import (
     MemoryStatusUpdate,
     TaskDraft,
     TaskRecord,
+    TaskRunBatchResult,
     TaskRunResult,
     TaskStatus,
 )
@@ -164,6 +165,31 @@ class TaskRunner:
             raise NoReadyTask("No queued task is ready to run")
 
         return self.run_task(task.id, trace_id=trace_id, headers=headers)
+
+    def run_ready(
+        self,
+        *,
+        max_tasks: int,
+        trace_id: str,
+        headers: dict[str, str],
+        project_id: str | None = None,
+    ) -> TaskRunBatchResult:
+        runs: list[TaskRunResult] = []
+        stop_reason = "max_tasks_reached"
+        while len(runs) < max_tasks:
+            task = next_ready_task(self.state.list_tasks(project_id=project_id))
+            if task is None:
+                stop_reason = "no_ready_task"
+                break
+            runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
+
+        return TaskRunBatchResult(
+            trace_id=trace_id,
+            max_tasks=max_tasks,
+            project_id=project_id,
+            stop_reason=stop_reason,
+            runs=runs,
+        )
 
     def run_task(
         self,

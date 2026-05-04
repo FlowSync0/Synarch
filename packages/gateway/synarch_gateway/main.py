@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
@@ -29,6 +29,7 @@ from synarch_models import (
     RoutingDecision,
     TaskDraft,
     TaskRecord,
+    TaskRunBatchResult,
     TaskRunResult,
     ToolCallRequest,
     ToolResult,
@@ -469,6 +470,27 @@ def run_task_by_id(
     trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
     try:
         return runner.run_task(task_id, trace_id=trace_id, headers=service_headers(trace_id))
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
+@app.post("/tasks/run-ready", response_model=TaskRunBatchResult)
+def run_ready_tasks(
+    request: Request,
+    max_tasks: int = Query(default=3, ge=1, le=20),
+    project_id: str | None = None,
+    runner: TaskRunner = Depends(get_task_runner),
+) -> TaskRunBatchResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    try:
+        return runner.run_ready(
+            max_tasks=max_tasks,
+            trace_id=trace_id,
+            headers=service_headers(trace_id),
+            project_id=project_id,
+        )
     except (StateServiceRequestError, TaskRunnerRequestError) as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:

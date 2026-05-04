@@ -511,6 +511,14 @@ class TaskRunResult(SynarchModel):
     cost_records: list[CostRecord] = Field(default_factory=list)
 
 
+class TaskRunBatchResult(SynarchModel):
+    trace_id: str
+    max_tasks: int
+    project_id: str | None = None
+    stop_reason: str
+    runs: list[TaskRunResult] = Field(default_factory=list)
+
+
 class ProjectTimeline(SynarchModel):
     project_id: str
     project: ProjectRecord
