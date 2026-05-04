@@ -23,7 +23,7 @@ from synarch_models import (
     TaskStatus,
 )
 
-from .state_client import StateClient
+from .state_client import StateClient, StateServiceRequestError
 
 LOCAL_RUNTIME_PROVIDER_ID = "provider-local-runtime-stub"
 LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
@@ -177,13 +177,22 @@ class TaskRunner:
         project_id: str | None = None,
     ) -> TaskRunBatchResult:
         runs: list[TaskRunResult] = []
+        skipped_task_ids: list[str] = []
         stop_reason = "max_tasks_reached"
         while len(runs) < max_tasks:
-            task = next_ready_task(self.state.list_tasks(project_id=project_id))
+            task = next_ready_task(
+                self.state.list_tasks(project_id=project_id),
+                excluded_task_ids=set(skipped_task_ids),
+            )
             if task is None:
                 stop_reason = "no_ready_task"
                 break
-            runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
+            try:
+                runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
+            except StateServiceRequestError as error:
+                if not is_task_claim_conflict(error):
+                    raise
+                skipped_task_ids.append(task.id)
 
         batch_result = TaskRunBatchResult(
             trace_id=trace_id,
@@ -191,6 +200,7 @@ class TaskRunner:
             project_id=project_id,
             stop_reason=stop_reason,
             runs=runs,
+            skipped_task_ids=skipped_task_ids,
         )
         scheduler_event = self.state.create_event(
             scheduler_tick_event(batch_result),
@@ -473,9 +483,16 @@ def deduplicate(values: list[str]) -> list[str]:
     return result
 
 
-def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
+def next_ready_task(
+    tasks: list[TaskRecord],
+    *,
+    excluded_task_ids: set[str] | None = None,
+) -> TaskRecord | None:
+    excluded_task_ids = excluded_task_ids or set()
     task_by_id = {task.id: task for task in tasks}
     for task in tasks:
+        if task.id in excluded_task_ids:
+            continue
         if task.status != TaskStatus.queued:
             continue
         if all(
@@ -485,6 +502,15 @@ def next_ready_task(tasks: list[TaskRecord]) -> TaskRecord | None:
         ):
             return task
     return None
+
+
+def is_task_claim_conflict(error: StateServiceRequestError) -> bool:
+    if error.status_code != 409:
+        return False
+    detail = str(error.detail)
+    return detail.startswith("Task is already ") or detail.startswith(
+        "Task dependencies are not completed:"
+    )
 
 
 def cost_record_for_run(
@@ -677,6 +703,8 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
         "stop_reason": batch_result.stop_reason,
         "run_count": len(batch_result.runs),
         "task_ids": [run.task.id for run in batch_result.runs],
+        "skipped_task_ids": batch_result.skipped_task_ids,
+        "skipped_task_count": len(batch_result.skipped_task_ids),
         "created_sub_task_count": sum(
             len(run.created_sub_tasks) for run in batch_result.runs
         ),

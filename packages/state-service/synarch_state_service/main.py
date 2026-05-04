@@ -99,6 +99,15 @@ def update_record[RecordT](
     return repository.update(record_id, record)
 
 
+def update_record_if[RecordT](
+    repository: RecordRepository[RecordT],
+    record_id: str,
+    record: RecordT,
+    expected: dict[str, object],
+) -> RecordT | None:
+    return repository.update_if(record_id, record, expected)
+
+
 def audit_context_from_request(request: Request) -> AuditContext | None:
     actor_id = request.headers.get("x-synarch-actor-id")
     if actor_id is None:
@@ -1111,12 +1120,17 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
 
     audit_context = audit_context_from_request(request)
     trace_id = request.headers.get("x-synarch-trace-id")
-    record = update_record(
+    expected_status = task.status
+    record = update_record_if(
         REPOSITORIES.tasks,
         task_id,
         task.model_copy(update={"status": TaskStatus.running}),
-        "task",
+        {"status": expected_status},
     )
+    if record is None:
+        current_task = read_record(REPOSITORIES.tasks, task_id, "task")
+        raise HTTPException(status_code=409, detail=f"Task is already {current_task.status}")
+
     create_domain_event(
         EventRecord(
             type=EventType.task_started,

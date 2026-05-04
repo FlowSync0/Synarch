@@ -158,10 +158,13 @@ Implemented baseline:
   `parent_task_id`, dependencies, acceptance criteria, and `task.created` timeline events.
 - Gateway `/tasks/run-ready` executes a bounded ready-task batch, can be filtered by project, and
   returns `max_tasks_reached` or `no_ready_task` as an explicit stop reason.
+- State-service task start uses a conditional status update, so only one scheduler can claim a
+  queued task even under concurrent start attempts.
 - `scripts/scheduler_tick.py` can run one bounded scheduler tick or a controlled server loop against
   `/tasks/run-ready`, making cron-style execution possible without hiding autonomous behavior.
 - Each scheduler tick is traceable through a `scheduler.tick` event and audit log, so an H24 loop can
-  prove it checked for work even when it did not execute anything.
+  prove it checked for work even when it did not execute anything. Claim conflicts are returned in
+  `skipped_task_ids` and included in the scheduler payload.
 
 ## Priority 8: Project Workspaces
 

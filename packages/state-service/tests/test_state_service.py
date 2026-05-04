@@ -178,6 +178,43 @@ def test_task_start_updates_status_and_writes_event_and_audit() -> None:
     assert audit["target_id"] == task["id"]
 
 
+def test_task_start_conflict_does_not_write_duplicate_event_or_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_start_conflict"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Start conflict",
+            "goal": "Only one scheduler should claim a task.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(project_response.json()["id"], "Claim once"),
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+
+    headers = {
+        "X-Synarch-Actor-Type": "service",
+        "X-Synarch-Actor-Id": "gateway-task-runner",
+        "X-Synarch-Trace-Id": trace_id,
+    }
+    first_start = client.post(f"/tasks/{task['id']}/start", headers=headers)
+    second_start = client.post(f"/tasks/{task['id']}/start", headers=headers)
+
+    assert first_start.status_code == 200
+    assert second_start.status_code == 409
+    assert second_start.json()["detail"] == "Task is already running"
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["task.started"]
+    assert [audit["action"] for audit in audit_logs] == ["task.started"]
+
+
 def test_events_are_listed_chronologically_for_trace() -> None:
     client = TestClient(app)
     trace_id = "trace-event-order"

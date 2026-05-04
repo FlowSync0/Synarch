@@ -7,7 +7,7 @@ from synarch_gateway.main import (
     get_state_client,
     get_task_runner,
 )
-from synarch_gateway.state_client import StateServiceUnavailable
+from synarch_gateway.state_client import StateServiceRequestError, StateServiceUnavailable
 from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
 from synarch_models import (
     AgentProjectAssignment,
@@ -314,6 +314,29 @@ class FailingStateClient(FakeStateClient):
         headers: dict[str, str],
     ) -> ProjectRecord:
         raise StateServiceUnavailable("state-service offline")
+
+
+class ClaimConflictStateClient(FakeStateClient):
+    def __init__(self, conflict_task_id: str) -> None:
+        super().__init__()
+        self.conflict_task_id = conflict_task_id
+        self.conflict_raised = False
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        if task_id == self.conflict_task_id and not self.conflict_raised:
+            self.conflict_raised = True
+            self.headers.append(headers)
+            task = next(task for task in self.tasks if task.id == task_id)
+            self.tasks[self.tasks.index(task)] = task.model_copy(
+                update={"status": TaskStatus.running}
+            )
+            raise StateServiceRequestError(409, "Task is already running")
+        return super().start_task(task_id, headers=headers)
 
 
 class FakeControlPlaneClient:
@@ -1063,6 +1086,66 @@ def test_run_ready_tasks_stops_at_max_tasks() -> None:
     ]
 
 
+def test_run_ready_tasks_skips_claim_conflict_and_continues() -> None:
+    state_client = ClaimConflictStateClient("task_claimed_elsewhere")
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_claim_conflict",
+            title="Claim conflict",
+            goal="Another scheduler may claim the first task.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_claimed_elsewhere",
+                project_id="project_claim_conflict",
+                title="Claimed elsewhere",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Conflict is skipped."],
+            ),
+            TaskRecord(
+                id="task_after_conflict",
+                project_id="project_claim_conflict",
+                title="Run after conflict",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Next ready task still runs."],
+            ),
+        ]
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=CompletingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_claim_conflict", "max_tasks": 2},
+            headers={"X-Synarch-Trace-Id": "trace_claim_conflict"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "no_ready_task"
+    assert payload["skipped_task_ids"] == ["task_claimed_elsewhere"]
+    assert [run["task"]["id"] for run in payload["runs"]] == ["task_after_conflict"]
+    assert payload["scheduler_event"]["payload"]["skipped_task_count"] == 1
+    assert payload["scheduler_event"]["payload"]["skipped_task_ids"] == [
+        "task_claimed_elsewhere"
+    ]
+    assert [task.status for task in state_client.tasks] == [
+        TaskStatus.running,
+        TaskStatus.completed,
+    ]
+
+
 def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
     state_client = FakeStateClient()
     runner = TaskRunner(
@@ -1094,6 +1177,8 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "stop_reason": "no_ready_task",
         "run_count": 0,
         "task_ids": [],
+        "skipped_task_ids": [],
+        "skipped_task_count": 0,
         "created_sub_task_count": 0,
         "cost_ids": [],
     }

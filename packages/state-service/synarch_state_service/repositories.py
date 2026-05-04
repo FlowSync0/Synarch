@@ -30,6 +30,13 @@ class RecordRepository[RecordT](Protocol):
 
     def update(self, record_id: str, record: RecordT) -> RecordT: ...
 
+    def update_if(
+        self,
+        record_id: str,
+        record: RecordT,
+        expected: dict[str, object],
+    ) -> RecordT | None: ...
+
     def exists(self, record_id: str) -> bool: ...
 
     def get(self, record_id: str) -> RecordT | None: ...
@@ -46,6 +53,21 @@ class InMemoryRecordRepository[RecordT]:
         return record
 
     def update(self, record_id: str, record: RecordT) -> RecordT:
+        self.records[record_id] = record
+        return record
+
+    def update_if(
+        self,
+        record_id: str,
+        record: RecordT,
+        expected: dict[str, object],
+    ) -> RecordT | None:
+        current = self.records.get(record_id)
+        if current is None:
+            return None
+        for field_name, expected_value in expected.items():
+            if getattr(current, field_name) != expected_value:
+                return None
         self.records[record_id] = record
         return record
 

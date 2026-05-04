@@ -90,6 +90,40 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
                 raise KeyError(record_id)
         return record
 
+    def update_if(
+        self,
+        record_id: str,
+        record: RecordT,
+        expected: dict[str, object],
+    ) -> RecordT | None:
+        update_columns = tuple(column for column in self.columns if column != "id")
+        python_data = record.model_dump(mode="python")
+        json_data = record.model_dump(mode="json")
+        values = [
+            self._adapt_value(
+                column,
+                python_data.get(column),
+                json_data.get(column),
+            )
+            for column in update_columns
+        ]
+        expected_columns = tuple(expected)
+        values.append(record_id)
+        values.extend(
+            self._adapt_value(column, expected[column], expected[column])
+            for column in expected_columns
+        )
+        query = sql.SQL("UPDATE {} SET {} WHERE {}").format(
+            sql.Identifier(self.table_name),
+            self._assignments(update_columns),
+            self._conditions(("id", *expected_columns)),
+        )
+        with psycopg.connect(normalize_postgres_dsn(self.database_url)) as connection:
+            cursor = connection.execute(query, values)
+            if cursor.rowcount == 0:
+                return None
+        return record
+
     def exists(self, record_id: str) -> bool:
         query = sql.SQL("SELECT 1 FROM {} WHERE {} = {} LIMIT 1").format(
             sql.Identifier(self.table_name),
@@ -141,6 +175,15 @@ class PostgresRecordRepository[RecordT: SynarchModel]:
     @staticmethod
     def _assignments(columns: tuple[str, ...]) -> sql.Composed:
         return sql.SQL(", ").join(
+            [
+                sql.SQL("{} = {}").format(sql.Identifier(column), sql.Placeholder())
+                for column in columns
+            ]
+        )
+
+    @staticmethod
+    def _conditions(columns: tuple[str, ...]) -> sql.Composed:
+        return sql.SQL(" AND ").join(
             [
                 sql.SQL("{} = {}").format(sql.Identifier(column), sql.Placeholder())
                 for column in columns

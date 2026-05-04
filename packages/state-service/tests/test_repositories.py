@@ -1,4 +1,4 @@
-from synarch_models import ProjectRecord
+from synarch_models import ProjectRecord, TaskStatus
 from synarch_state_service.repositories import InMemoryRecordRepository, StateRepositories
 
 
@@ -14,6 +14,33 @@ def test_in_memory_repository_stores_records_by_id() -> None:
     assert repository.get("record-2") == "gamma"
     assert repository.get("missing") is None
     assert repository.list_records() == ["alpha", "gamma"]
+
+
+def test_in_memory_repository_updates_only_when_expected_fields_match() -> None:
+    repository = InMemoryRecordRepository[ProjectRecord]()
+    project = ProjectRecord(
+        title="Conditional update",
+        goal="Only one scheduler claim should win.",
+        owner_agent_id="agent-direction",
+    )
+    running_project = project.model_copy(update={"status": TaskStatus.running})
+
+    repository.create(project.id, project)
+
+    assert repository.update_if(
+        project.id,
+        running_project,
+        {"status": TaskStatus.queued},
+    ) == running_project
+    assert (
+        repository.update_if(
+            project.id,
+            project,
+            {"status": TaskStatus.queued},
+        )
+        is None
+    )
+    assert repository.get(project.id) == running_project
 
 
 def test_state_repositories_factory_returns_isolated_stores() -> None:

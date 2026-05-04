@@ -88,8 +88,10 @@ printf "%s" "$batch_response" | jq -e \
     (.max_tasks == 1) and
     (.stop_reason == "max_tasks_reached") and
     (.runs | length == 1) and
+    (.skipped_task_ids | length == 0) and
     (.scheduler_event.type == "scheduler.tick") and
     (.scheduler_event.payload.run_count == 1) and
+    (.scheduler_event.payload.skipped_task_count == 0) and
     (.scheduler_audit_log.action == "scheduler.tick")
   ' >/dev/null
 
