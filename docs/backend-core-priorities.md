@@ -156,6 +156,8 @@ Implemented baseline:
   `parent_task_id`, dependencies, acceptance criteria, and `task.created` timeline events.
 - Gateway `/tasks/run-ready` executes a bounded ready-task batch, can be filtered by project, and
   returns `max_tasks_reached` or `no_ready_task` as an explicit stop reason.
+- `scripts/scheduler_tick.py` can run one bounded scheduler tick or a controlled server loop against
+  `/tasks/run-ready`, making cron-style execution possible without hiding autonomous behavior.
 
 ## Priority 8: Project Workspaces
 
