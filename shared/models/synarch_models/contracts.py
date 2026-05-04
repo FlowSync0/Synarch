@@ -517,6 +517,8 @@ class TaskRunBatchResult(SynarchModel):
     project_id: str | None = None
     stop_reason: str
     runs: list[TaskRunResult] = Field(default_factory=list)
+    scheduler_event: EventRecord | None = None
+    scheduler_audit_log: AuditLogRecord | None = None
 
 
 class ProjectTimeline(SynarchModel):

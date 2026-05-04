@@ -983,6 +983,9 @@ def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
     assert payload["project_id"] == "project_batch"
     assert payload["max_tasks"] == 5
     assert payload["stop_reason"] == "no_ready_task"
+    assert payload["scheduler_event"]["type"] == "scheduler.tick"
+    assert payload["scheduler_event"]["payload"]["run_count"] == 2
+    assert payload["scheduler_audit_log"]["action"] == "scheduler.tick"
     assert [run["task"]["id"] for run in payload["runs"]] == [
         "task_batch_first",
         "task_batch_second",
@@ -996,6 +999,13 @@ def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
         TaskStatus.completed,
         TaskStatus.queued,
     ]
+    assert state_client.events[-1].type == EventType.scheduler_tick
+    assert state_client.events[-1].payload["task_ids"] == [
+        "task_batch_first",
+        "task_batch_second",
+    ]
+    assert state_client.audit_logs[-1].action == "scheduler.tick"
+    assert state_client.audit_logs[-1].payload["stop_reason"] == "no_ready_task"
 
 
 def test_run_ready_tasks_stops_at_max_tasks() -> None:
@@ -1045,11 +1055,52 @@ def test_run_ready_tasks_stops_at_max_tasks() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["stop_reason"] == "max_tasks_reached"
+    assert payload["scheduler_event"]["payload"]["run_count"] == 1
     assert [run["task"]["id"] for run in payload["runs"]] == ["task_limited_first"]
     assert [task.status for task in state_client.tasks] == [
         TaskStatus.completed,
         TaskStatus.queued,
     ]
+
+
+def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
+    state_client = FakeStateClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=CompletingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_empty", "max_tasks": 3},
+            headers={"X-Synarch-Trace-Id": "trace_empty_scheduler_tick"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["runs"] == []
+    assert payload["stop_reason"] == "no_ready_task"
+    assert payload["scheduler_event"]["type"] == "scheduler.tick"
+    assert payload["scheduler_event"]["target"] == "project_empty"
+    assert payload["scheduler_event"]["payload"] == {
+        "project_id": "project_empty",
+        "max_tasks": 3,
+        "stop_reason": "no_ready_task",
+        "run_count": 0,
+        "task_ids": [],
+        "created_sub_task_count": 0,
+        "cost_ids": [],
+    }
+    assert payload["scheduler_audit_log"]["actor_id"] == "gateway-scheduler"
+    assert payload["scheduler_audit_log"]["target_id"] == "project_empty"
+    assert state_client.events[0].type == EventType.scheduler_tick
+    assert state_client.audit_logs[0].action == "scheduler.tick"
 
 
 def test_list_memory_items_filters_review_queue() -> None:

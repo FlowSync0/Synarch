@@ -129,6 +129,8 @@ Implemented baseline:
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
 - `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.
+- Gateway `/tasks/run-ready` writes a durable `scheduler.tick` event and `scheduler.tick` audit log
+  for every bounded batch, including empty ticks where no task is ready.
 
 ## Priority 7: Task Breakdown
 
@@ -158,6 +160,8 @@ Implemented baseline:
   returns `max_tasks_reached` or `no_ready_task` as an explicit stop reason.
 - `scripts/scheduler_tick.py` can run one bounded scheduler tick or a controlled server loop against
   `/tasks/run-ready`, making cron-style execution possible without hiding autonomous behavior.
+- Each scheduler tick is traceable through a `scheduler.tick` event and audit log, so an H24 loop can
+  prove it checked for work even when it did not execute anything.
 
 ## Priority 8: Project Workspaces
 

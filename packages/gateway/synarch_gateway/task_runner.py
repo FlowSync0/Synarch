@@ -4,8 +4,10 @@ from typing import Any, Protocol
 import httpx
 
 from synarch_models import (
+    ActorType,
     AgentResult,
     AgentTaskRequest,
+    AuditLogRecord,
     CostRecord,
     EventRecord,
     EventType,
@@ -183,12 +185,26 @@ class TaskRunner:
                 break
             runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
 
-        return TaskRunBatchResult(
+        batch_result = TaskRunBatchResult(
             trace_id=trace_id,
             max_tasks=max_tasks,
             project_id=project_id,
             stop_reason=stop_reason,
             runs=runs,
+        )
+        scheduler_event = self.state.create_event(
+            scheduler_tick_event(batch_result),
+            headers=headers,
+        )
+        scheduler_audit_log = self.state.create_audit_log(
+            scheduler_tick_audit(batch_result),
+            headers=headers,
+        )
+        return batch_result.model_copy(
+            update={
+                "scheduler_event": scheduler_event,
+                "scheduler_audit_log": scheduler_audit_log,
+            }
         )
 
     def run_task(
@@ -631,6 +647,45 @@ def memory_candidate_created_event(
         },
         trace_id=trace_id,
     )
+
+
+def scheduler_tick_event(batch_result: TaskRunBatchResult) -> EventRecord:
+    return EventRecord(
+        type=EventType.scheduler_tick,
+        target=batch_result.project_id or "scheduler",
+        payload=scheduler_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
+    )
+
+
+def scheduler_tick_audit(batch_result: TaskRunBatchResult) -> AuditLogRecord:
+    return AuditLogRecord(
+        actor_type=ActorType.service,
+        actor_id="gateway-scheduler",
+        action="scheduler.tick",
+        target_type="project" if batch_result.project_id is not None else "scheduler",
+        target_id=batch_result.project_id or "scheduler",
+        payload=scheduler_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
+    )
+
+
+def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object]:
+    return {
+        "project_id": batch_result.project_id,
+        "max_tasks": batch_result.max_tasks,
+        "stop_reason": batch_result.stop_reason,
+        "run_count": len(batch_result.runs),
+        "task_ids": [run.task.id for run in batch_result.runs],
+        "created_sub_task_count": sum(
+            len(run.created_sub_tasks) for run in batch_result.runs
+        ),
+        "cost_ids": [
+            cost_record.id
+            for run in batch_result.runs
+            for cost_record in run.cost_records
+        ],
+    }
 
 
 def sub_task_created_event(

@@ -49,6 +49,7 @@ class EventType(StrEnum):
     model_call_completed = "model_call.completed"
     model_call_failed = "model_call.failed"
     cost_recorded = "cost.recorded"
+    scheduler_tick = "scheduler.tick"
     tool_called = "tool.called"
     tool_failed = "tool.failed"
     approval_requested = "approval.requested"

@@ -63,6 +63,7 @@ GoalEnvelope
   -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created
   -> Optional bounded ready-task batch through Gateway /tasks/run-ready
   -> Optional scheduler tick script for cron/server loops
+  -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Event Service timeline
 ```
 
@@ -79,8 +80,9 @@ make test-live-openrouter
 ```
 
 This creates a real project/task, calls DeepSeek through `agent-runtime`, persists the result through
-the gateway, and asserts the timeline contains child tasks, task events, and a cost record. It is not
-part of `make verify` because it depends on external provider availability and consumes real tokens.
+the gateway, and asserts the timeline contains child tasks, task events, a scheduler tick, scheduler
+audit, and a cost record. It is not part of `make verify` because it depends on external provider
+availability and consumes real tokens.
 
 Run one scheduler tick with:
 
@@ -89,7 +91,8 @@ make scheduler-tick
 ```
 
 For a server loop, use `make scheduler-loop`; it still calls bounded gateway batches, so every loop
-has an explicit task limit and traceable result.
+has an explicit task limit and traceable result. Empty ticks are still recorded as `scheduler.tick`
+events and audit logs, which makes cron/server execution debuggable without needing a task to run.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

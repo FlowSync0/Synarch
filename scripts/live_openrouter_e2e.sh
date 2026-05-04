@@ -87,7 +87,10 @@ printf "%s" "$batch_response" | jq -e \
     (.project_id == $project_id) and
     (.max_tasks == 1) and
     (.stop_reason == "max_tasks_reached") and
-    (.runs | length == 1)
+    (.runs | length == 1) and
+    (.scheduler_event.type == "scheduler.tick") and
+    (.scheduler_event.payload.run_count == 1) and
+    (.scheduler_audit_log.action == "scheduler.tick")
   ' >/dev/null
 
 run_response="$(printf "%s" "$batch_response" | jq -c '.runs[0]')"
@@ -125,7 +128,9 @@ printf "%s" "$timeline" | jq -e \
     ([.tasks[] | select(.id == $task_id and .status == "completed")] | length == 1) and
     ([.tasks[] | select(.parent_task_id == $task_id)] | length >= 2) and
     (all([.tasks[] | select(.parent_task_id == $task_id)][]; (.acceptance_criteria | length > 0) and (.depends_on | index($task_id) != null))) and
+    ([.events[] | select(.trace_id == $trace_id and .type == "scheduler.tick" and .payload.run_count == 1)] | length == 1) and
     ([.events[] | select(.trace_id == $trace_id and .type == "task.created" and .payload.parent_task_id == $task_id)] | length >= 2) and
+    ([.audit_logs[] | select(.trace_id == $trace_id and .action == "scheduler.tick")] | length == 1) and
     ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .model_id == "deepseek/deepseek-v4-flash" and .input_tokens > 0 and .output_tokens > 0)] | length == 1)
   ' >/dev/null
 
@@ -134,12 +139,16 @@ printf "%s" "$run_response" | jq \
   --arg task_id "$TASK_ID" \
   --arg trace_id "$TRACE_ID" \
   --arg stop_reason "$(printf "%s" "$batch_response" | jq -r '.stop_reason')" \
+  --arg scheduler_event_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_event.id')" \
+  --arg scheduler_audit_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_audit_log.id')" \
   '{
     passed: true,
     project_id: $project_id,
     task_id: $task_id,
     trace_id: $trace_id,
     batch_stop_reason: $stop_reason,
+    scheduler_event_id: $scheduler_event_id,
+    scheduler_audit_id: $scheduler_audit_id,
     task_status: .task.status,
     agent_status: .agent_result.status,
     created_sub_tasks: [.created_sub_tasks[] | {id, title, depends_on, acceptance_criteria_count: (.acceptance_criteria | length)}],
