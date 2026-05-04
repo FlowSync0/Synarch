@@ -1,6 +1,6 @@
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -34,6 +34,7 @@ from synarch_models import (
     ProjectWorkspace,
     ServiceDefinition,
     SkillDefinition,
+    TaskLeaseRecoveryResult,
     TaskRecord,
     TaskStatus,
 )
@@ -53,6 +54,8 @@ REPOSITORIES = default_repositories()
 
 PROJECT_COMPLEXITY_SPLIT_THRESHOLD = 10
 CLOSED_TASK_STATUSES = {TaskStatus.completed, TaskStatus.failed}
+DEFAULT_TASK_LEASE_SECONDS = 300
+MAX_TASK_LEASE_SECONDS = 86_400
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,27 @@ def write_audit_log(
 
 def create_domain_event(event: EventRecord) -> EventRecord:
     return create_record(REPOSITORIES.events, event.id, event)
+
+
+def task_lease_duration_from_request(request: Request) -> timedelta:
+    raw_value = request.headers.get("x-synarch-task-lease-seconds")
+    if raw_value is None:
+        seconds = int(os.getenv("TASK_LEASE_SECONDS", str(DEFAULT_TASK_LEASE_SECONDS)))
+    else:
+        try:
+            seconds = int(raw_value)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="X-Synarch-Task-Lease-Seconds must be an integer",
+            ) from error
+
+    if seconds < 1 or seconds > MAX_TASK_LEASE_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Task lease seconds must be between 1 and {MAX_TASK_LEASE_SECONDS}",
+        )
+    return timedelta(seconds=seconds)
 
 
 def agent_event_source(actor_type: ActorType, actor_id: str) -> str | None:
@@ -1110,6 +1134,8 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
     task = read_record(REPOSITORIES.tasks, task_id, "task")
     if task.status != TaskStatus.queued:
         raise HTTPException(status_code=409, detail=f"Task is already {task.status}")
+    if task.attempt_count >= task.max_attempts:
+        raise HTTPException(status_code=409, detail="Task reached max attempts")
 
     incomplete_dependencies = incomplete_dependency_ids(task)
     if incomplete_dependencies:
@@ -1120,11 +1146,22 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
 
     audit_context = audit_context_from_request(request)
     trace_id = request.headers.get("x-synarch-trace-id")
+    started_at = datetime.now(UTC)
+    lease_expires_at = started_at + task_lease_duration_from_request(request)
+    lease_owner_id = audit_context.actor_id if audit_context is not None else None
     expected_status = task.status
     record = update_record_if(
         REPOSITORIES.tasks,
         task_id,
-        task.model_copy(update={"status": TaskStatus.running}),
+        task.model_copy(
+            update={
+                "status": TaskStatus.running,
+                "attempt_count": task.attempt_count + 1,
+                "lease_owner_id": lease_owner_id,
+                "lease_expires_at": lease_expires_at,
+                "last_heartbeat_at": started_at,
+            }
+        ),
         {"status": expected_status},
     )
     if record is None:
@@ -1136,7 +1173,16 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
             type=EventType.task_started,
             source_agent_id=record.assigned_agent_id,
             target=record.project_id,
-            payload={"task_id": record.id, "status": record.status},
+            payload={
+                "task_id": record.id,
+                "status": record.status,
+                "attempt_count": record.attempt_count,
+                "max_attempts": record.max_attempts,
+                "lease_owner_id": record.lease_owner_id,
+                "lease_expires_at": record.lease_expires_at.isoformat()
+                if record.lease_expires_at is not None
+                else None,
+            },
             trace_id=trace_id,
         )
     )
@@ -1145,9 +1191,179 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
         action="task.started",
         target_type="task",
         target_id=record.id,
-        payload={"project_id": record.project_id, "agent_id": record.assigned_agent_id},
+        payload={
+            "project_id": record.project_id,
+            "agent_id": record.assigned_agent_id,
+            "attempt_count": record.attempt_count,
+            "lease_expires_at": record.lease_expires_at.isoformat()
+            if record.lease_expires_at is not None
+            else None,
+        },
     )
     return record
+
+
+@app.post("/tasks/{task_id}/heartbeat", response_model=TaskRecord)
+def heartbeat_task(task_id: str, request: Request) -> TaskRecord:
+    task = read_record(REPOSITORIES.tasks, task_id, "task")
+    if task.status != TaskStatus.running:
+        raise HTTPException(status_code=409, detail=f"Task is not running: {task.status}")
+
+    audit_context = audit_context_from_request(request)
+    if (
+        task.lease_owner_id is not None
+        and audit_context is not None
+        and task.lease_owner_id != audit_context.actor_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task lease is owned by {task.lease_owner_id}",
+        )
+
+    trace_id = request.headers.get("x-synarch-trace-id")
+    heartbeat_at = datetime.now(UTC)
+    lease_expires_at = heartbeat_at + task_lease_duration_from_request(request)
+    expected: dict[str, object] = {"status": TaskStatus.running}
+    if task.lease_owner_id is not None:
+        expected["lease_owner_id"] = task.lease_owner_id
+    record = update_record_if(
+        REPOSITORIES.tasks,
+        task_id,
+        task.model_copy(
+            update={
+                "lease_expires_at": lease_expires_at,
+                "last_heartbeat_at": heartbeat_at,
+            }
+        ),
+        expected,
+    )
+    if record is None:
+        raise HTTPException(status_code=409, detail="Task lease changed before heartbeat")
+
+    create_domain_event(
+        EventRecord(
+            type=EventType.task_heartbeat,
+            source_agent_id=record.assigned_agent_id,
+            target=record.project_id,
+            payload={
+                "task_id": record.id,
+                "lease_owner_id": record.lease_owner_id,
+                "lease_expires_at": record.lease_expires_at.isoformat()
+                if record.lease_expires_at is not None
+                else None,
+                "last_heartbeat_at": record.last_heartbeat_at.isoformat()
+                if record.last_heartbeat_at is not None
+                else None,
+            },
+            trace_id=trace_id,
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="task.heartbeat",
+        target_type="task",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "lease_expires_at": record.lease_expires_at.isoformat()
+            if record.lease_expires_at is not None
+            else None,
+        },
+    )
+    return record
+
+
+@app.post("/tasks/recover-expired-leases", response_model=TaskLeaseRecoveryResult)
+def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    inspected_at = datetime.now(UTC)
+    recovered_tasks: list[TaskRecord] = []
+    failed_tasks: list[TaskRecord] = []
+    events: list[EventRecord] = []
+
+    for task in REPOSITORIES.tasks.list_records():
+        if (
+            task.status != TaskStatus.running
+            or task.lease_expires_at is None
+            or task.lease_expires_at > inspected_at
+        ):
+            continue
+
+        should_retry = task.attempt_count < task.max_attempts
+        next_status = TaskStatus.queued if should_retry else TaskStatus.failed
+        result = task.result
+        if not should_retry:
+            result = {
+                "summary": "Task failed because its lease expired after max attempts.",
+                "reason": "lease_expired",
+                "attempt_count": task.attempt_count,
+                "max_attempts": task.max_attempts,
+            }
+        updated_task = task.model_copy(
+            update={
+                "status": next_status,
+                "result": result,
+                "lease_owner_id": None,
+                "lease_expires_at": None,
+                "last_heartbeat_at": None,
+            }
+        )
+        record = update_record_if(
+            REPOSITORIES.tasks,
+            task.id,
+            updated_task,
+            {
+                "status": TaskStatus.running,
+                "lease_expires_at": task.lease_expires_at,
+            },
+        )
+        if record is None:
+            continue
+
+        event = create_domain_event(
+            EventRecord(
+                type=EventType.task_lease_expired,
+                source_agent_id=record.assigned_agent_id,
+                target=record.project_id,
+                payload={
+                    "task_id": record.id,
+                    "previous_lease_owner_id": task.lease_owner_id,
+                    "expired_at": inspected_at.isoformat(),
+                    "previous_lease_expires_at": task.lease_expires_at.isoformat(),
+                    "attempt_count": task.attempt_count,
+                    "max_attempts": task.max_attempts,
+                    "next_status": record.status,
+                    "will_retry": should_retry,
+                },
+                trace_id=trace_id,
+            )
+        )
+        write_audit_log(
+            audit_context,
+            action="task.lease_expired",
+            target_type="task",
+            target_id=record.id,
+            payload={
+                "project_id": record.project_id,
+                "next_status": record.status,
+                "will_retry": should_retry,
+            },
+        )
+        events.append(event)
+        if should_retry:
+            recovered_tasks.append(record)
+        else:
+            failed_tasks.append(record)
+
+    return TaskLeaseRecoveryResult(
+        inspected_at=inspected_at,
+        recovered_task_ids=[task.id for task in recovered_tasks],
+        failed_task_ids=[task.id for task in failed_tasks],
+        recovered_tasks=recovered_tasks,
+        failed_tasks=failed_tasks,
+        events=events,
+    )
 
 
 def task_result_payload(result: AgentResult) -> dict[str, Any]:
@@ -1231,6 +1447,9 @@ def record_task_result(
         update={
             "status": result.status,
             "result": task_result_payload(result),
+            "lease_owner_id": None,
+            "lease_expires_at": None,
+            "last_heartbeat_at": None,
         }
     )
     record = update_record(REPOSITORIES.tasks, task_id, updated_task, "task")

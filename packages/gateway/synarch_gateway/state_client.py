@@ -13,6 +13,7 @@ from synarch_models import (
     ProjectRecord,
     ProjectSplitApplication,
     ProjectWorkspace,
+    TaskLeaseRecoveryResult,
     TaskRecord,
 )
 
@@ -90,6 +91,12 @@ class StateClient(Protocol):
     def get_task(self, task_id: str) -> TaskRecord: ...
 
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]: ...
+
+    def recover_expired_task_leases(
+        self,
+        *,
+        headers: dict[str, str],
+    ) -> TaskLeaseRecoveryResult: ...
 
     def start_task(
         self,
@@ -235,6 +242,14 @@ class HttpStateClient:
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
         response = self._get("/tasks", params=compact_params(project_id=project_id))
         return [TaskRecord.model_validate(task) for task in response.json()]
+
+    def recover_expired_task_leases(
+        self,
+        *,
+        headers: dict[str, str],
+    ) -> TaskLeaseRecoveryResult:
+        response = self._post("/tasks/recover-expired-leases", None, headers)
+        return TaskLeaseRecoveryResult.model_validate(response.json())
 
     def start_task(
         self,

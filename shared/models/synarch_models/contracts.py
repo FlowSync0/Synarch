@@ -219,6 +219,11 @@ class TaskRecord(SynarchModel):
     parent_task_id: str | None = None
     sequence: int = 0
     result: dict[str, Any] | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, ge=1)
+    lease_owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -511,6 +516,15 @@ class TaskRunResult(SynarchModel):
     cost_records: list[CostRecord] = Field(default_factory=list)
 
 
+class TaskLeaseRecoveryResult(SynarchModel):
+    inspected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    recovered_task_ids: list[str] = Field(default_factory=list)
+    failed_task_ids: list[str] = Field(default_factory=list)
+    recovered_tasks: list[TaskRecord] = Field(default_factory=list)
+    failed_tasks: list[TaskRecord] = Field(default_factory=list)
+    events: list[EventRecord] = Field(default_factory=list)
+
+
 class TaskRunBatchResult(SynarchModel):
     trace_id: str
     max_tasks: int
@@ -518,6 +532,7 @@ class TaskRunBatchResult(SynarchModel):
     stop_reason: str
     runs: list[TaskRunResult] = Field(default_factory=list)
     skipped_task_ids: list[str] = Field(default_factory=list)
+    lease_recovery: TaskLeaseRecoveryResult | None = None
     scheduler_event: EventRecord | None = None
     scheduler_audit_log: AuditLogRecord | None = None
 

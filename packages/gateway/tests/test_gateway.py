@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from synarch_gateway.main import (
@@ -31,6 +33,7 @@ from synarch_models import (
     ProjectSplitRequest,
     ProjectWorkspace,
     TaskDraft,
+    TaskLeaseRecoveryResult,
     TaskRecord,
     TaskStatus,
 )
@@ -214,6 +217,14 @@ class FakeStateClient:
             return self.tasks
         return [task for task in self.tasks if task.project_id == project_id]
 
+    def recover_expired_task_leases(
+        self,
+        *,
+        headers: dict[str, str],
+    ) -> TaskLeaseRecoveryResult:
+        self.headers.append(headers)
+        return TaskLeaseRecoveryResult()
+
     def start_task(
         self,
         task_id: str,
@@ -337,6 +348,50 @@ class ClaimConflictStateClient(FakeStateClient):
             )
             raise StateServiceRequestError(409, "Task is already running")
         return super().start_task(task_id, headers=headers)
+
+
+class RecoveringStateClient(FakeStateClient):
+    def recover_expired_task_leases(
+        self,
+        *,
+        headers: dict[str, str],
+    ) -> TaskLeaseRecoveryResult:
+        self.headers.append(headers)
+        inspected_at = datetime.now(UTC)
+        recovered_tasks: list[TaskRecord] = []
+        events: list[EventRecord] = []
+        for task in list(self.tasks):
+            if (
+                task.status != TaskStatus.running
+                or task.lease_expires_at is None
+                or task.lease_expires_at > inspected_at
+                or task.attempt_count >= task.max_attempts
+            ):
+                continue
+            recovered_task = task.model_copy(
+                update={
+                    "status": TaskStatus.queued,
+                    "lease_owner_id": None,
+                    "lease_expires_at": None,
+                    "last_heartbeat_at": None,
+                }
+            )
+            self.tasks[self.tasks.index(task)] = recovered_task
+            recovered_tasks.append(recovered_task)
+            events.append(
+                EventRecord(
+                    type=EventType.task_lease_expired,
+                    source_agent_id=recovered_task.assigned_agent_id,
+                    target=recovered_task.project_id,
+                    payload={"task_id": recovered_task.id, "will_retry": True},
+                )
+            )
+        return TaskLeaseRecoveryResult(
+            inspected_at=inspected_at,
+            recovered_task_ids=[task.id for task in recovered_tasks],
+            recovered_tasks=recovered_tasks,
+            events=events,
+        )
 
 
 class FakeControlPlaneClient:
@@ -1146,6 +1201,58 @@ def test_run_ready_tasks_skips_claim_conflict_and_continues() -> None:
     ]
 
 
+def test_run_ready_tasks_recovers_expired_leases_before_selecting_ready_task() -> None:
+    state_client = RecoveringStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_recover_lease",
+            title="Recover lease",
+            goal="Recover expired work before selecting ready tasks.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_expired_running",
+            project_id="project_recover_lease",
+            title="Expired running task",
+            status=TaskStatus.running,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Expired task is retried."],
+            attempt_count=1,
+            max_attempts=3,
+            lease_owner_id="gateway-task-runner",
+            lease_expires_at=datetime.now(UTC) - timedelta(seconds=30),
+            last_heartbeat_at=datetime.now(UTC) - timedelta(seconds=60),
+        )
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=CompletingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_recover_lease", "max_tasks": 1},
+            headers={"X-Synarch-Trace-Id": "trace_recover_lease"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lease_recovery"]["recovered_task_ids"] == ["task_expired_running"]
+    assert [run["task"]["id"] for run in payload["runs"]] == ["task_expired_running"]
+    assert payload["scheduler_event"]["payload"]["lease_recovered_task_ids"] == [
+        "task_expired_running"
+    ]
+    assert state_client.tasks[0].status == TaskStatus.completed
+
+
 def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
     state_client = FakeStateClient()
     runner = TaskRunner(
@@ -1169,6 +1276,8 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
     payload = response.json()
     assert payload["runs"] == []
     assert payload["stop_reason"] == "no_ready_task"
+    assert payload["lease_recovery"]["recovered_task_ids"] == []
+    assert payload["lease_recovery"]["failed_task_ids"] == []
     assert payload["scheduler_event"]["type"] == "scheduler.tick"
     assert payload["scheduler_event"]["target"] == "project_empty"
     assert payload["scheduler_event"]["payload"] == {
@@ -1179,6 +1288,8 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "task_ids": [],
         "skipped_task_ids": [],
         "skipped_task_count": 0,
+        "lease_recovered_task_ids": [],
+        "lease_failed_task_ids": [],
         "created_sub_task_count": 0,
         "cost_ids": [],
     }

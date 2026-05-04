@@ -17,6 +17,7 @@ from synarch_models import (
     MemoryStatus,
     MemoryStatusUpdate,
     TaskDraft,
+    TaskLeaseRecoveryResult,
     TaskRecord,
     TaskRunBatchResult,
     TaskRunResult,
@@ -176,6 +177,7 @@ class TaskRunner:
         headers: dict[str, str],
         project_id: str | None = None,
     ) -> TaskRunBatchResult:
+        lease_recovery = self.state.recover_expired_task_leases(headers=headers)
         runs: list[TaskRunResult] = []
         skipped_task_ids: list[str] = []
         stop_reason = "max_tasks_reached"
@@ -201,6 +203,7 @@ class TaskRunner:
             stop_reason=stop_reason,
             runs=runs,
             skipped_task_ids=skipped_task_ids,
+            lease_recovery=lease_recovery,
         )
         scheduler_event = self.state.create_event(
             scheduler_tick_event(batch_result),
@@ -705,6 +708,8 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
         "task_ids": [run.task.id for run in batch_result.runs],
         "skipped_task_ids": batch_result.skipped_task_ids,
         "skipped_task_count": len(batch_result.skipped_task_ids),
+        "lease_recovered_task_ids": lease_recovered_task_ids(batch_result.lease_recovery),
+        "lease_failed_task_ids": lease_failed_task_ids(batch_result.lease_recovery),
         "created_sub_task_count": sum(
             len(run.created_sub_tasks) for run in batch_result.runs
         ),
@@ -714,6 +719,18 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
             for cost_record in run.cost_records
         ],
     }
+
+
+def lease_recovered_task_ids(lease_recovery: TaskLeaseRecoveryResult | None) -> list[str]:
+    if lease_recovery is None:
+        return []
+    return lease_recovery.recovered_task_ids
+
+
+def lease_failed_task_ids(lease_recovery: TaskLeaseRecoveryResult | None) -> list[str]:
+    if lease_recovery is None:
+        return []
+    return lease_recovery.failed_task_ids
 
 
 def sub_task_created_event(

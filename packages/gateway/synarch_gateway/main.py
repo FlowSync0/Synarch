@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     memory_service_url: str = "http://localhost:8030"
     event_service_url: str = "http://localhost:8040"
     agent_runtime_url: str = "http://localhost:8050"
-    agent_runtime_timeout_seconds: float = 60.0
+    agent_runtime_timeout_seconds: float = 180.0
     task_runner_memory_token_budget: int = 1200
     task_runner_provider_id: str = LOCAL_RUNTIME_PROVIDER_ID
     task_runner_model_id: str = LOCAL_RUNTIME_MODEL_ID

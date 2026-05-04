@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -163,6 +165,10 @@ def test_task_start_updates_status_and_writes_event_and_audit() -> None:
     assert start_response.status_code == 200
     started_task = start_response.json()
     assert started_task["status"] == "running"
+    assert started_task["attempt_count"] == 1
+    assert started_task["lease_owner_id"] == "gateway-task-runner"
+    assert started_task["lease_expires_at"] is not None
+    assert started_task["last_heartbeat_at"] is not None
 
     events_response = client.get("/events", params={"trace_id": trace_id})
     assert events_response.status_code == 200
@@ -176,6 +182,51 @@ def test_task_start_updates_status_and_writes_event_and_audit() -> None:
     assert audit["actor_type"] == "service"
     assert audit["action"] == "task.started"
     assert audit["target_id"] == task["id"]
+
+
+def test_task_heartbeat_extends_running_task_lease() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_heartbeat"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Heartbeat running task",
+            "goal": "Extend a running task lease.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(project_response.json()["id"], "Heartbeat me"),
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+    headers = {
+        "X-Synarch-Actor-Type": "service",
+        "X-Synarch-Actor-Id": "gateway-task-runner",
+        "X-Synarch-Trace-Id": trace_id,
+        "X-Synarch-Task-Lease-Seconds": "60",
+    }
+    start_response = client.post(f"/tasks/{task['id']}/start", headers=headers)
+    assert start_response.status_code == 200
+    first_lease_expires_at = start_response.json()["lease_expires_at"]
+
+    heartbeat_response = client.post(
+        f"/tasks/{task['id']}/heartbeat",
+        headers={**headers, "X-Synarch-Task-Lease-Seconds": "120"},
+    )
+
+    assert heartbeat_response.status_code == 200
+    heartbeat_task = heartbeat_response.json()
+    assert heartbeat_task["status"] == "running"
+    assert heartbeat_task["lease_owner_id"] == "gateway-task-runner"
+    assert heartbeat_task["lease_expires_at"] > first_lease_expires_at
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["task.started", "task.heartbeat"]
+    assert [audit["action"] for audit in audit_logs] == ["task.started", "task.heartbeat"]
 
 
 def test_task_start_conflict_does_not_write_duplicate_event_or_audit() -> None:
@@ -213,6 +264,110 @@ def test_task_start_conflict_does_not_write_duplicate_event_or_audit() -> None:
     audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
     assert [event["type"] for event in events] == ["task.started"]
     assert [audit["action"] for audit in audit_logs] == ["task.started"]
+
+
+def test_recover_expired_task_lease_requeues_when_attempts_remain() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_lease_retry"
+    expired_at = datetime.now(UTC) - timedelta(seconds=30)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Recover expired lease",
+            "goal": "Requeue an expired running task while attempts remain.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Retry expired task",
+            status="running",
+            attempt_count=1,
+            max_attempts=3,
+            lease_owner_id="gateway-task-runner",
+            lease_expires_at=expired_at.isoformat(),
+            last_heartbeat_at=(expired_at - timedelta(seconds=60)).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    recovery_response = client.post(
+        "/tasks/recover-expired-leases",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-scheduler",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert recovery_response.status_code == 200
+    recovery = recovery_response.json()
+    assert recovery["recovered_task_ids"] == [task_response.json()["id"]]
+    assert recovery["failed_task_ids"] == []
+    recovered_task = recovery["recovered_tasks"][0]
+    assert recovered_task["status"] == "queued"
+    assert recovered_task["attempt_count"] == 1
+    assert recovered_task["lease_owner_id"] is None
+    assert recovered_task["lease_expires_at"] is None
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["task.lease_expired"]
+    assert events[0]["payload"]["will_retry"] is True
+    assert [audit["action"] for audit in audit_logs] == ["task.lease_expired"]
+
+
+def test_recover_expired_task_lease_fails_after_max_attempts() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_lease_failed"
+    expired_at = datetime.now(UTC) - timedelta(seconds=30)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Fail expired lease",
+            "goal": "Fail an expired running task after max attempts.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Fail expired task",
+            status="running",
+            attempt_count=2,
+            max_attempts=2,
+            lease_owner_id="gateway-task-runner",
+            lease_expires_at=expired_at.isoformat(),
+            last_heartbeat_at=(expired_at - timedelta(seconds=60)).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    recovery_response = client.post(
+        "/tasks/recover-expired-leases",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-scheduler",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert recovery_response.status_code == 200
+    recovery = recovery_response.json()
+    assert recovery["recovered_task_ids"] == []
+    assert recovery["failed_task_ids"] == [task_response.json()["id"]]
+    failed_task = recovery["failed_tasks"][0]
+    assert failed_task["status"] == "failed"
+    assert failed_task["result"]["reason"] == "lease_expired"
+    assert failed_task["lease_owner_id"] is None
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert events[0]["payload"]["will_retry"] is False
 
 
 def test_events_are_listed_chronologically_for_trace() -> None:

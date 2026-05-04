@@ -41,10 +41,10 @@ through the dashboard.
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, and timeline events, plus sample metrics. | No cost/health live reads, no goal submission flow. | Dashboard reads real state-service data and creates a goal through gateway. |
-| B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, runs bounded project batches through `/tasks/run-ready`, records scheduler ticks, skips task claim conflicts, and exposes a scheduler tick script. | Routing is keyword-based only and there is no persisted scheduler heartbeat/retry policy yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
+| B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, records scheduler ticks, skips task claim conflicts, and exposes a scheduler tick script. | Routing is keyword-based only and there is no durable worker queue or dead-letter policy yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
-| E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task result recording, bounded ready-batch execution, scheduler tick event/audit records, scheduler tick script, and timeline events exist. | No durable worker queue, scheduler heartbeat, or retry policy yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
+| E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry/fail recovery, task result recording, bounded ready-batch execution, scheduler tick event/audit records, scheduler tick script, and timeline events exist. | No durable worker queue, dead-letter review flow, or backoff policy yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
 | F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and proposed memory candidates exist. | No human review UI, compaction, vector search, graph retrieval, or hierarchical context database. | Approve a proposed memory candidate and verify it appears in the next task context. |
 | G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, and `event.emit` adapter exist. | No external tool adapters, sandbox execution, cron, or webhook runner yet. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
@@ -278,6 +278,9 @@ Progress:
   log with run count, stop reason, task IDs, created child task count, and cost IDs.
 - Done: task start claims use conditional repository updates, and `/tasks/run-ready` skips task IDs
   that another scheduler already claimed instead of failing the whole tick.
+- Done: running tasks now carry lease owner, lease expiry, heartbeat, attempt count, and max attempts;
+  expired leases are requeued or failed through a traceable recovery endpoint before each
+  `/tasks/run-ready` batch.
 
 Definition of done:
 

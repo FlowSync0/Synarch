@@ -35,6 +35,8 @@ class EventType(StrEnum):
     project_split_applied = "project_split.applied"
     task_created = "task.created"
     task_started = "task.started"
+    task_heartbeat = "task.heartbeat"
+    task_lease_expired = "task.lease_expired"
     task_completed = "task.completed"
     task_blocked = "task.blocked"
     agent_reported = "agent.reported"
