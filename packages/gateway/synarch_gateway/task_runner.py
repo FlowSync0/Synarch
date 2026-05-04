@@ -163,6 +163,16 @@ class TaskRunner:
         if task is None:
             raise NoReadyTask("No queued task is ready to run")
 
+        return self.run_task(task.id, trace_id=trace_id, headers=headers)
+
+    def run_task(
+        self,
+        task_id: str,
+        *,
+        trace_id: str,
+        headers: dict[str, str],
+    ) -> TaskRunResult:
+        task = self.state.get_task(task_id)
         started_task = self.state.start_task(task.id, headers=headers)
         project = self.state.get_project(started_task.project_id)
         world_view = self.control_plane.get_world_view(started_task.assigned_agent_id)
@@ -400,10 +410,13 @@ def child_task_dependencies(
     task_ids_by_title: dict[str, str],
 ) -> list[str]:
     dependencies = [parent_task.id]
-    dependencies.extend(
-        task_ids_by_title.get(dependency, dependency)
-        for dependency in draft.depends_on
-    )
+    for dependency in draft.depends_on:
+        if dependency in task_ids_by_title:
+            dependencies.append(task_ids_by_title[dependency])
+        elif dependency in task_ids_by_title.values():
+            dependencies.append(dependency)
+        elif dependency == parent_task.id:
+            dependencies.append(parent_task.id)
     return deduplicate(dependencies)
 
 

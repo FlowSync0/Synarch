@@ -70,6 +70,16 @@ Run it with:
 make test-integration
 ```
 
+Run the paid live OpenRouter/DeepSeek slice with:
+
+```bash
+make test-live-openrouter
+```
+
+This creates a real project/task, calls DeepSeek through `agent-runtime`, persists the result through
+the gateway, and asserts the timeline contains child tasks, task events, and a cost record. It is not
+part of `make verify` because it depends on external provider availability and consumes real tokens.
+
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
 

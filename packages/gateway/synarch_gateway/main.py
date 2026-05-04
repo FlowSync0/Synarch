@@ -460,6 +460,21 @@ def run_next_task(
         raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
 
 
+@app.post("/tasks/{task_id}/run", response_model=TaskRunResult)
+def run_task_by_id(
+    task_id: str,
+    request: Request,
+    runner: TaskRunner = Depends(get_task_runner),
+) -> TaskRunResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    try:
+        return runner.run_task(task_id, trace_id=trace_id, headers=service_headers(trace_id))
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
 @app.post("/tools/call", response_model=ToolResult)
 def call_tool(
     tool_call: ToolCallRequest,

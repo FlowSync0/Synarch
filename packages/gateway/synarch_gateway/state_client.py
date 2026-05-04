@@ -87,6 +87,8 @@ class StateClient(Protocol):
 
     def get_project(self, project_id: str) -> ProjectRecord: ...
 
+    def get_task(self, task_id: str) -> TaskRecord: ...
+
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]: ...
 
     def start_task(
@@ -225,6 +227,10 @@ class HttpStateClient:
     def get_project(self, project_id: str) -> ProjectRecord:
         response = self._get(f"/projects/{project_id}")
         return ProjectRecord.model_validate(response.json())
+
+    def get_task(self, task_id: str) -> TaskRecord:
+        response = self._get(f"/tasks/{task_id}")
+        return TaskRecord.model_validate(response.json())
 
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
         response = self._get("/tasks", params=compact_params(project_id=project_id))

@@ -203,6 +203,12 @@ class FakeStateClient:
             owner_agent_id="agent-direction",
         )
 
+    def get_task(self, task_id: str) -> TaskRecord:
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        raise ValueError(f"Unknown task: {task_id}")
+
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
         if project_id is None:
             return self.tasks
@@ -412,7 +418,7 @@ class SubTaskAgentRuntimeClient:
                     title="Contact first supplier",
                     description="Prepare the first supplier contact step after source selection.",
                     assigned_agent_id="agent-ops-sourcing",
-                    depends_on=["Find supplier directories"],
+                    depends_on=["Find supplier directories", "invented-child-task-id"],
                     acceptance_criteria=[
                         "Contact channel, message, and stop condition are recorded."
                     ],
@@ -830,6 +836,59 @@ def test_run_next_task_persists_agent_created_sub_tasks() -> None:
         parent_task.id,
         parent_task.id,
     ]
+
+
+def test_run_task_by_id_executes_requested_task() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_targeted",
+            title="Targeted run",
+            goal="Run one requested task even if another task is queued.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_old_ready",
+                project_id="project_targeted",
+                title="Old ready task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Old task remains queued."],
+            ),
+            TaskRecord(
+                id="task_requested",
+                project_id="project_targeted",
+                title="Requested task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Requested task runs."],
+            ),
+        ]
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=FakeAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/task_requested/run",
+            headers={"X-Synarch-Trace-Id": "trace_targeted_task_run"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["id"] == "task_requested"
+    assert state_client.tasks[0].id == "task_old_ready"
+    assert state_client.tasks[0].status == TaskStatus.queued
+    assert state_client.tasks[1].id == "task_requested"
+    assert state_client.tasks[1].status == TaskStatus.needs_review
 
 
 def test_list_memory_items_filters_review_queue() -> None:

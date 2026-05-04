@@ -140,8 +140,15 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return ProjectRecord.model_validate(response.json())
 
-    def list_tasks(self) -> list[TaskRecord]:
-        response = self.client.get("/tasks")
+    def get_task(self, task_id: str) -> TaskRecord:
+        response = self.client.get(f"/tasks/{task_id}")
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return TaskRecord.model_validate(response.json())
+
+    def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
+        params = {"project_id": project_id} if project_id is not None else {}
+        response = self.client.get("/tasks", params=params)
         if response.status_code != 200:
             raise StateServiceRequestError(response.status_code, response.json())
         return [TaskRecord.model_validate(task) for task in response.json()]

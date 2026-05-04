@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -26,6 +26,9 @@ test-integration:
 
 test-eval:
 	$(PYTHON) -m pytest -m eval
+
+test-live-openrouter:
+	scripts/live_openrouter_e2e.sh
 
 lint:
 	$(PYTHON) -m ruff check .
