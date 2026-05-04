@@ -104,6 +104,8 @@ services:
       APP_MODULE: synarch_state_service.main:app
       PORT: 8020
       DATABASE_URL: postgresql+psycopg://synarch:synarch@postgres:5432/synarch
+      TASK_LEASE_SECONDS: ${TASK_LEASE_SECONDS:-300}
+      TASK_RETRY_BACKOFF_SECONDS: ${TASK_RETRY_BACKOFF_SECONDS:-60}
     ports:
       - "8020:8020"
     healthcheck:

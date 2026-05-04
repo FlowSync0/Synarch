@@ -1,0 +1,4 @@
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS retry_after_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS dead_letter_reason TEXT,
+  ADD COLUMN IF NOT EXISTS dead_lettered_at TIMESTAMPTZ;

@@ -224,6 +224,9 @@ class TaskRecord(SynarchModel):
     lease_owner_id: str | None = None
     lease_expires_at: datetime | None = None
     last_heartbeat_at: datetime | None = None
+    retry_after_at: datetime | None = None
+    dead_letter_reason: str | None = None
+    dead_lettered_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

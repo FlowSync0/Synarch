@@ -160,17 +160,20 @@ Implemented baseline:
   returns `max_tasks_reached` or `no_ready_task` as an explicit stop reason.
 - State-service task start uses a conditional status update, so only one scheduler can claim a
   queued task even under concurrent start attempts.
-- Running tasks carry lease metadata: owner, expiry, last heartbeat, attempt count, and max attempts.
+- Running tasks carry lease metadata: owner, expiry, last heartbeat, attempt count, max attempts,
+  retry backoff, and dead-letter review metadata.
 - State-service `/tasks/{task_id}/heartbeat` extends a running task lease and records
   `task.heartbeat`.
-- State-service `/tasks/recover-expired-leases` requeues expired running tasks while attempts remain
-  and fails them after max attempts, recording `task.lease_expired`.
+- State-service `/tasks/recover-expired-leases` requeues expired running tasks while attempts remain,
+  sets `retry_after_at` with exponential backoff, and moves exhausted tasks to `needs_review` with
+  `dead_letter_reason`, recording `task.lease_expired`.
 - `scripts/scheduler_tick.py` can run one bounded scheduler tick or a controlled server loop against
   `/tasks/run-ready`, making cron-style execution possible without hiding autonomous behavior.
 - Each scheduler tick is traceable through a `scheduler.tick` event and audit log, so an H24 loop can
   prove it checked for work even when it did not execute anything. Claim conflicts are returned in
   `skipped_task_ids` and included in the scheduler payload. Lease recoveries are included in
-  `lease_recovered_task_ids` and `lease_failed_task_ids`.
+  `lease_recovered_task_ids` and `lease_failed_task_ids`; recovered tasks are not runnable until
+  their retry backoff has elapsed.
 
 ## Priority 8: Project Workspaces
 

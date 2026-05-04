@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 import httpx
@@ -493,10 +494,13 @@ def next_ready_task(
 ) -> TaskRecord | None:
     excluded_task_ids = excluded_task_ids or set()
     task_by_id = {task.id: task for task in tasks}
+    now = datetime.now(UTC)
     for task in tasks:
         if task.id in excluded_task_ids:
             continue
         if task.status != TaskStatus.queued:
+            continue
+        if task.retry_after_at is not None and task.retry_after_at > now:
             continue
         if all(
             (dependency := task_by_id.get(dependency_id)) is not None

@@ -27,6 +27,10 @@ def task_payload(
     return payload
 
 
+def parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def test_service_and_skill_registry_capture_access_rules() -> None:
     client = TestClient(app)
 
@@ -266,6 +270,44 @@ def test_task_start_conflict_does_not_write_duplicate_event_or_audit() -> None:
     assert [audit["action"] for audit in audit_logs] == ["task.started"]
 
 
+def test_task_start_rejects_retry_backoff_window() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_retry_backoff"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Retry backoff",
+            "goal": "Do not restart a queued retry too early.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    retry_after_at = datetime.now(UTC) + timedelta(minutes=5)
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Wait before retry",
+            attempt_count=1,
+            retry_after_at=retry_after_at.isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    start_response = client.post(
+        f"/tasks/{task_response.json()['id']}/start",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-task-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+    )
+
+    assert start_response.status_code == 409
+    assert start_response.json()["detail"].startswith("Task retry backoff has not elapsed:")
+    assert client.get("/events", params={"trace_id": trace_id}).json() == []
+
+
 def test_recover_expired_task_lease_requeues_when_attempts_remain() -> None:
     client = TestClient(app)
     trace_id = "trace_task_lease_retry"
@@ -300,6 +342,7 @@ def test_recover_expired_task_lease_requeues_when_attempts_remain() -> None:
             "X-Synarch-Actor-Type": "service",
             "X-Synarch-Actor-Id": "gateway-scheduler",
             "X-Synarch-Trace-Id": trace_id,
+            "X-Synarch-Task-Retry-Backoff-Seconds": "90",
         },
     )
 
@@ -312,15 +355,21 @@ def test_recover_expired_task_lease_requeues_when_attempts_remain() -> None:
     assert recovered_task["attempt_count"] == 1
     assert recovered_task["lease_owner_id"] is None
     assert recovered_task["lease_expires_at"] is None
+    assert recovered_task["retry_after_at"] is not None
+    assert recovered_task["dead_letter_reason"] is None
+    assert recovered_task["dead_lettered_at"] is None
 
     events = client.get("/events", params={"trace_id": trace_id}).json()
     audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
     assert [event["type"] for event in events] == ["task.lease_expired"]
     assert events[0]["payload"]["will_retry"] is True
+    assert parse_timestamp(events[0]["payload"]["retry_after_at"]) == parse_timestamp(
+        recovered_task["retry_after_at"]
+    )
     assert [audit["action"] for audit in audit_logs] == ["task.lease_expired"]
 
 
-def test_recover_expired_task_lease_fails_after_max_attempts() -> None:
+def test_recover_expired_task_lease_needs_review_after_max_attempts() -> None:
     client = TestClient(app)
     trace_id = "trace_task_lease_failed"
     expired_at = datetime.now(UTC) - timedelta(seconds=30)
@@ -362,12 +411,16 @@ def test_recover_expired_task_lease_fails_after_max_attempts() -> None:
     assert recovery["recovered_task_ids"] == []
     assert recovery["failed_task_ids"] == [task_response.json()["id"]]
     failed_task = recovery["failed_tasks"][0]
-    assert failed_task["status"] == "failed"
+    assert failed_task["status"] == "needs_review"
     assert failed_task["result"]["reason"] == "lease_expired"
     assert failed_task["lease_owner_id"] is None
+    assert failed_task["retry_after_at"] is None
+    assert failed_task["dead_letter_reason"] == "lease_expired"
+    assert failed_task["dead_lettered_at"] is not None
 
     events = client.get("/events", params={"trace_id": trace_id}).json()
     assert events[0]["payload"]["will_retry"] is False
+    assert events[0]["payload"]["dead_letter_reason"] == "lease_expired"
 
 
 def test_events_are_listed_chronologically_for_trace() -> None:

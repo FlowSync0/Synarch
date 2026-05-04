@@ -56,6 +56,8 @@ PROJECT_COMPLEXITY_SPLIT_THRESHOLD = 10
 CLOSED_TASK_STATUSES = {TaskStatus.completed, TaskStatus.failed}
 DEFAULT_TASK_LEASE_SECONDS = 300
 MAX_TASK_LEASE_SECONDS = 86_400
+DEFAULT_TASK_RETRY_BACKOFF_SECONDS = 60
+MAX_TASK_RETRY_BACKOFF_SECONDS = 86_400
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,44 @@ def task_lease_duration_from_request(request: Request) -> timedelta:
             status_code=400,
             detail=f"Task lease seconds must be between 1 and {MAX_TASK_LEASE_SECONDS}",
         )
+    return timedelta(seconds=seconds)
+
+
+def task_retry_backoff_from_request(request: Request) -> timedelta:
+    raw_value = request.headers.get("x-synarch-task-retry-backoff-seconds")
+    if raw_value is None:
+        seconds = int(
+            os.getenv(
+                "TASK_RETRY_BACKOFF_SECONDS",
+                str(DEFAULT_TASK_RETRY_BACKOFF_SECONDS),
+            )
+        )
+    else:
+        try:
+            seconds = int(raw_value)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail="X-Synarch-Task-Retry-Backoff-Seconds must be an integer",
+            ) from error
+
+    if seconds < 0 or seconds > MAX_TASK_RETRY_BACKOFF_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Task retry backoff seconds must be between "
+                f"0 and {MAX_TASK_RETRY_BACKOFF_SECONDS}"
+            ),
+        )
+    return timedelta(seconds=seconds)
+
+
+def task_retry_delay(task: TaskRecord, base_delay: timedelta) -> timedelta:
+    multiplier = 2 ** max(task.attempt_count - 1, 0)
+    seconds = min(
+        base_delay.total_seconds() * multiplier,
+        MAX_TASK_RETRY_BACKOFF_SECONDS,
+    )
     return timedelta(seconds=seconds)
 
 
@@ -1137,6 +1177,13 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
     if task.attempt_count >= task.max_attempts:
         raise HTTPException(status_code=409, detail="Task reached max attempts")
 
+    started_at = datetime.now(UTC)
+    if task.retry_after_at is not None and task.retry_after_at > started_at:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task retry backoff has not elapsed: {task.retry_after_at.isoformat()}",
+        )
+
     incomplete_dependencies = incomplete_dependency_ids(task)
     if incomplete_dependencies:
         raise HTTPException(
@@ -1146,7 +1193,6 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
 
     audit_context = audit_context_from_request(request)
     trace_id = request.headers.get("x-synarch-trace-id")
-    started_at = datetime.now(UTC)
     lease_expires_at = started_at + task_lease_duration_from_request(request)
     lease_owner_id = audit_context.actor_id if audit_context is not None else None
     expected_status = task.status
@@ -1160,6 +1206,7 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
                 "lease_owner_id": lease_owner_id,
                 "lease_expires_at": lease_expires_at,
                 "last_heartbeat_at": started_at,
+                "retry_after_at": None,
             }
         ),
         {"status": expected_status},
@@ -1278,6 +1325,7 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
     audit_context = audit_context_from_request(request)
     trace_id = request.headers.get("x-synarch-trace-id")
     inspected_at = datetime.now(UTC)
+    base_retry_backoff = task_retry_backoff_from_request(request)
     recovered_tasks: list[TaskRecord] = []
     failed_tasks: list[TaskRecord] = []
     events: list[EventRecord] = []
@@ -1291,11 +1339,14 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
             continue
 
         should_retry = task.attempt_count < task.max_attempts
-        next_status = TaskStatus.queued if should_retry else TaskStatus.failed
+        retry_after_at = (
+            inspected_at + task_retry_delay(task, base_retry_backoff) if should_retry else None
+        )
+        next_status = TaskStatus.queued if should_retry else TaskStatus.needs_review
         result = task.result
         if not should_retry:
             result = {
-                "summary": "Task failed because its lease expired after max attempts.",
+                "summary": "Task needs review because its lease expired after max attempts.",
                 "reason": "lease_expired",
                 "attempt_count": task.attempt_count,
                 "max_attempts": task.max_attempts,
@@ -1307,6 +1358,9 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
                 "lease_owner_id": None,
                 "lease_expires_at": None,
                 "last_heartbeat_at": None,
+                "retry_after_at": retry_after_at,
+                "dead_letter_reason": None if should_retry else "lease_expired",
+                "dead_lettered_at": None if should_retry else inspected_at,
             }
         )
         record = update_record_if(
@@ -1335,6 +1389,10 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
                     "max_attempts": task.max_attempts,
                     "next_status": record.status,
                     "will_retry": should_retry,
+                    "retry_after_at": retry_after_at.isoformat()
+                    if retry_after_at is not None
+                    else None,
+                    "dead_letter_reason": record.dead_letter_reason,
                 },
                 trace_id=trace_id,
             )
@@ -1348,6 +1406,10 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
                 "project_id": record.project_id,
                 "next_status": record.status,
                 "will_retry": should_retry,
+                "retry_after_at": retry_after_at.isoformat()
+                if retry_after_at is not None
+                else None,
+                "dead_letter_reason": record.dead_letter_reason,
             },
         )
         events.append(event)
@@ -1450,6 +1512,9 @@ def record_task_result(
             "lease_owner_id": None,
             "lease_expires_at": None,
             "last_heartbeat_at": None,
+            "retry_after_at": None,
+            "dead_letter_reason": None,
+            "dead_lettered_at": None,
         }
     )
     record = update_record(REPOSITORIES.tasks, task_id, updated_task, "task")

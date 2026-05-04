@@ -64,6 +64,7 @@ GoalEnvelope
   -> Optional bounded ready-task batch through Gateway /tasks/run-ready
   -> Atomic task claim through state-service start endpoint
   -> Expired task lease recovery before each bounded ready-task batch
+  -> Retry backoff prevents immediate re-execution after a lease expiry
   -> Optional scheduler tick script for cron/server loops
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Event Service timeline
@@ -98,7 +99,9 @@ events and audit logs, which makes cron/server execution debuggable without need
 If another scheduler claims a task first, the batch skips that task ID and keeps looking for ready
 work instead of failing the whole tick.
 Before each batch, the gateway asks state-service to recover expired leases. Expired tasks are
-requeued while attempts remain, otherwise failed with a lease-expired result.
+requeued while attempts remain with `retry_after_at`, otherwise moved to `needs_review` with
+`dead_letter_reason=lease_expired`. The scheduler ignores queued tasks whose retry backoff has not
+elapsed, so a crash loop is visible instead of burning repeated model calls.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

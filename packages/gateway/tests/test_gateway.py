@@ -10,7 +10,7 @@ from synarch_gateway.main import (
     get_task_runner,
 )
 from synarch_gateway.state_client import StateServiceRequestError, StateServiceUnavailable
-from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable
+from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable, next_ready_task
 from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
@@ -374,6 +374,7 @@ class RecoveringStateClient(FakeStateClient):
                     "lease_owner_id": None,
                     "lease_expires_at": None,
                     "last_heartbeat_at": None,
+                    "retry_after_at": inspected_at + timedelta(seconds=60),
                 }
             )
             self.tasks[self.tasks.index(task)] = recovered_task
@@ -1201,6 +1202,30 @@ def test_run_ready_tasks_skips_claim_conflict_and_continues() -> None:
     ]
 
 
+def test_next_ready_task_skips_tasks_inside_retry_backoff() -> None:
+    task_waiting = TaskRecord(
+        id="task_retry_waiting",
+        project_id="project_retry_backoff",
+        title="Waiting retry",
+        status=TaskStatus.queued,
+        assigned_agent_id="agent-dev",
+        acceptance_criteria=["The retry window is respected."],
+        retry_after_at=datetime.now(UTC) + timedelta(minutes=5),
+    )
+    task_due = TaskRecord(
+        id="task_retry_due",
+        project_id="project_retry_backoff",
+        title="Due retry",
+        status=TaskStatus.queued,
+        assigned_agent_id="agent-dev",
+        acceptance_criteria=["The task can run after backoff."],
+        retry_after_at=datetime.now(UTC) - timedelta(minutes=1),
+    )
+
+    assert next_ready_task([task_waiting]) is None
+    assert next_ready_task([task_waiting, task_due]) == task_due
+
+
 def test_run_ready_tasks_recovers_expired_leases_before_selecting_ready_task() -> None:
     state_client = RecoveringStateClient()
     state_client.projects.append(
@@ -1246,11 +1271,13 @@ def test_run_ready_tasks_recovers_expired_leases_before_selecting_ready_task() -
     assert response.status_code == 200
     payload = response.json()
     assert payload["lease_recovery"]["recovered_task_ids"] == ["task_expired_running"]
-    assert [run["task"]["id"] for run in payload["runs"]] == ["task_expired_running"]
+    assert payload["runs"] == []
+    assert payload["stop_reason"] == "no_ready_task"
     assert payload["scheduler_event"]["payload"]["lease_recovered_task_ids"] == [
         "task_expired_running"
     ]
-    assert state_client.tasks[0].status == TaskStatus.completed
+    assert state_client.tasks[0].status == TaskStatus.queued
+    assert state_client.tasks[0].retry_after_at is not None
 
 
 def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
