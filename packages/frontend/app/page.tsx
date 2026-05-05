@@ -22,6 +22,7 @@ import {
   Network,
   PencilLine,
   Plus,
+  Play,
   RadioTower,
   RotateCcw,
   Search,
@@ -44,10 +45,12 @@ import {
 import {
   decideTaskReview,
   listTaskReviewQueue,
+  runReadyTasks,
   submitGoal,
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
+  type TaskRunBatchResult,
   type TaskRecord,
   type TaskReviewAction,
   type TaskReviewDecision
@@ -315,6 +318,11 @@ type GoalDraft = {
   requester: string;
 };
 
+type RunReadyDraft = {
+  projectId: string;
+  maxTasks: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -330,6 +338,11 @@ const initialGoalDraft: GoalDraft = {
   priority: "medium",
   constraints: "",
   requester: "local-user"
+};
+
+const initialRunReadyDraft: RunReadyDraft = {
+  projectId: "",
+  maxTasks: "1"
 };
 
 function formatLifecycleAge(createdAt: string): string {
@@ -567,6 +580,18 @@ function goalEnvelopeFromDraft(draft: GoalDraft): GoalEnvelope {
   };
 }
 
+function runCost(batch: TaskRunBatchResult): number {
+  return batch.runs.reduce(
+    (total, run) =>
+      total +
+      (run.cost_records ?? []).reduce(
+        (runTotal, costRecord) => runTotal + (costRecord.total_cost ?? 0),
+        0
+      ),
+    0
+  );
+}
+
 function eventTone(event: EventRecord): Tone {
   if (event.type.includes("failed")) {
     return "risk";
@@ -620,6 +645,8 @@ export default function DashboardPage() {
   const [goalDraft, setGoalDraft] = useState<GoalDraft>(initialGoalDraft);
   const [lastGoalSubmission, setLastGoalSubmission] =
     useState<GoalSubmissionResult | null>(null);
+  const [runReadyDraft, setRunReadyDraft] = useState<RunReadyDraft>(initialRunReadyDraft);
+  const [lastRunBatch, setLastRunBatch] = useState<TaskRunBatchResult | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -653,6 +680,19 @@ export default function DashboardPage() {
       setLastGoalSubmission(result);
       setIsGoalFormOpen(false);
       setGoalDraft(initialGoalDraft);
+      setRunReadyDraft({
+        projectId: result.project.id,
+        maxTasks: "1"
+      });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+    }
+  });
+  const runReadyMutation = useMutation({
+    mutationFn: runReadyTasks,
+    onSuccess: (result) => {
+      setLastRunBatch(result);
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -838,6 +878,28 @@ export default function DashboardPage() {
       return;
     }
     goalMutation.mutate(goalEnvelopeFromDraft(goalDraft));
+  };
+  const maxReadyTasks = Number.parseInt(runReadyDraft.maxTasks, 10);
+  const canRunReadyTasks =
+    runReadyDraft.projectId.trim().length > 0 &&
+    Number.isFinite(maxReadyTasks) &&
+    maxReadyTasks >= 1 &&
+    !runReadyMutation.isPending;
+  const updateRunReadyDraft = (field: keyof RunReadyDraft, value: string) => {
+    setRunReadyDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleRunReadySubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canRunReadyTasks) {
+      return;
+    }
+    runReadyMutation.mutate({
+      projectId: runReadyDraft.projectId.trim(),
+      maxTasks: maxReadyTasks
+    });
   };
   const updateTaskReviewDraft = (
     taskId: string,
@@ -1157,6 +1219,87 @@ export default function DashboardPage() {
                   </div>
                 </article>
               ))}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Runner" title="Exécuter une tranche prête" />
+            <form
+              className="grid gap-3 border-b border-border px-4 py-3 md:grid-cols-[minmax(0,1fr)_112px_auto]"
+              onSubmit={handleRunReadySubmit}
+            >
+              <input
+                className="h-10 min-w-0 rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                aria-label="Project id"
+                name="project_id"
+                placeholder="project_id"
+                value={runReadyDraft.projectId}
+                onChange={(event) => updateRunReadyDraft("projectId", event.target.value)}
+              />
+              <select
+                className="h-10 rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                aria-label="Max tasks"
+                name="max_tasks"
+                value={runReadyDraft.maxTasks}
+                onChange={(event) => updateRunReadyDraft("maxTasks", event.target.value)}
+              >
+                <option value="1">1 task</option>
+                <option value="2">2 tasks</option>
+                <option value="3">3 tasks</option>
+              </select>
+              <button
+                className="flex h-10 items-center justify-center gap-2 rounded-md bg-ink px-3 text-sm font-medium text-white transition enabled:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!canRunReadyTasks}
+                type="submit"
+              >
+                <Play size={16} />
+                <span>{runReadyMutation.isPending ? "Running..." : "Run"}</span>
+              </button>
+            </form>
+            <div className="px-4 py-3">
+              {lastRunBatch ? (
+                <div className="grid gap-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md bg-info-soft px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/15">
+                      {lastRunBatch.stop_reason}
+                    </span>
+                    <span className="text-xs text-muted">
+                      {lastRunBatch.runs.length}/{lastRunBatch.max_tasks} runs /{" "}
+                      {lastRunBatch.trace_id}
+                    </span>
+                  </div>
+                  {lastRunBatch.runs.map((run) => (
+                    <div key={run.task.id} className="grid gap-1 rounded-md bg-slate-50 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="min-w-0 truncate text-sm font-semibold text-ink">
+                          {run.task.title}
+                        </p>
+                        <span className={`shrink-0 text-xs font-medium ${projectStatusClass[run.task.status]}`}>
+                          {run.task.status}
+                        </span>
+                      </div>
+                      <BalancedText className="text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                        {run.agent_result.summary}
+                      </BalancedText>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted">
+                    cost {runCost(lastRunBatch).toFixed(6)} USD / skipped{" "}
+                    {lastRunBatch.skipped_task_ids.length}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-muted">
+                  Le lancement exige un project_id pour éviter toute exécution globale.
+                </p>
+              )}
+              {runReadyMutation.isError ? (
+                <p className="mt-2 text-xs font-medium text-risk">
+                  {runReadyMutation.error instanceof Error
+                    ? runReadyMutation.error.message
+                    : "Task execution failed."}
+                </p>
+              ) : null}
             </div>
           </section>
 

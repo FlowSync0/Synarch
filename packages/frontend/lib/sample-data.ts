@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Créer des objectifs persistants depuis l'interface",
+  title: "Exécuter une tranche prête sans lancer tout le backlog",
   body:
-    "Le gateway transforme maintenant un GoalEnvelope en projet, workspace, assignments, taches et events persistants. L'interface peut declencher ce flux sans devenir source de verite.",
+    "Le dashboard declenche maintenant le runner avec un project_id obligatoire et un max_tasks explicite. Une execution produit task result, events, couts et trace_id sans demarrer tout le backlog.",
   checks: [
-    "POST /goals/submit persiste project et tasks",
-    "Events goal.received, routing.decided et task.created traces",
-    "Dashboard rafraichit projets, timeline et review queue",
-    "Chaque objectif reste decoupe en petites taches auditables"
+    "POST /tasks/run-ready exige un project_id cote frontend",
+    "max_tasks reste explicite avant execution",
+    "Resultat affiche stop_reason, runs, trace_id et cout",
+    "Dashboard rafraichit projets, timeline et review queue"
   ]
 };
 
@@ -264,6 +264,11 @@ export const backlog = [
   {
     label: "M3.2",
     title: "Run ready tasks UI",
+    done: true
+  },
+  {
+    label: "M3.3",
+    title: "Project task detail view",
     done: false
   },
   {

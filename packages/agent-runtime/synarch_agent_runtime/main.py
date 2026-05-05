@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     openrouter_api_key_env_var: str = "OPENROUTER_API_KEY"
     openrouter_provider_id: str = "provider-openrouter"
     openrouter_model_id: str = "deepseek/deepseek-v4-flash"
-    openrouter_max_output_tokens: int = 700
+    openrouter_max_output_tokens: int = 1800
     openrouter_timeout_seconds: float = 180.0
     openrouter_reasoning_enabled: bool = False
     openrouter_reasoning_effort: str = "none"

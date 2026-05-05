@@ -80,6 +80,36 @@ export type TaskReviewResult = {
   audit_log?: unknown | null;
 };
 
+export type RunReadyRequest = {
+  projectId: string;
+  maxTasks: number;
+};
+
+export type TaskRunBatchResult = {
+  trace_id: string;
+  max_tasks: number;
+  project_id?: string | null;
+  stop_reason: string;
+  runs: Array<{
+    trace_id: string;
+    task: TaskRecord;
+    agent_result: {
+      agent_id: string;
+      task_id: string;
+      status: TaskStatus;
+      summary: string;
+    };
+    cost_records?: Array<{
+      total_cost?: number;
+      currency?: string;
+    }>;
+  }>;
+  skipped_task_ids: string[];
+  lease_recovery?: unknown | null;
+  scheduler_event?: unknown | null;
+  scheduler_audit_log?: unknown | null;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -121,6 +151,26 @@ export async function submitGoal(envelope: GoalEnvelope): Promise<GoalSubmission
     body: JSON.stringify(envelope)
   });
   return parseJsonResponse<GoalSubmissionResult>(response);
+}
+
+export async function runReadyTasks({
+  projectId,
+  maxTasks
+}: RunReadyRequest): Promise<TaskRunBatchResult> {
+  const params = new URLSearchParams({
+    project_id: projectId,
+    max_tasks: String(maxTasks)
+  });
+  const response = await fetch(`/api/gateway/tasks/run-ready?${params.toString()}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": `trace_frontend_run_ready_${Date.now()}`
+    }
+  });
+  return parseJsonResponse<TaskRunBatchResult>(response);
 }
 
 export async function decideTaskReview({
