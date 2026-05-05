@@ -111,6 +111,16 @@ export type MemoryItem = {
   expires_at?: string | null;
 };
 
+export type MemoryContext = {
+  agent_id: string;
+  project_id?: string | null;
+  token_budget: number;
+  allowed_scopes: string[];
+  items: MemoryItem[];
+  summary: string;
+  tokens_used: number;
+};
+
 export type ProjectTimeline = {
   project_id: string;
   project: ProjectRecord;
@@ -133,20 +143,7 @@ export type TaskRunBatchResult = {
   max_tasks: number;
   project_id?: string | null;
   stop_reason: string;
-  runs: Array<{
-    trace_id: string;
-    task: TaskRecord;
-    agent_result: {
-      agent_id: string;
-      task_id: string;
-      status: TaskStatus;
-      summary: string;
-    };
-    cost_records?: Array<{
-      total_cost?: number;
-      currency?: string;
-    }>;
-  }>;
+  runs: TaskRunResult[];
   skipped_task_ids: string[];
   lease_recovery?: unknown | null;
   scheduler_event?: unknown | null;
@@ -158,7 +155,7 @@ export type TaskRunResult = {
   task: TaskRecord;
   project?: ProjectRecord | null;
   world_view: unknown;
-  memory_context: unknown;
+  memory_context: MemoryContext;
   agent_result: {
     agent_id: string;
     task_id: string;

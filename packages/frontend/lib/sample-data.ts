@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Valider la mémoire avant réutilisation",
+  title: "Prouver la mémoire injectée au run",
   body:
-    "Les memory candidates d'un projet sont visibles dans la timeline et peuvent etre approuvees ou rejetees. Une memoire proposee ne devient reutilisable qu'apres revue.",
+    "Le dernier run expose les memory items approuves, scopes autorises, budget token et trace associee. L'event model_call.started garde aussi les ids memoire utilises.",
   checks: [
-    "PATCH /memory-items/{id}/status passe par le proxy frontend",
-    "Chaque memoire affiche scope, agent, statut et contenu",
-    "Approve et Reject rafraichissent events et timeline projet",
-    "Le detail memoire expose le JSON complet"
+    "TaskRunResult.memory_context est type cote frontend",
+    "Le detail projet affiche les items memoire injectes",
+    "model_call.started persiste memory_item_ids et tokens_used",
+    "Un run live OpenRouter verifie approved inclus et proposed exclu"
   ]
 };
 
@@ -289,6 +289,11 @@ export const backlog = [
   {
     label: "M3.7",
     title: "Memory-aware run verification",
+    done: true
+  },
+  {
+    label: "M3.8",
+    title: "Permissioned connector slice",
     done: false
   },
   {

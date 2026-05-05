@@ -601,6 +601,11 @@ def model_call_started_event(
             "provider_id": provider_id,
             "model_id": model_id,
             "purpose": "task.run",
+            "memory_item_count": len(memory_context.items),
+            "memory_item_ids": [item.id for item in memory_context.items],
+            "memory_tokens_used": memory_context.tokens_used,
+            "memory_token_budget": memory_context.token_budget,
+            "memory_allowed_scopes": memory_context.allowed_scopes,
             "input_tokens_estimate": estimated_tokens(
                 task.model_dump_json(),
                 world_view.model_dump_json(),

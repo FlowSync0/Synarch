@@ -382,6 +382,10 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert finance_run["memory_context"]["items"][0]["content"].startswith(
         "Les paiements fournisseurs"
     )
+    assert finance_run["model_call_events"][0]["payload"]["memory_item_count"] == 1
+    assert finance_run["model_call_events"][0]["payload"]["memory_item_ids"] == [
+        memory_item_response.json()["id"]
+    ]
 
     task = finance_run["task"]
     agent_result = finance_run["agent_result"]

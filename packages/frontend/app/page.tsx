@@ -1029,6 +1029,8 @@ export default function DashboardPage() {
       ? (projectTimelineQuery.data.memory_items.find((item) => item.id === selectedMemoryItemId) ??
         null)
       : null;
+  const selectedProjectLastTaskRun =
+    lastTaskRun?.task.project_id === effectiveSelectedProjectId ? lastTaskRun : null;
   const projectTimelineMode = !effectiveSelectedProjectId
     ? "sample"
     : projectTimelineQuery.isLoading
@@ -1501,10 +1503,10 @@ export default function DashboardPage() {
                     {effectiveSelectedProjectId}
                   </p>
                 ) : null}
-                {lastTaskRun ? (
+                {selectedProjectLastTaskRun ? (
                   <p className="mt-1 truncate text-[11px] font-medium text-ok">
-                    Last task run: {lastTaskRun.task.title} / {lastTaskRun.task.status} /{" "}
-                    {lastTaskRun.trace_id}
+                    Last task run: {selectedProjectLastTaskRun.task.title} /{" "}
+                    {selectedProjectLastTaskRun.task.status} / {selectedProjectLastTaskRun.trace_id}
                   </p>
                 ) : null}
               </div>
@@ -1721,6 +1723,72 @@ export default function DashboardPage() {
                     <p className="text-xs text-muted">Aucune memory candidate pour ce projet.</p>
                   </div>
                 )}
+                {selectedProjectLastTaskRun ? (
+                  <div className="grid gap-3 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase text-muted">
+                          Last run memory context
+                        </p>
+                        <p className="mt-1 truncate text-xs text-muted">
+                          {selectedProjectLastTaskRun.memory_context.items.length} approved items /
+                          {selectedProjectLastTaskRun.memory_context.tokens_used}/
+                          {selectedProjectLastTaskRun.memory_context.token_budget} estimated tokens /
+                          {selectedProjectLastTaskRun.memory_context.agent_id}
+                        </p>
+                      </div>
+                      <span className="rounded-md bg-info-soft px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/15">
+                        {traceLabel(selectedProjectLastTaskRun.trace_id)}
+                      </span>
+                    </div>
+                    <div className="grid gap-2 xl:grid-cols-[minmax(0,1fr)_minmax(260px,0.7fr)]">
+                      <div className="min-w-0 rounded-md bg-slate-50 p-3">
+                        <BalancedText className="text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                          {selectedProjectLastTaskRun.memory_context.summary ||
+                            "No memory assembly summary returned."}
+                        </BalancedText>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {selectedProjectLastTaskRun.memory_context.allowed_scopes.map((scope) => (
+                            <span
+                              key={scope}
+                              className="max-w-full truncate rounded-md bg-white px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                            >
+                              {scope}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid gap-2">
+                        {selectedProjectLastTaskRun.memory_context.items.length > 0 ? (
+                          selectedProjectLastTaskRun.memory_context.items.slice(0, 4).map((item) => (
+                            <article
+                              key={item.id}
+                              className="rounded-md border border-border bg-white p-3"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${memoryStatusClass[item.status]}`}
+                                >
+                                  {item.status}
+                                </span>
+                                <span className="max-w-full truncate text-[11px] text-muted">
+                                  {item.id} / {item.scope}
+                                </span>
+                              </div>
+                              <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                                {item.content}
+                              </BalancedText>
+                            </article>
+                          ))
+                        ) : (
+                          <p className="rounded-md bg-slate-50 p-3 text-xs text-muted">
+                            No approved memory item was injected for this run.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
                 {focusedTimelineTask ? (
                   <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
                     <p className="min-w-0 truncate text-xs text-muted">
@@ -2009,6 +2077,10 @@ export default function DashboardPage() {
                       <BalancedText className="text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
                         {run.agent_result.summary}
                       </BalancedText>
+                      <p className="text-[11px] text-muted">
+                        memory {run.memory_context.items.length} items /{" "}
+                        {run.memory_context.tokens_used}/{run.memory_context.token_budget} tokens
+                      </p>
                     </div>
                   ))}
                   <p className="text-xs text-muted">

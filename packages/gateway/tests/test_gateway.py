@@ -476,14 +476,23 @@ class FakeControlPlaneClient:
 
 
 class FakeMemoryClient:
-    def __init__(self) -> None:
+    def __init__(self, context_items: list[MemoryItem] | None = None) -> None:
         self.contexts: list[MemoryContext] = []
+        self.context_items = context_items or []
         self.items: list[MemoryItem] = []
         self.items_by_id: dict[str, MemoryItem] = {}
 
     def assemble_context(self, context: MemoryContext) -> MemoryContext:
         self.contexts.append(context)
-        return context.model_copy(update={"summary": "Fake context assembled."})
+        return context.model_copy(
+            update={
+                "items": self.context_items,
+                "summary": "Fake context assembled.",
+                "tokens_used": sum(
+                    max(1, (len(item.content) + 3) // 4) for item in self.context_items
+                ),
+            }
+        )
 
     def create_memory_item(self, item: MemoryItem) -> MemoryItem:
         self.items.append(item)
@@ -879,7 +888,15 @@ def test_run_next_task_executes_first_ready_task() -> None:
             acceptance_criteria=["Ready task can produce a recorded result."],
         )
     )
-    memory_client = FakeMemoryClient()
+    approved_memory = MemoryItem(
+        id="memory-approved",
+        scope="project:project_demo",
+        content="Use the approved deployment checklist before marking backend slices done.",
+        status=MemoryStatus.approved,
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    memory_client = FakeMemoryClient(context_items=[approved_memory])
     runtime_client = FakeAgentRuntimeClient()
     runner = TaskRunner(
         state=state_client,
@@ -907,6 +924,7 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert payload["task"]["result"]["summary"] == "Runtime stub prepared the task for review."
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["memory_context"]["summary"] == "Fake context assembled."
+    assert payload["memory_context"]["items"][0]["id"] == "memory-approved"
     assert memory_client.contexts[0].allowed_scopes == [
         "global",
         "division:dev",
@@ -931,6 +949,17 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert [event["type"] for event in payload["model_call_events"]] == [
         "model_call.started",
         "model_call.completed",
+    ]
+    started_payload = payload["model_call_events"][0]["payload"]
+    assert started_payload["memory_item_count"] == 1
+    assert started_payload["memory_item_ids"] == ["memory-approved"]
+    assert started_payload["memory_tokens_used"] == payload["memory_context"]["tokens_used"]
+    assert started_payload["memory_token_budget"] == 1200
+    assert started_payload["memory_allowed_scopes"] == [
+        "global",
+        "division:dev",
+        "agent:agent-dev",
+        "project:project_demo",
     ]
     assert [event["type"] for event in payload["memory_events"]] == [
         "memory.candidate_created",
