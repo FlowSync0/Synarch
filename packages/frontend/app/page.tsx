@@ -32,7 +32,7 @@ import {
   Workflow,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   decideAgentLifecycleRequest,
@@ -44,6 +44,10 @@ import {
 import {
   decideTaskReview,
   listTaskReviewQueue,
+  submitGoal,
+  type GoalEnvelope,
+  type GoalPriority,
+  type GoalSubmissionResult,
   type TaskRecord,
   type TaskReviewAction,
   type TaskReviewDecision
@@ -304,6 +308,13 @@ type TaskReviewDraft = {
   reason: string;
 };
 
+type GoalDraft = {
+  goal: string;
+  priority: GoalPriority;
+  constraints: string;
+  requester: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -312,6 +323,13 @@ type TimelineViewModel = {
   tone: Tone;
   icon: typeof Activity;
   source: "api" | "sample";
+};
+
+const initialGoalDraft: GoalDraft = {
+  goal: "",
+  priority: "medium",
+  constraints: "",
+  requester: "local-user"
 };
 
 function formatLifecycleAge(createdAt: string): string {
@@ -532,6 +550,23 @@ function taskReviewDecisionFromDraft(draft: TaskReviewDraft): TaskReviewDecision
   return decision;
 }
 
+function constraintsFromDraft(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((constraint) => constraint.trim())
+    .filter(Boolean);
+}
+
+function goalEnvelopeFromDraft(draft: GoalDraft): GoalEnvelope {
+  return {
+    goal: draft.goal.trim(),
+    priority: draft.priority,
+    requester: draft.requester.trim() || "local-user",
+    constraints: constraintsFromDraft(draft.constraints),
+    context: {}
+  };
+}
+
 function eventTone(event: EventRecord): Tone {
   if (event.type.includes("failed")) {
     return "risk";
@@ -581,6 +616,10 @@ function eventRow(event: EventRecord): TimelineViewModel {
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const [isGoalFormOpen, setIsGoalFormOpen] = useState(false);
+  const [goalDraft, setGoalDraft] = useState<GoalDraft>(initialGoalDraft);
+  const [lastGoalSubmission, setLastGoalSubmission] =
+    useState<GoalSubmissionResult | null>(null);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -607,6 +646,17 @@ export default function DashboardPage() {
     queryKey: ["task-review-queue"],
     queryFn: listTaskReviewQueue,
     refetchInterval: 15_000
+  });
+  const goalMutation = useMutation({
+    mutationFn: submitGoal,
+    onSuccess: (result) => {
+      setLastGoalSubmission(result);
+      setIsGoalFormOpen(false);
+      setGoalDraft(initialGoalDraft);
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+    }
   });
   const decisionMutation = useMutation({
     mutationFn: decideAgentLifecycleRequest,
@@ -772,6 +822,23 @@ export default function DashboardPage() {
       : timelineMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing sample timeline";
+  const canSubmitGoal = goalDraft.goal.trim().length > 0 && !goalMutation.isPending;
+  const updateGoalDraft = <FieldT extends keyof GoalDraft>(
+    field: FieldT,
+    value: GoalDraft[FieldT]
+  ) => {
+    setGoalDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleGoalSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canSubmitGoal) {
+      return;
+    }
+    goalMutation.mutate(goalEnvelopeFromDraft(goalDraft));
+  };
   const updateTaskReviewDraft = (
     taskId: string,
     field: keyof TaskReviewDraft,
@@ -863,6 +930,7 @@ export default function DashboardPage() {
               className="flex h-10 w-10 items-center justify-center gap-2 rounded-md bg-accent text-sm font-medium text-white shadow-soft transition hover:bg-accent-strong sm:w-auto sm:px-3"
               aria-label="Nouvel objectif"
               title="Nouvel objectif"
+              onClick={() => setIsGoalFormOpen(true)}
             >
               <Plus size={18} />
               <span className="hidden sm:inline">Objectif</span>
@@ -870,6 +938,99 @@ export default function DashboardPage() {
           </div>
         </div>
       </header>
+
+      {isGoalFormOpen ? (
+        <div className="fixed inset-0 z-40 overflow-y-auto bg-ink/35 px-4 py-6 backdrop-blur-sm">
+          <form
+            className="mx-auto max-w-xl overflow-hidden rounded-md border border-border bg-panel shadow-soft"
+            onSubmit={handleGoalSubmit}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-normal text-muted">
+                  Gateway
+                </p>
+                <h2 className="truncate text-sm font-semibold text-ink">Nouvel objectif</h2>
+              </div>
+              <button
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-md border border-border bg-white text-muted transition hover:border-accent/40 hover:text-accent"
+                aria-label="Fermer le formulaire objectif"
+                title="Fermer le formulaire objectif"
+                type="button"
+                onClick={() => setIsGoalFormOpen(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="space-y-3 p-4">
+              <textarea
+                className="min-h-28 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+                aria-label="Objectif"
+                name="goal"
+                placeholder="Objectif"
+                value={goalDraft.goal}
+                onChange={(event) => updateGoalDraft("goal", event.target.value)}
+              />
+              <div className="grid gap-3 sm:grid-cols-[150px_minmax(0,1fr)]">
+                <select
+                  className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                  aria-label="Priorite"
+                  name="priority"
+                  value={goalDraft.priority}
+                  onChange={(event) =>
+                    updateGoalDraft("priority", event.target.value as GoalPriority)
+                  }
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+                <input
+                  className="h-10 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                  aria-label="Requester"
+                  name="requester"
+                  placeholder="Requester"
+                  value={goalDraft.requester}
+                  onChange={(event) => updateGoalDraft("requester", event.target.value)}
+                />
+              </div>
+              <textarea
+                className="min-h-20 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+                aria-label="Contraintes"
+                name="constraints"
+                placeholder="Contraintes"
+                value={goalDraft.constraints}
+                onChange={(event) => updateGoalDraft("constraints", event.target.value)}
+              />
+              {goalMutation.isError ? (
+                <p className="text-xs font-medium text-risk">
+                  {goalMutation.error instanceof Error
+                    ? goalMutation.error.message
+                    : "Goal submission failed."}
+                </p>
+              ) : null}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+              <button
+                className="h-9 rounded-md border border-border bg-white px-3 text-sm font-medium text-muted transition hover:border-accent/40 hover:text-accent"
+                type="button"
+                onClick={() => setIsGoalFormOpen(false)}
+              >
+                Annuler
+              </button>
+              <button
+                className="flex h-9 items-center gap-2 rounded-md bg-accent px-3 text-sm font-medium text-white transition enabled:hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!canSubmitGoal}
+                type="submit"
+              >
+                <Plus size={16} />
+                <span>{goalMutation.isPending ? "Creation..." : "Creer"}</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
 
       <div className="mx-auto grid max-w-[1440px] gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[72px_minmax(0,1fr)_360px] xl:grid-cols-[88px_minmax(0,1fr)_400px]">
         <nav className="hidden rounded-md border border-border bg-panel p-2 lg:block">
@@ -912,6 +1073,12 @@ export default function DashboardPage() {
                 <BalancedText className="mt-3 max-w-3xl text-sm text-muted" lineHeight={21}>
                   {currentFocus.body}
                 </BalancedText>
+                {lastGoalSubmission ? (
+                  <p className="mt-3 truncate text-xs font-medium text-ok">
+                    {lastGoalSubmission.project.title} / {lastGoalSubmission.tasks.length} tasks /{" "}
+                    {lastGoalSubmission.trace_id}
+                  </p>
+                ) : null}
               </div>
               <div className="grid min-w-0 gap-2 rounded-md bg-slate-50 p-3">
                 {currentFocus.checks.map((check) => (

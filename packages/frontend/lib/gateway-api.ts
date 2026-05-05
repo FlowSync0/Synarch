@@ -7,6 +7,16 @@ export type TaskStatus =
   | "failed"
   | "needs_review";
 
+export type GoalPriority = "low" | "medium" | "high" | "critical";
+
+export type GoalEnvelope = {
+  goal: string;
+  priority: GoalPriority;
+  context?: Record<string, unknown>;
+  constraints: string[];
+  requester: string;
+};
+
 export type TaskRecord = {
   id: string;
   project_id: string;
@@ -28,6 +38,27 @@ export type TaskRecord = {
   dead_letter_reason?: string | null;
   dead_lettered_at?: string | null;
   created_at: string;
+};
+
+export type GoalProjectRecord = {
+  id: string;
+  title: string;
+  goal: string;
+  status: TaskStatus;
+  priority: GoalPriority;
+  owner_agent_id: string;
+  created_at: string;
+};
+
+export type GoalSubmissionResult = {
+  trace_id: string;
+  routing_decision: unknown;
+  project: GoalProjectRecord;
+  workspace: unknown;
+  assignments: unknown[];
+  tasks: TaskRecord[];
+  events: unknown[];
+  complexity_assessment?: unknown | null;
 };
 
 export type TaskReviewAction = "retry" | "cancel" | "update";
@@ -76,6 +107,20 @@ export async function listTaskReviewQueue(): Promise<TaskRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<TaskRecord[]>(response);
+}
+
+export async function submitGoal(envelope: GoalEnvelope): Promise<GoalSubmissionResult> {
+  const response = await fetch("/api/gateway/goals/submit", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": envelope.requester,
+      "X-Synarch-Trace-Id": `trace_frontend_goal_${Date.now()}`
+    },
+    body: JSON.stringify(envelope)
+  });
+  return parseJsonResponse<GoalSubmissionResult>(response);
 }
 
 export async function decideTaskReview({

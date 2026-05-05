@@ -25,19 +25,19 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M2",
-    detail: "Control Plane From State",
+    value: "M3",
+    detail: "Goal to Project",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "60",
+    value: "101",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
   {
     label: "Couches actives",
-    value: "6/9",
+    value: "7/9",
     detail: "partielles ou en cours",
     tone: "info" as Tone
   },
@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Faire passer les agents par une gouvernance lisible",
+  title: "Créer des objectifs persistants depuis l'interface",
   body:
-    "Le state-service sait maintenant appliquer les demandes de creation ou desactivation d'agents apres decision humaine. Le control-plane expose cette file pour que l'interface devienne le poste de validation sans devenir source de verite.",
+    "Le gateway transforme maintenant un GoalEnvelope en projet, workspace, assignments, taches et events persistants. L'interface peut declencher ce flux sans devenir source de verite.",
   checks: [
-    "Lifecycle request cree un event approval.requested",
-    "Decision approuvee applique agent.created ou agent.deactivated",
-    "Agents inactifs bloques a l'assignation",
-    "Control-plane relaie queue, creation et decision"
+    "POST /goals/submit persiste project et tasks",
+    "Events goal.received, routing.decided et task.created traces",
+    "Dashboard rafraichit projets, timeline et review queue",
+    "Chaque objectif reste decoupe en petites taches auditables"
   ]
 };
 
@@ -85,9 +85,9 @@ export const projects = [
     owner: "Gateway",
     status: "partial",
     priority: "high",
-    progress: 28,
+    progress: 72,
     summary:
-      "Transformer un GoalEnvelope en projet, taches, routage et timeline persistants au lieu de retourner seulement un draft."
+      "Transformer un GoalEnvelope en projet, workspace, assignments, taches et events persistants via gateway."
   },
   {
     title: "Live Control Surface",
@@ -145,16 +145,16 @@ export const layers = [
     name: "Interface",
     status: "partial" as Status,
     icon: Sparkles,
-    summary: "Dashboard Next.js responsive, encore branche sur donnees locales.",
-    next: "Lire projets, agents et timeline depuis les APIs."
+    summary: "Dashboard Next.js lit projets, agents, timeline, approvals et review queue en live.",
+    next: "Ajouter vues detaillees projet et taches."
   },
   {
     id: "B",
     name: "Orchestration",
     status: "partial" as Status,
     icon: Workflow,
-    summary: "Gateway route les objectifs avec une logique deterministe par mots cles.",
-    next: "Creer projet, taches et events depuis POST /goals."
+    summary: "Gateway route les objectifs et persiste projet, workspace, assignments, taches et events.",
+    next: "Exposer le lancement controle des taches depuis l'interface."
   },
   {
     id: "C",
@@ -162,7 +162,7 @@ export const layers = [
     status: "partial" as Status,
     icon: ShieldCheck,
     summary: "LocalWorldView, services, policies et lifecycle queue passent par state-service.",
-    next: "Brancher approval queue frontend sur control-plane."
+    next: "Afficher historique decisions et demandes de split."
   },
   {
     id: "D",
@@ -175,10 +175,10 @@ export const layers = [
   {
     id: "E",
     name: "Project / Workflow",
-    status: "next" as Status,
+    status: "partial" as Status,
     icon: Database,
-    summary: "Contrats et endpoints existent. Les transitions de workflow restent a durcir.",
-    next: "Goal -> project -> tasks -> events persistants."
+    summary: "Goal submission cree projets et taches persistants avec events traces.",
+    next: "Durcir les transitions run, blocked, review et completed."
   },
   {
     id: "F",
@@ -259,6 +259,11 @@ export const backlog = [
   {
     label: "M3.1",
     title: "Goal creates project",
+    done: true
+  },
+  {
+    label: "M3.2",
+    title: "Run ready tasks UI",
     done: false
   },
   {
