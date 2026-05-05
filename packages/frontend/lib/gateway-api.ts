@@ -139,6 +139,25 @@ export type TaskRunBatchResult = {
   scheduler_audit_log?: unknown | null;
 };
 
+export type TaskRunResult = {
+  trace_id: string;
+  task: TaskRecord;
+  project?: ProjectRecord | null;
+  world_view: unknown;
+  memory_context: unknown;
+  agent_result: {
+    agent_id: string;
+    task_id: string;
+    status: TaskStatus;
+    summary: string;
+  };
+  model_call_events: EventRecord[];
+  created_sub_tasks: TaskRecord[];
+  sub_task_events: EventRecord[];
+  memory_events: EventRecord[];
+  cost_records: CostRecord[];
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -210,6 +229,19 @@ export async function getProjectTimeline(projectId: string): Promise<ProjectTime
     }
   );
   return parseJsonResponse<ProjectTimeline>(response);
+}
+
+export async function runTask(taskId: string): Promise<TaskRunResult> {
+  const response = await fetch(`/api/gateway/tasks/${encodeURIComponent(taskId)}/run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": `trace_frontend_task_run_${Date.now()}`
+    }
+  });
+  return parseJsonResponse<TaskRunResult>(response);
 }
 
 export async function decideTaskReview({

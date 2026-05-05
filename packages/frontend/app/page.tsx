@@ -47,12 +47,14 @@ import {
   getProjectTimeline,
   listTaskReviewQueue,
   runReadyTasks,
+  runTask,
   submitGoal,
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
   type ProjectTimeline,
   type TaskRunBatchResult,
+  type TaskRunResult,
   type TaskRecord,
   type TaskReviewAction,
   type TaskReviewDecision
@@ -600,10 +602,12 @@ function taskCost(timeline: ProjectTimeline, taskId: string): number {
     .reduce((total, costRecord) => total + costRecord.total_cost, 0);
 }
 
+function eventBelongsToTask(event: EventRecord, taskId: string): boolean {
+  return event.target === taskId || event.payload.task_id === taskId;
+}
+
 function taskEventCount(timeline: ProjectTimeline, taskId: string): number {
-  return timeline.events.filter(
-    (event) => event.target === taskId || event.payload.task_id === taskId
-  ).length;
+  return timeline.events.filter((event) => eventBelongsToTask(event, taskId)).length;
 }
 
 function taskResultSummary(task: TaskRecord): string {
@@ -671,7 +675,9 @@ export default function DashboardPage() {
     useState<GoalSubmissionResult | null>(null);
   const [runReadyDraft, setRunReadyDraft] = useState<RunReadyDraft>(initialRunReadyDraft);
   const [lastRunBatch, setLastRunBatch] = useState<TaskRunBatchResult | null>(null);
+  const [lastTaskRun, setLastTaskRun] = useState<TaskRunResult | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -710,6 +716,7 @@ export default function DashboardPage() {
         maxTasks: "1"
       });
       setSelectedProjectId(result.project.id);
+      setFocusedTimelineTaskId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -723,6 +730,19 @@ export default function DashboardPage() {
       if (result.project_id) {
         setSelectedProjectId(result.project_id);
       }
+      setFocusedTimelineTaskId(result.runs[0]?.task.id ?? "");
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const taskRunMutation = useMutation({
+    mutationFn: runTask,
+    onSuccess: (result) => {
+      setLastTaskRun(result);
+      setSelectedProjectId(result.task.project_id);
+      setFocusedTimelineTaskId(result.task.id);
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -737,7 +757,8 @@ export default function DashboardPage() {
   });
   const taskReviewMutation = useMutation({
     mutationFn: decideTaskReview,
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
+      setFocusedTimelineTaskId(variables.taskId);
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
@@ -860,17 +881,30 @@ export default function DashboardPage() {
       return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
     });
   }, [projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+  const effectiveFocusedTaskId = projectTimelineTasks.some(
+    (task) => task.id === focusedTimelineTaskId
+  )
+    ? focusedTimelineTaskId
+    : "";
+  const focusedTimelineTask = projectTimelineTasks.find(
+    (task) => task.id === effectiveFocusedTaskId
+  );
   const projectTimelineEvents = useMemo(() => {
     if (!projectTimelineQuery.isSuccess) {
       return [];
     }
-    return [...projectTimelineQuery.data.events]
+    const events = effectiveFocusedTaskId
+      ? projectTimelineQuery.data.events.filter((event) =>
+          eventBelongsToTask(event, effectiveFocusedTaskId)
+        )
+      : projectTimelineQuery.data.events;
+    return [...events]
       .sort(
         (left, right) =>
           new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
       )
       .slice(0, 5);
-  }, [projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+  }, [effectiveFocusedTaskId, projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
   const projectTimelineMode = !effectiveSelectedProjectId
     ? "sample"
     : projectTimelineQuery.isLoading
@@ -1312,6 +1346,7 @@ export default function DashboardPage() {
                       type="button"
                       onClick={() => {
                         setSelectedProjectId(project.id);
+                        setFocusedTimelineTaskId("");
                         setRunReadyDraft((draft) => ({
                           ...draft,
                           projectId: project.id
@@ -1339,6 +1374,12 @@ export default function DashboardPage() {
                     {effectiveSelectedProjectId}
                   </p>
                 ) : null}
+                {lastTaskRun ? (
+                  <p className="mt-1 truncate text-[11px] font-medium text-ok">
+                    Last task run: {lastTaskRun.task.title} / {lastTaskRun.task.status} /{" "}
+                    {lastTaskRun.trace_id}
+                  </p>
+                ) : null}
               </div>
               <div className="flex min-w-0 items-center gap-2">
                 <select
@@ -1348,6 +1389,7 @@ export default function DashboardPage() {
                   value={effectiveSelectedProjectId}
                   onChange={(event) => {
                     setSelectedProjectId(event.target.value);
+                    setFocusedTimelineTaskId("");
                     setRunReadyDraft((draft) => ({
                       ...draft,
                       projectId: event.target.value
@@ -1386,6 +1428,27 @@ export default function DashboardPage() {
                     </div>
                   ))}
                 </div>
+                {focusedTimelineTask ? (
+                  <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
+                    <p className="min-w-0 truncate text-xs text-muted">
+                      Events filtered on {focusedTimelineTask.title}
+                    </p>
+                    <button
+                      className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-accent/40 hover:text-accent"
+                      type="button"
+                      onClick={() => setFocusedTimelineTaskId("")}
+                    >
+                      All events
+                    </button>
+                  </div>
+                ) : null}
+                {taskRunMutation.isError ? (
+                  <p className="px-4 py-2 text-xs font-medium text-risk">
+                    {taskRunMutation.error instanceof Error
+                      ? taskRunMutation.error.message
+                      : "Task run failed."}
+                  </p>
+                ) : null}
                 {projectTimelineTasks.length === 0 ? (
                   <article className="px-4 py-5">
                     <p className="text-sm font-medium text-ink">Aucune tâche projet</p>
@@ -1395,7 +1458,9 @@ export default function DashboardPage() {
                 {projectTimelineTasks.map((task) => (
                   <article
                     key={task.id}
-                    className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_180px]"
+                    className={`grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_180px] ${
+                      effectiveFocusedTaskId === task.id ? "bg-info-soft/35" : ""
+                    }`}
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -1449,6 +1514,56 @@ export default function DashboardPage() {
                         <span>depends</span>
                         <span className="font-medium text-ink">{task.depends_on.length}</span>
                       </div>
+                      <div className="mt-2 grid grid-cols-3 gap-1.5">
+                        <button
+                          className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-info/40 hover:bg-info-soft hover:text-info"
+                          type="button"
+                          onClick={() =>
+                            setFocusedTimelineTaskId(
+                              effectiveFocusedTaskId === task.id ? "" : task.id
+                            )
+                          }
+                        >
+                          {effectiveFocusedTaskId === task.id ? "All" : "Focus"}
+                        </button>
+                        <button
+                          className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-accent transition enabled:hover:border-accent/40 enabled:hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={
+                            task.status !== "queued" ||
+                            taskRunMutation.isPending ||
+                            taskReviewMutation.isPending
+                          }
+                          type="button"
+                          onClick={() => taskRunMutation.mutate(task.id)}
+                        >
+                          {taskRunMutation.isPending && taskRunMutation.variables === task.id
+                            ? "Run..."
+                            : "Run"}
+                        </button>
+                        <button
+                          className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-warn transition enabled:hover:border-warn/40 enabled:hover:bg-warn-soft disabled:cursor-not-allowed disabled:opacity-40"
+                          disabled={
+                            task.status !== "needs_review" ||
+                            taskRunMutation.isPending ||
+                            taskReviewMutation.isPending
+                          }
+                          type="button"
+                          onClick={() =>
+                            taskReviewMutation.mutate({
+                              taskId: task.id,
+                              decision: {
+                                action: "retry",
+                                reason: defaultTaskReviewReason("retry")
+                              }
+                            })
+                          }
+                        >
+                          {taskReviewMutation.isPending &&
+                          taskReviewMutation.variables?.taskId === task.id
+                            ? "Retry..."
+                            : "Retry"}
+                        </button>
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -1465,6 +1580,10 @@ export default function DashboardPage() {
                         </span>
                       ))}
                     </div>
+                  </div>
+                ) : effectiveFocusedTaskId ? (
+                  <div className="px-4 py-3">
+                    <p className="text-xs text-muted">Aucun event direct pour cette tâche.</p>
                   </div>
                 ) : null}
               </div>

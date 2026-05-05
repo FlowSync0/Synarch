@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Inspecter un projet avant de relancer l'IA",
+  title: "Agir depuis la timeline projet",
   body:
-    "Le dashboard lit maintenant la timeline projet du gateway: tasks, events, memory candidates, audit logs et couts sont visibles par projet avant toute nouvelle execution.",
+    "La timeline projet devient actionnable: une tache queued peut etre lancee directement, une tache en review peut etre remise en queue, et les events peuvent etre filtres par tache.",
   checks: [
-    "GET /projects/{project_id}/timeline passe par le proxy frontend",
-    "Chaque task affiche statut, agent, criteres, events et cout",
-    "La selection projet pre-remplit le runner",
-    "Run, review et goal submit rafraichissent la timeline projet"
+    "POST /tasks/{task_id}/run passe par le proxy frontend",
+    "Run et retry rafraichissent timeline, projets, events et review queue",
+    "Focus task filtre les derniers events visibles",
+    "La derniere execution affiche trace_id, statut et titre"
   ]
 };
 
@@ -274,6 +274,11 @@ export const backlog = [
   {
     label: "M3.4",
     title: "Timeline-driven task actions",
+    done: true
+  },
+  {
+    label: "M3.5",
+    title: "Trace and event drilldown",
     done: false
   },
   {
