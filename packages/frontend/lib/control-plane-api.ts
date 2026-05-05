@@ -28,6 +28,25 @@ export type AgentDefinition = {
   updated_at: string;
 };
 
+export type LocalWorldView = {
+  agent_id: string;
+  name?: string | null;
+  role: string;
+  division: string;
+  peers: string[];
+  manager?: string | null;
+  manager_agent_id?: string | null;
+  peer_agent_ids: string[];
+  direct_report_agent_ids: string[];
+  active_projects: string[];
+  permissions: AgentDefinition["permissions"];
+  capabilities: AgentDefinition["capabilities"];
+  policies: string[];
+  available_services: string[];
+  available_connector_ids: string[];
+  available_skill_ids: string[];
+};
+
 export type AgentLifecycleRequest = {
   id: string;
   action: LifecycleAction;
@@ -85,6 +104,16 @@ export async function listAgents(): Promise<AgentDefinition[]> {
     cache: "no-store"
   });
   return parseJsonResponse<AgentDefinition[]>(response);
+}
+
+export async function getAgentWorldView(agentId: string): Promise<LocalWorldView> {
+  const response = await fetch(
+    `/api/control-plane/agents/${encodeURIComponent(agentId)}/world-view`,
+    {
+      cache: "no-store"
+    }
+  );
+  return parseJsonResponse<LocalWorldView>(response);
 }
 
 export async function decideAgentLifecycleRequest({

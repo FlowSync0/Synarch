@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Prouver la mémoire injectée au run",
+  title: "Exposer la porte permissions/connecteurs",
   body:
-    "Le dernier run expose les memory items approuves, scopes autorises, budget token et trace associee. L'event model_call.started garde aussi les ids memoire utilises.",
+    "Le dashboard lit le world-view d'un agent, expose ses outils/services/connecteurs autorises et peut declencher un appel outil controle via le gateway.",
   checks: [
-    "TaskRunResult.memory_context est type cote frontend",
-    "Le detail projet affiche les items memoire injectes",
-    "model_call.started persiste memory_item_ids et tokens_used",
-    "Un run live OpenRouter verifie approved inclus et proposed exclu"
+    "GET /agents/{id}/world-view passe par le proxy frontend",
+    "POST /tools/call passe par le proxy frontend",
+    "Allowed tools, denied tools et connectors sont visibles",
+    "Un appel event.emit autorise produit event et audit"
   ]
 };
 
@@ -294,6 +294,11 @@ export const backlog = [
   {
     label: "M3.8",
     title: "Permissioned connector slice",
+    done: true
+  },
+  {
+    label: "M3.9",
+    title: "Concrete connector adapters",
     done: false
   },
   {

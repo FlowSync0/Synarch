@@ -82,6 +82,24 @@ export type TaskReviewResult = {
   audit_log?: unknown | null;
 };
 
+export type ToolCallRequest = {
+  agent_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  reason: string;
+  service_id?: string | null;
+  project_id?: string | null;
+  task_id?: string | null;
+  trace_id?: string | null;
+};
+
+export type ToolResult = {
+  tool_name: string;
+  status: TaskStatus;
+  output: Record<string, unknown>;
+  error?: string | null;
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -253,6 +271,20 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     }
   });
   return parseJsonResponse<TaskRunResult>(response);
+}
+
+export async function callTool(toolCall: ToolCallRequest): Promise<ToolResult> {
+  const response = await fetch("/api/gateway/tools/call", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": toolCall.trace_id ?? `trace_frontend_tool_gate_${Date.now()}`
+    },
+    body: JSON.stringify(toolCall)
+  });
+  return parseJsonResponse<ToolResult>(response);
 }
 
 export async function updateMemoryStatus({

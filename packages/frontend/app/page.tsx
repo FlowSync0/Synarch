@@ -21,6 +21,7 @@ import {
   Menu,
   Network,
   PencilLine,
+  PlugZap,
   Plus,
   Play,
   RadioTower,
@@ -37,12 +38,15 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   decideAgentLifecycleRequest,
+  getAgentWorldView,
   listAgents,
   listAgentLifecycleRequests,
   type AgentDefinition,
-  type AgentLifecycleRequest
+  type AgentLifecycleRequest,
+  type LocalWorldView
 } from "../lib/control-plane-api";
 import {
+  callTool,
   decideTaskReview,
   getProjectTimeline,
   listTaskReviewQueue,
@@ -59,7 +63,9 @@ import {
   type TaskRunResult,
   type TaskRecord,
   type TaskReviewAction,
-  type TaskReviewDecision
+  type TaskReviewDecision,
+  type ToolCallRequest,
+  type ToolResult
 } from "../lib/gateway-api";
 import {
   listEvents,
@@ -287,6 +293,8 @@ type AgentViewModel = {
   load: number;
   scope: string;
   division: string;
+  allowedTools: string[];
+  deniedTools: string[];
   icon: typeof GitBranch;
   source: "api" | "sample";
 };
@@ -335,6 +343,15 @@ type RunReadyDraft = {
   maxTasks: string;
 };
 
+type ToolCallDraft = {
+  agentId: string;
+  toolName: string;
+  serviceId: string;
+  projectId: string;
+  reason: string;
+  summary: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -364,6 +381,15 @@ const initialGoalDraft: GoalDraft = {
 const initialRunReadyDraft: RunReadyDraft = {
   projectId: "",
   maxTasks: "1"
+};
+
+const initialToolCallDraft: ToolCallDraft = {
+  agentId: "",
+  toolName: "event.emit",
+  serviceId: "service-event-log",
+  projectId: "",
+  reason: "Record a controlled tool-gate smoke event from the Synarch dashboard.",
+  summary: "Permission gate smoke event from Synarch dashboard."
 };
 
 function formatLifecycleAge(createdAt: string): string {
@@ -462,6 +488,8 @@ function agentRow(agent: AgentDefinition): AgentViewModel {
     load: agentLoad(agent),
     scope: agent.role,
     division: agent.division,
+    allowedTools: agent.permissions.allowed_tools,
+    deniedTools: agent.permissions.denied_tools,
     icon: agentIcon(agent),
     source: "api"
   };
@@ -601,6 +629,38 @@ function goalEnvelopeFromDraft(draft: GoalDraft): GoalEnvelope {
   };
 }
 
+function toolCallFromDraft(
+  draft: ToolCallDraft,
+  options: {
+    agentId: string;
+    projectId: string;
+  }
+): ToolCallRequest {
+  const toolName = draft.toolName.trim();
+  const { agentId, projectId } = options;
+  const targetProjectId = projectId.trim();
+  const argumentsPayload =
+    toolName === "event.emit"
+      ? {
+          type: "agent.reported",
+          target: targetProjectId || undefined,
+          payload: {
+            summary: draft.summary.trim(),
+            source: "frontend.permission_gate"
+          }
+        }
+      : {};
+
+  return {
+    agent_id: agentId,
+    tool_name: toolName,
+    service_id: draft.serviceId.trim() || null,
+    project_id: targetProjectId || null,
+    reason: draft.reason.trim(),
+    arguments: argumentsPayload
+  };
+}
+
 function runCost(batch: TaskRunBatchResult): number {
   return batch.runs.reduce(
     (total, run) =>
@@ -713,6 +773,8 @@ export default function DashboardPage() {
   const [runReadyDraft, setRunReadyDraft] = useState<RunReadyDraft>(initialRunReadyDraft);
   const [lastRunBatch, setLastRunBatch] = useState<TaskRunBatchResult | null>(null);
   const [lastTaskRun, setLastTaskRun] = useState<TaskRunResult | null>(null);
+  const [toolCallDraft, setToolCallDraft] = useState<ToolCallDraft>(initialToolCallDraft);
+  const [lastToolResult, setLastToolResult] = useState<ToolResult | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
   const [selectedTimelineTraceId, setSelectedTimelineTraceId] = useState("");
@@ -824,6 +886,14 @@ export default function DashboardPage() {
       setTaskReviewDrafts({});
     }
   });
+  const toolCallMutation = useMutation({
+    mutationFn: callTool,
+    onSuccess: (result) => {
+      setLastToolResult(result);
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
   const layerStats = useMemo(
     () => ({
       next: layers.filter((layer) => layer.status === "next").length,
@@ -865,6 +935,8 @@ export default function DashboardPage() {
 
     return agents.map((agent) => ({
       ...agent,
+      allowedTools: [],
+      deniedTools: [],
       source: "sample" as const
     }));
   }, [agentsQuery.data, agentsQuery.isSuccess]);
@@ -880,6 +952,34 @@ export default function DashboardPage() {
       : agentMode === "syncing"
         ? "Connecting to control-plane"
         : "Control-plane unavailable, showing seeded agents";
+  const liveAgentRows = agentRows.filter((agent) => agent.source === "api");
+  const effectiveToolAgentId =
+    toolCallDraft.agentId && liveAgentRows.some((agent) => agent.id === toolCallDraft.agentId)
+      ? toolCallDraft.agentId
+      : (liveAgentRows[0]?.id ?? "");
+  const selectedToolAgent = liveAgentRows.find((agent) => agent.id === effectiveToolAgentId);
+  const worldViewQuery = useQuery<LocalWorldView>({
+    queryKey: ["agent-world-view", effectiveToolAgentId],
+    queryFn: () => getAgentWorldView(effectiveToolAgentId),
+    enabled: effectiveToolAgentId.length > 0,
+    refetchInterval: 30_000
+  });
+  const worldViewMode = !effectiveToolAgentId
+    ? "sample"
+    : worldViewQuery.isLoading
+      ? "syncing"
+      : worldViewQuery.isError
+        ? "sample"
+        : "live";
+  const worldViewModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "No world-view"
+  }[worldViewMode];
+  const availableToolOptions =
+    worldViewQuery.data?.permissions.allowed_tools ?? selectedToolAgent?.allowedTools ?? [];
+  const availableServiceOptions = worldViewQuery.data?.available_services ?? [];
+  const availableConnectorOptions = worldViewQuery.data?.available_connector_ids ?? [];
   const projectRows = useMemo<ProjectViewModel[]>(() => {
     if (projectsQuery.isSuccess) {
       return [...projectsQuery.data]
@@ -1146,6 +1246,44 @@ export default function DashboardPage() {
       projectId: runReadyDraft.projectId.trim(),
       maxTasks: maxReadyTasks
     });
+  };
+  const effectiveToolName = availableToolOptions.includes(toolCallDraft.toolName)
+    ? toolCallDraft.toolName
+    : (availableToolOptions[0] ?? toolCallDraft.toolName);
+  const effectiveToolServiceId = availableServiceOptions.includes(toolCallDraft.serviceId)
+    ? toolCallDraft.serviceId
+    : (availableServiceOptions[0] ?? toolCallDraft.serviceId);
+  const effectiveToolProjectId = toolCallDraft.projectId.trim() || effectiveSelectedProjectId;
+  const canCallTool =
+    effectiveToolAgentId.length > 0 &&
+    effectiveToolName.length > 0 &&
+    toolCallDraft.reason.trim().length > 0 &&
+    (effectiveToolName !== "event.emit" || toolCallDraft.summary.trim().length > 0) &&
+    !toolCallMutation.isPending;
+  const updateToolCallDraft = (field: keyof ToolCallDraft, value: string) => {
+    setToolCallDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleToolCallSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canCallTool) {
+      return;
+    }
+    toolCallMutation.mutate(
+      toolCallFromDraft(
+        {
+          ...toolCallDraft,
+          toolName: effectiveToolName,
+          serviceId: effectiveToolServiceId
+        },
+        {
+          agentId: effectiveToolAgentId,
+          projectId: effectiveToolProjectId
+        }
+      )
+    );
   };
   const updateTaskReviewDraft = (
     taskId: string,
@@ -2191,6 +2329,158 @@ export default function DashboardPage() {
                   </article>
                 );
               })}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Connectors" title="Permission gate" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">
+                {worldViewQuery.isSuccess
+                  ? `${worldViewQuery.data.available_services.length} services / ${worldViewQuery.data.available_connector_ids.length} connectors`
+                  : effectiveToolAgentId
+                    ? "Connecting to agent world-view"
+                    : "No live agent selected"}
+              </p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[worldViewMode]}`}
+              >
+                {worldViewModeLabel}
+              </span>
+            </div>
+            <form className="grid gap-3 px-4 py-3" onSubmit={handleToolCallSubmit}>
+              <select
+                className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Agent for tool call"
+                value={effectiveToolAgentId}
+                onChange={(event) => updateToolCallDraft("agentId", event.target.value)}
+              >
+                {liveAgentRows.length === 0 ? <option value="">No live agent</option> : null}
+                {liveAgentRows.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <select
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Tool name"
+                  value={effectiveToolName}
+                  onChange={(event) => updateToolCallDraft("toolName", event.target.value)}
+                >
+                  {availableToolOptions.length === 0 ? <option value="">No tool</option> : null}
+                  {availableToolOptions.map((tool) => (
+                    <option key={tool} value={tool}>
+                      {tool}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Service id"
+                  value={effectiveToolServiceId}
+                  onChange={(event) => updateToolCallDraft("serviceId", event.target.value)}
+                >
+                  {availableServiceOptions.length === 0 ? (
+                    <option value="">No service</option>
+                  ) : null}
+                  {availableServiceOptions.map((service) => (
+                    <option key={service} value={service}>
+                      {service}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Tool project id"
+                placeholder={effectiveSelectedProjectId || "project_id optional"}
+                value={toolCallDraft.projectId}
+                onChange={(event) => updateToolCallDraft("projectId", event.target.value)}
+              />
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Tool call reason"
+                value={toolCallDraft.reason}
+                onChange={(event) => updateToolCallDraft("reason", event.target.value)}
+              />
+              {effectiveToolName === "event.emit" ? (
+                <textarea
+                  className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Event summary"
+                  value={toolCallDraft.summary}
+                  onChange={(event) => updateToolCallDraft("summary", event.target.value)}
+                />
+              ) : null}
+              <button
+                className="flex h-9 items-center justify-center gap-2 rounded-md bg-ink px-3 text-xs font-medium text-white transition enabled:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!canCallTool}
+                type="submit"
+              >
+                <PlugZap size={14} />
+                <span>{toolCallMutation.isPending ? "Checking..." : "Call gate"}</span>
+              </button>
+            </form>
+            <div className="grid gap-3 border-t border-border px-4 py-3">
+              {worldViewQuery.data ? (
+                <>
+                  <div className="grid gap-1.5">
+                    <p className="text-[11px] font-semibold uppercase text-muted">
+                      Allowed tools
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {worldViewQuery.data.permissions.allowed_tools.map((tool) => (
+                        <span
+                          key={tool}
+                          className="max-w-full truncate rounded-md bg-ok-soft px-2 py-0.5 text-[11px] text-ok ring-1 ring-ok/15"
+                        >
+                          {tool}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  {worldViewQuery.data.permissions.denied_tools.length > 0 ? (
+                    <div className="grid gap-1.5">
+                      <p className="text-[11px] font-semibold uppercase text-muted">
+                        Denied tools
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {worldViewQuery.data.permissions.denied_tools.map((tool) => (
+                          <span
+                            key={tool}
+                            className="max-w-full truncate rounded-md bg-risk-soft px-2 py-0.5 text-[11px] text-risk ring-1 ring-risk/15"
+                          >
+                            {tool}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="grid gap-1.5">
+                    <p className="text-[11px] font-semibold uppercase text-muted">
+                      Connectors
+                    </p>
+                    <p className="truncate text-xs text-muted">
+                      {availableConnectorOptions.length > 0
+                        ? availableConnectorOptions.join(" / ")
+                        : "No connector exposed"}
+                    </p>
+                  </div>
+                </>
+              ) : null}
+              {lastToolResult ? (
+                <pre className="max-h-40 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                  {formatPayload(lastToolResult.output)}
+                </pre>
+              ) : null}
+              {toolCallMutation.isError ? (
+                <p className="text-xs font-medium text-risk">
+                  {toolCallMutation.error instanceof Error
+                    ? toolCallMutation.error.message
+                    : "Tool gate call failed."}
+                </p>
+              ) : null}
             </div>
           </section>
 
