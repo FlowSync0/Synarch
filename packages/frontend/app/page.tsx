@@ -337,6 +337,15 @@ type TimelineViewModel = {
   source: "api" | "sample";
 };
 
+type TraceViewModel = {
+  id: string;
+  label: string;
+  eventCount: number;
+  costCount: number;
+  totalCost: number;
+  lastTimestamp: number;
+};
+
 const initialGoalDraft: GoalDraft = {
   goal: "",
   priority: "medium",
@@ -606,6 +615,22 @@ function eventBelongsToTask(event: EventRecord, taskId: string): boolean {
   return event.target === taskId || event.payload.task_id === taskId;
 }
 
+function traceIdForEvent(event: EventRecord): string {
+  return event.trace_id ?? "no-trace";
+}
+
+function traceIdForCost(costRecord: { trace_id?: string | null }): string {
+  return costRecord.trace_id ?? "no-trace";
+}
+
+function traceLabel(traceId: string): string {
+  return traceId === "no-trace" ? "no trace" : traceId;
+}
+
+function formatPayload(payload: unknown): string {
+  return JSON.stringify(payload, null, 2);
+}
+
 function taskEventCount(timeline: ProjectTimeline, taskId: string): number {
   return timeline.events.filter((event) => eventBelongsToTask(event, taskId)).length;
 }
@@ -678,6 +703,8 @@ export default function DashboardPage() {
   const [lastTaskRun, setLastTaskRun] = useState<TaskRunResult | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
+  const [selectedTimelineTraceId, setSelectedTimelineTraceId] = useState("");
+  const [selectedTimelineEventId, setSelectedTimelineEventId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -717,6 +744,8 @@ export default function DashboardPage() {
       });
       setSelectedProjectId(result.project.id);
       setFocusedTimelineTaskId("");
+      setSelectedTimelineTraceId(result.trace_id);
+      setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -731,6 +760,8 @@ export default function DashboardPage() {
         setSelectedProjectId(result.project_id);
       }
       setFocusedTimelineTaskId(result.runs[0]?.task.id ?? "");
+      setSelectedTimelineTraceId(result.trace_id);
+      setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -743,6 +774,8 @@ export default function DashboardPage() {
       setLastTaskRun(result);
       setSelectedProjectId(result.task.project_id);
       setFocusedTimelineTaskId(result.task.id);
+      setSelectedTimelineTraceId(result.trace_id);
+      setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
@@ -759,6 +792,7 @@ export default function DashboardPage() {
     mutationFn: decideTaskReview,
     onSuccess: (_result, variables) => {
       setFocusedTimelineTaskId(variables.taskId);
+      setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
@@ -889,22 +923,84 @@ export default function DashboardPage() {
   const focusedTimelineTask = projectTimelineTasks.find(
     (task) => task.id === effectiveFocusedTaskId
   );
+  const projectTimelineTraceRows = useMemo<TraceViewModel[]>(() => {
+    if (!projectTimelineQuery.isSuccess) {
+      return [];
+    }
+    const traces = new Map<string, TraceViewModel>();
+    for (const event of projectTimelineQuery.data.events) {
+      const traceId = traceIdForEvent(event);
+      const row =
+        traces.get(traceId) ??
+        {
+          id: traceId,
+          label: traceLabel(traceId),
+          eventCount: 0,
+          costCount: 0,
+          totalCost: 0,
+          lastTimestamp: 0
+        };
+      row.eventCount += 1;
+      row.lastTimestamp = Math.max(row.lastTimestamp, new Date(event.timestamp).getTime());
+      traces.set(traceId, row);
+    }
+    for (const costRecord of projectTimelineQuery.data.cost_records) {
+      const traceId = traceIdForCost(costRecord);
+      const row =
+        traces.get(traceId) ??
+        {
+          id: traceId,
+          label: traceLabel(traceId),
+          eventCount: 0,
+          costCount: 0,
+          totalCost: 0,
+          lastTimestamp: 0
+        };
+      row.costCount += 1;
+      row.totalCost += costRecord.total_cost;
+      row.lastTimestamp = Math.max(row.lastTimestamp, new Date(costRecord.created_at).getTime());
+      traces.set(traceId, row);
+    }
+    return [...traces.values()].sort((left, right) => right.lastTimestamp - left.lastTimestamp);
+  }, [projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+  const effectiveSelectedTraceId = projectTimelineTraceRows.some(
+    (trace) => trace.id === selectedTimelineTraceId
+  )
+    ? selectedTimelineTraceId
+    : "";
   const projectTimelineEvents = useMemo(() => {
     if (!projectTimelineQuery.isSuccess) {
       return [];
     }
-    const events = effectiveFocusedTaskId
-      ? projectTimelineQuery.data.events.filter((event) =>
-          eventBelongsToTask(event, effectiveFocusedTaskId)
-        )
-      : projectTimelineQuery.data.events;
+    let events = projectTimelineQuery.data.events;
+    if (effectiveFocusedTaskId) {
+      events = events.filter((event) => eventBelongsToTask(event, effectiveFocusedTaskId));
+    }
+    if (effectiveSelectedTraceId) {
+      events = events.filter((event) => traceIdForEvent(event) === effectiveSelectedTraceId);
+    }
     return [...events]
       .sort(
         (left, right) =>
           new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
       )
-      .slice(0, 5);
-  }, [effectiveFocusedTaskId, projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+      .slice(0, 8);
+  }, [
+    effectiveFocusedTaskId,
+    effectiveSelectedTraceId,
+    projectTimelineQuery.data,
+    projectTimelineQuery.isSuccess
+  ]);
+  const selectedTimelineEvent =
+    projectTimelineEvents.find((event) => event.id === selectedTimelineEventId) ??
+    projectTimelineEvents[0] ??
+    null;
+  const selectedEventCostRecords =
+    projectTimelineQuery.isSuccess && selectedTimelineEvent
+      ? projectTimelineQuery.data.cost_records.filter(
+          (costRecord) => traceIdForCost(costRecord) === traceIdForEvent(selectedTimelineEvent)
+        )
+      : [];
   const projectTimelineMode = !effectiveSelectedProjectId
     ? "sample"
     : projectTimelineQuery.isLoading
@@ -1347,6 +1443,8 @@ export default function DashboardPage() {
                       onClick={() => {
                         setSelectedProjectId(project.id);
                         setFocusedTimelineTaskId("");
+                        setSelectedTimelineTraceId("");
+                        setSelectedTimelineEventId("");
                         setRunReadyDraft((draft) => ({
                           ...draft,
                           projectId: project.id
@@ -1390,6 +1488,8 @@ export default function DashboardPage() {
                   onChange={(event) => {
                     setSelectedProjectId(event.target.value);
                     setFocusedTimelineTaskId("");
+                    setSelectedTimelineTraceId("");
+                    setSelectedTimelineEventId("");
                     setRunReadyDraft((draft) => ({
                       ...draft,
                       projectId: event.target.value
@@ -1428,6 +1528,50 @@ export default function DashboardPage() {
                     </div>
                   ))}
                 </div>
+                {projectTimelineTraceRows.length > 0 ? (
+                  <div className="grid gap-2 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-[11px] font-semibold uppercase text-muted">Traces</p>
+                      <button
+                        className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-accent/40 hover:text-accent"
+                        type="button"
+                        onClick={() => {
+                          setSelectedTimelineTraceId("");
+                          setSelectedTimelineEventId("");
+                        }}
+                      >
+                        All traces
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {projectTimelineTraceRows.slice(0, 8).map((trace) => (
+                        <button
+                          key={trace.id}
+                          className={`max-w-full rounded-md px-2 py-1 text-left text-[11px] ring-1 transition ${
+                            effectiveSelectedTraceId === trace.id
+                              ? "bg-info-soft text-info ring-info/20"
+                              : "bg-slate-100 text-muted ring-border hover:text-ink"
+                          }`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTimelineTraceId(
+                              effectiveSelectedTraceId === trace.id ? "" : trace.id
+                            );
+                            setSelectedTimelineEventId("");
+                          }}
+                        >
+                          <span className="block max-w-[260px] truncate font-medium">
+                            {trace.label}
+                          </span>
+                          <span className="block truncate">
+                            {trace.eventCount} events / {trace.costCount} costs /{" "}
+                            {trace.totalCost.toFixed(6)} {projectTimelineQuery.data.currency}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 {focusedTimelineTask ? (
                   <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
                     <p className="min-w-0 truncate text-xs text-muted">
@@ -1436,7 +1580,10 @@ export default function DashboardPage() {
                     <button
                       className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-accent/40 hover:text-accent"
                       type="button"
-                      onClick={() => setFocusedTimelineTaskId("")}
+                      onClick={() => {
+                        setFocusedTimelineTaskId("");
+                        setSelectedTimelineEventId("");
+                      }}
                     >
                       All events
                     </button>
@@ -1518,11 +1665,12 @@ export default function DashboardPage() {
                         <button
                           className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-info/40 hover:bg-info-soft hover:text-info"
                           type="button"
-                          onClick={() =>
+                          onClick={() => {
                             setFocusedTimelineTaskId(
                               effectiveFocusedTaskId === task.id ? "" : task.id
-                            )
-                          }
+                            );
+                            setSelectedTimelineEventId("");
+                          }}
                         >
                           {effectiveFocusedTaskId === task.id ? "All" : "Focus"}
                         </button>
@@ -1572,18 +1720,70 @@ export default function DashboardPage() {
                     <p className="text-[11px] font-semibold uppercase text-muted">Derniers events</p>
                     <div className="flex flex-wrap gap-1.5">
                       {projectTimelineEvents.map((event) => (
-                        <span
+                        <button
                           key={event.id}
-                          className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                          className={`max-w-full truncate rounded-md px-2 py-0.5 text-left text-[11px] ring-1 transition ${
+                            selectedTimelineEvent?.id === event.id
+                              ? "bg-accent-soft text-accent ring-accent/20"
+                              : "bg-slate-100 text-muted ring-border hover:text-ink"
+                          }`}
+                          type="button"
+                          onClick={() => setSelectedTimelineEventId(event.id)}
                         >
                           {event.type} / {event.target ?? event.trace_id ?? "system"}
-                        </span>
+                        </button>
                       ))}
                     </div>
                   </div>
-                ) : effectiveFocusedTaskId ? (
+                ) : effectiveFocusedTaskId || effectiveSelectedTraceId ? (
                   <div className="px-4 py-3">
-                    <p className="text-xs text-muted">Aucun event direct pour cette tâche.</p>
+                    <p className="text-xs text-muted">Aucun event pour ce filtre.</p>
+                  </div>
+                ) : null}
+                {selectedTimelineEvent ? (
+                  <div className="grid gap-3 px-4 py-3 xl:grid-cols-[minmax(0,1fr)_220px]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent ring-1 ring-accent/15">
+                          {selectedTimelineEvent.type}
+                        </span>
+                        <span className="max-w-full truncate text-xs text-muted">
+                          {selectedTimelineEvent.id} / {traceLabel(traceIdForEvent(selectedTimelineEvent))}
+                        </span>
+                      </div>
+                      <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                        {formatPayload(selectedTimelineEvent.payload)}
+                      </pre>
+                    </div>
+                    <div className="grid content-start gap-2 text-xs text-muted">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>target</span>
+                        <span className="min-w-0 truncate font-medium text-ink">
+                          {selectedTimelineEvent.target ?? "system"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>source</span>
+                        <span className="min-w-0 truncate font-medium text-ink">
+                          {selectedTimelineEvent.source_agent_id ?? "system"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>trace costs</span>
+                        <span className="font-medium text-ink">
+                          {selectedEventCostRecords.length}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>trace spend</span>
+                        <span className="font-medium text-ink">
+                          {selectedEventCostRecords
+                            .reduce((total, costRecord) => total + costRecord.total_cost, 0)
+                            .toFixed(6)}{" "}
+                          {projectTimelineQuery.data.currency}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 ) : null}
               </div>

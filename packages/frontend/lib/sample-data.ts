@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Agir depuis la timeline projet",
+  title: "Lire une trace sans fouiller les logs",
   body:
-    "La timeline projet devient actionnable: une tache queued peut etre lancee directement, une tache en review peut etre remise en queue, et les events peuvent etre filtres par tache.",
+    "La vue projet regroupe maintenant les traces reelles avec events, couts et payload inspectable. On peut isoler une trace ou une tache avant de debuguer une integration.",
   checks: [
-    "POST /tasks/{task_id}/run passe par le proxy frontend",
-    "Run et retry rafraichissent timeline, projets, events et review queue",
-    "Focus task filtre les derniers events visibles",
-    "La derniere execution affiche trace_id, statut et titre"
+    "Les traces sont groupees par trace_id avec events et couts",
+    "All traces restaure la vue projet complete",
+    "Chaque event ouvre son payload JSON",
+    "Le detail event affiche target, source et spend de trace"
   ]
 };
 
@@ -279,6 +279,11 @@ export const backlog = [
   {
     label: "M3.5",
     title: "Trace and event drilldown",
+    done: true
+  },
+  {
+    label: "M3.6",
+    title: "Memory candidate review",
     done: false
   },
   {
