@@ -7,6 +7,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
+  Ban,
   Check,
   ChevronRight,
   CircleDollarSign,
@@ -19,8 +20,10 @@ import {
   Layers3,
   Menu,
   Network,
+  PencilLine,
   Plus,
   RadioTower,
+  RotateCcw,
   Search,
   Settings2,
   ShieldCheck,
@@ -39,6 +42,13 @@ import {
   type AgentLifecycleRequest
 } from "../lib/control-plane-api";
 import {
+  decideTaskReview,
+  listTaskReviewQueue,
+  type TaskRecord,
+  type TaskReviewAction,
+  type TaskReviewDecision
+} from "../lib/gateway-api";
+import {
   listEvents,
   listProjects,
   type EventRecord,
@@ -53,6 +63,7 @@ import {
   overview,
   projects,
   riskControls,
+  taskReviews,
   timeline,
   type Status,
   type Tone
@@ -272,6 +283,27 @@ type ProjectViewModel = {
   source: "api" | "sample";
 };
 
+type TaskReviewViewModel = {
+  id: string;
+  title: string;
+  projectId: string;
+  assignedAgentId: string;
+  status: string;
+  reason: string;
+  attempts: string;
+  criteria: string[];
+  age: string;
+  source: "api" | "sample";
+};
+
+type TaskReviewDraft = {
+  title: string;
+  assignedAgentId: string;
+  maxAttempts: string;
+  acceptanceCriteria: string;
+  reason: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -425,6 +457,81 @@ function projectRow(project: ProjectRecord): ProjectViewModel {
   };
 }
 
+function taskReviewReason(task: TaskRecord): string {
+  if (task.dead_letter_reason) {
+    return task.dead_letter_reason;
+  }
+  if (task.result && typeof task.result.error === "string") {
+    return task.result.error;
+  }
+  return "Task requires human review before the next transition.";
+}
+
+function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
+  return {
+    id: task.id,
+    title: task.title,
+    projectId: task.project_id,
+    assignedAgentId: task.assigned_agent_id,
+    status: task.status,
+    reason: taskReviewReason(task),
+    attempts: `${task.attempt_count}/${task.max_attempts}`,
+    criteria: task.acceptance_criteria,
+    age: formatLifecycleAge(task.dead_lettered_at ?? task.created_at),
+    source: "api"
+  };
+}
+
+function taskReviewDraft(row: TaskReviewViewModel): TaskReviewDraft {
+  const maxAttempts = row.attempts.split("/").at(1) ?? "";
+  return {
+    title: row.title,
+    assignedAgentId: row.assignedAgentId,
+    maxAttempts,
+    acceptanceCriteria: row.criteria.join("\n"),
+    reason: "Task details updated from Synarch dashboard."
+  };
+}
+
+function defaultTaskReviewReason(action: TaskReviewAction): string {
+  if (action === "retry") {
+    return "Retry requested from Synarch dashboard.";
+  }
+  if (action === "cancel") {
+    return "Cancelled from Synarch dashboard.";
+  }
+  return "Task details updated from Synarch dashboard.";
+}
+
+function taskReviewDecisionFromDraft(draft: TaskReviewDraft): TaskReviewDecision {
+  const maxAttempts = Number.parseInt(draft.maxAttempts, 10);
+  const decision: TaskReviewDecision = {
+    action: "update",
+    reason: draft.reason.trim() || defaultTaskReviewReason("update")
+  };
+  const title = draft.title.trim();
+  const assignedAgentId = draft.assignedAgentId.trim();
+  const acceptanceCriteria = draft.acceptanceCriteria
+    .split(/\r?\n/)
+    .map((criterion) => criterion.trim())
+    .filter(Boolean);
+
+  if (title) {
+    decision.title = title;
+  }
+  if (assignedAgentId) {
+    decision.assigned_agent_id = assignedAgentId;
+  }
+  if (acceptanceCriteria.length > 0) {
+    decision.acceptance_criteria = acceptanceCriteria;
+  }
+  if (Number.isFinite(maxAttempts)) {
+    decision.max_attempts = maxAttempts;
+  }
+
+  return decision;
+}
+
 function eventTone(event: EventRecord): Tone {
   if (event.type.includes("failed")) {
     return "risk";
@@ -474,6 +581,8 @@ function eventRow(event: EventRecord): TimelineViewModel {
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
     queryKey: ["events"],
     queryFn: listEvents,
@@ -494,10 +603,25 @@ export default function DashboardPage() {
     queryFn: listAgentLifecycleRequests,
     refetchInterval: 15_000
   });
+  const taskReviewsQuery = useQuery({
+    queryKey: ["task-review-queue"],
+    queryFn: listTaskReviewQueue,
+    refetchInterval: 15_000
+  });
   const decisionMutation = useMutation({
     mutationFn: decideAgentLifecycleRequest,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+    }
+  });
+  const taskReviewMutation = useMutation({
+    mutationFn: decideTaskReview,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      setEditingTaskId(null);
+      setTaskReviewDrafts({});
     }
   });
   const layerStats = useMemo(
@@ -558,7 +682,13 @@ export default function DashboardPage() {
         : "Control-plane unavailable, showing seeded agents";
   const projectRows = useMemo<ProjectViewModel[]>(() => {
     if (projectsQuery.isSuccess) {
-      return projectsQuery.data.map(projectRow);
+      return [...projectsQuery.data]
+        .sort(
+          (left, right) =>
+            new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+        )
+        .map(projectRow)
+        .slice(0, 8);
     }
 
     return projects.map((project) => ({
@@ -579,10 +709,36 @@ export default function DashboardPage() {
   }[projectMode];
   const projectModeDetail =
     projectMode === "live"
-      ? `${projectRows.length} projects from state-service`
+      ? `${projectRows.length}/${projectsQuery.data?.length ?? projectRows.length} recent projects from state-service`
       : projectMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing roadmap projects";
+  const taskReviewRows = useMemo<TaskReviewViewModel[]>(() => {
+    if (taskReviewsQuery.isSuccess) {
+      return taskReviewsQuery.data.map(taskReviewRow);
+    }
+
+    return taskReviews.map((taskReview) => ({
+      ...taskReview,
+      source: "sample" as const
+    }));
+  }, [taskReviewsQuery.data, taskReviewsQuery.isSuccess]);
+  const taskReviewMode = taskReviewsQuery.isLoading
+    ? "syncing"
+    : taskReviewsQuery.isError
+      ? "sample"
+      : "live";
+  const taskReviewModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "Sample fallback"
+  }[taskReviewMode];
+  const taskReviewModeDetail =
+    taskReviewMode === "live"
+      ? `${taskReviewRows.length} tasks from gateway review queue`
+      : taskReviewMode === "syncing"
+        ? "Connecting to gateway"
+        : "Gateway unavailable, showing sample review queue";
   const timelineRows = useMemo<TimelineViewModel[]>(() => {
     if (eventsQuery.isSuccess) {
       return [...eventsQuery.data]
@@ -616,6 +772,53 @@ export default function DashboardPage() {
       : timelineMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing sample timeline";
+  const updateTaskReviewDraft = (
+    taskId: string,
+    field: keyof TaskReviewDraft,
+    value: string
+  ) => {
+    setTaskReviewDrafts((drafts) => ({
+      ...drafts,
+      [taskId]: {
+        ...(drafts[taskId] ??
+          taskReviewDraft(
+            taskReviewRows.find((row) => row.id === taskId) ?? {
+              id: taskId,
+              title: "",
+              projectId: "",
+              assignedAgentId: "",
+              status: "needs_review",
+              reason: "",
+              attempts: "",
+              criteria: [],
+              age: "now",
+              source: "sample"
+            }
+          )),
+        [field]: value
+      }
+    }));
+  };
+  const beginTaskReviewEdit = (row: TaskReviewViewModel) => {
+    setTaskReviewDrafts((drafts) => ({
+      ...drafts,
+      [row.id]: drafts[row.id] ?? taskReviewDraft(row)
+    }));
+    setEditingTaskId((currentTaskId) => (currentTaskId === row.id ? null : row.id));
+  };
+  const applyTaskReviewAction = (row: TaskReviewViewModel, action: TaskReviewAction) => {
+    const decision =
+      action === "update"
+        ? taskReviewDecisionFromDraft(taskReviewDrafts[row.id] ?? taskReviewDraft(row))
+        : {
+            action,
+            reason: defaultTaskReviewReason(action)
+          };
+    taskReviewMutation.mutate({
+      taskId: row.id,
+      decision
+    });
+  };
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -874,6 +1077,172 @@ export default function DashboardPage() {
                     <div className="mt-3 grid grid-cols-[1fr_40px] items-center gap-3">
                       <ProgressBar value={agent.load} tone="warn" />
                       <span className="text-right text-xs text-muted">{agent.load}%</span>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Tasks" title="Review queue" action="Voir tasks" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{taskReviewModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[taskReviewMode]}`}
+              >
+                {taskReviewModeLabel}
+              </span>
+            </div>
+            <div className="divide-y divide-border">
+              {taskReviewRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucune tâche en revue</p>
+                  <p className="mt-1 text-xs text-muted">Le gateway ne retourne aucune tâche needs_review.</p>
+                </article>
+              ) : null}
+              {taskReviewRows.map((taskReview) => {
+                const isApiRow = taskReview.source === "api";
+                const isEditing = editingTaskId === taskReview.id;
+                const isMutatingThisTask =
+                  taskReviewMutation.isPending &&
+                  taskReviewMutation.variables?.taskId === taskReview.id;
+                const draft = taskReviewDrafts[taskReview.id] ?? taskReviewDraft(taskReview);
+                return (
+                  <article key={taskReview.id} className="px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <div className={`grid h-10 w-10 shrink-0 place-items-center rounded-md ring-1 ${toneSurface.warn}`}>
+                        <AlertTriangle size={18} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-semibold">{taskReview.title}</h3>
+                            <p className="mt-0.5 truncate text-xs text-muted">
+                              {taskReview.projectId} / {taskReview.assignedAgentId}
+                            </p>
+                          </div>
+                          <span
+                            className="shrink-0 rounded-md bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn ring-1 ring-warn/15"
+                          >
+                            {taskReview.status}
+                          </span>
+                        </div>
+                        <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                          {taskReview.reason}
+                        </BalancedText>
+                        <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                          <p className="min-w-0 truncate text-xs text-muted">
+                            attempts {taskReview.attempts} / {taskReview.age}
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-accent transition enabled:hover:border-accent/40 enabled:hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Retry ${taskReview.title}`}
+                              title={`Retry ${taskReview.title}`}
+                              disabled={!isApiRow || taskReviewMutation.isPending}
+                              onClick={() => applyTaskReviewAction(taskReview, "retry")}
+                            >
+                              <RotateCcw size={15} />
+                            </button>
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-info transition enabled:hover:border-info/40 enabled:hover:bg-info-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Update ${taskReview.title}`}
+                              title={`Update ${taskReview.title}`}
+                              disabled={!isApiRow || taskReviewMutation.isPending}
+                              onClick={() => beginTaskReviewEdit(taskReview)}
+                            >
+                              <PencilLine size={15} />
+                            </button>
+                            <button
+                              className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              aria-label={`Cancel ${taskReview.title}`}
+                              title={`Cancel ${taskReview.title}`}
+                              disabled={!isApiRow || taskReviewMutation.isPending}
+                              onClick={() => applyTaskReviewAction(taskReview, "cancel")}
+                            >
+                              <Ban size={15} />
+                            </button>
+                          </div>
+                        </div>
+                        {isEditing ? (
+                          <div className="mt-3 space-y-2 border-t border-border pt-3">
+                            <input
+                              className="h-9 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                              aria-label={`Task title for ${taskReview.title}`}
+                              value={draft.title}
+                              onChange={(event) =>
+                                updateTaskReviewDraft(taskReview.id, "title", event.target.value)
+                              }
+                            />
+                            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_92px]">
+                              <input
+                                className="h-9 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                                aria-label={`Assigned agent for ${taskReview.title}`}
+                                value={draft.assignedAgentId}
+                                onChange={(event) =>
+                                  updateTaskReviewDraft(
+                                    taskReview.id,
+                                    "assignedAgentId",
+                                    event.target.value
+                                  )
+                                }
+                              />
+                              <input
+                                className="h-9 w-full rounded-md border border-border bg-white px-3 text-sm text-ink outline-none transition focus:border-accent"
+                                aria-label={`Max attempts for ${taskReview.title}`}
+                                inputMode="numeric"
+                                value={draft.maxAttempts}
+                                onChange={(event) =>
+                                  updateTaskReviewDraft(taskReview.id, "maxAttempts", event.target.value)
+                                }
+                              />
+                            </div>
+                            <textarea
+                              className="min-h-20 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+                              aria-label={`Acceptance criteria for ${taskReview.title}`}
+                              value={draft.acceptanceCriteria}
+                              onChange={(event) =>
+                                updateTaskReviewDraft(
+                                  taskReview.id,
+                                  "acceptanceCriteria",
+                                  event.target.value
+                                )
+                              }
+                            />
+                            <textarea
+                              className="min-h-16 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-accent"
+                              aria-label={`Review reason for ${taskReview.title}`}
+                              value={draft.reason}
+                              onChange={(event) =>
+                                updateTaskReviewDraft(taskReview.id, "reason", event.target.value)
+                              }
+                            />
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-muted transition hover:border-accent/40 hover:text-accent"
+                                aria-label={`Close update form for ${taskReview.title}`}
+                                title={`Close update form for ${taskReview.title}`}
+                                onClick={() => setEditingTaskId(null)}
+                              >
+                                <X size={15} />
+                              </button>
+                              <button
+                                className="grid h-8 w-8 place-items-center rounded-md bg-accent text-white transition enabled:hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-40"
+                                aria-label={`Apply update for ${taskReview.title}`}
+                                title={`Apply update for ${taskReview.title}`}
+                                disabled={taskReviewMutation.isPending}
+                                onClick={() => applyTaskReviewAction(taskReview, "update")}
+                              >
+                                <Check size={15} />
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                        {isMutatingThisTask ? (
+                          <p className="mt-2 text-xs font-medium text-accent">Decision pending...</p>
+                        ) : null}
+                      </div>
                     </div>
                   </article>
                 );

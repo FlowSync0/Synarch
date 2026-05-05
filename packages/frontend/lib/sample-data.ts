@@ -253,8 +253,8 @@ export const backlog = [
   },
   {
     label: "M2.2",
-    title: "TanStack Query API reads",
-    done: false
+    title: "Task review queue UI",
+    done: true
   },
   {
     label: "M3.1",
@@ -270,6 +270,37 @@ export const backlog = [
     label: "M1",
     title: "State repositories",
     done: true
+  }
+];
+
+export const taskReviews = [
+  {
+    id: "task-review-sample-supplier-rfq",
+    title: "Verifier le plan RFQ fournisseur moteur",
+    projectId: "project-sourcing-sample",
+    assignedAgentId: "agent-ops-sourcing",
+    status: "needs_review",
+    reason: "max_attempts_exceeded: le fournisseur cible n'a pas repondu apres les relances prevues.",
+    attempts: "3/3",
+    criteria: [
+      "Documenter les fournisseurs contactes",
+      "Proposer la prochaine action sans spam"
+    ],
+    age: "24 min"
+  },
+  {
+    id: "task-review-sample-memory",
+    title: "Nettoyer une synthese projet trop large",
+    projectId: "project-knowledge-sample",
+    assignedAgentId: "agent-admin-knowledge",
+    status: "needs_review",
+    reason: "acceptance_criteria_failed: la synthese melange deux scopes projet.",
+    attempts: "2/2",
+    criteria: [
+      "Separer les faits par projet",
+      "Conserver provenance et trace_id"
+    ],
+    age: "41 min"
   }
 ];
 
