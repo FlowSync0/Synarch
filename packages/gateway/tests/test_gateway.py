@@ -35,6 +35,8 @@ from synarch_models import (
     TaskDraft,
     TaskLeaseRecoveryResult,
     TaskRecord,
+    TaskReviewDecision,
+    TaskReviewResult,
     TaskStatus,
 )
 
@@ -216,6 +218,74 @@ class FakeStateClient:
         if project_id is None:
             return self.tasks
         return [task for task in self.tasks if task.project_id == project_id]
+
+    def list_task_review_queue(self, *, project_id: str | None = None) -> list[TaskRecord]:
+        return [
+            task
+            for task in self.tasks
+            if task.status == TaskStatus.needs_review
+            and (project_id is None or task.project_id == project_id)
+        ]
+
+    def apply_task_review_decision(
+        self,
+        task_id: str,
+        decision: TaskReviewDecision,
+        *,
+        headers: dict[str, str],
+    ) -> TaskReviewResult:
+        self.headers.append(headers)
+        task = next(task for task in self.tasks if task.id == task_id)
+        if task.status != TaskStatus.needs_review:
+            raise StateServiceRequestError(409, f"Task is not in review: {task.status}")
+        next_status = {
+            "retry": TaskStatus.queued,
+            "cancel": TaskStatus.failed,
+            "update": TaskStatus.needs_review,
+        }[decision.action]
+        updated_task = task.model_copy(
+            update={
+                "status": next_status,
+                "title": decision.title or task.title,
+                "result": {
+                    **(task.result or {}),
+                    "review": {
+                        "action": decision.action,
+                        "reason": decision.reason,
+                        "next_status": next_status,
+                    },
+                },
+                "dead_letter_reason": None
+                if decision.action == "retry"
+                else task.dead_letter_reason,
+                "dead_lettered_at": None
+                if decision.action == "retry"
+                else task.dead_lettered_at,
+            }
+        )
+        self.tasks[self.tasks.index(task)] = updated_task
+        event = EventRecord(
+            type=EventType.task_reviewed,
+            target=updated_task.project_id,
+            payload={
+                "task_id": updated_task.id,
+                "action": decision.action,
+                "next_status": updated_task.status,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        audit_log = AuditLogRecord(
+            actor_type=headers.get("x-synarch-actor-type", "user"),
+            actor_id=headers.get("x-synarch-actor-id", "local-user"),
+            action="task.reviewed",
+            target_type="task",
+            target_id=updated_task.id,
+            payload={"action": decision.action, "next_status": updated_task.status},
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        self.audit_logs.append(audit_log)
+        return TaskReviewResult(task=updated_task, event=event, audit_log=audit_log)
 
     def recover_expired_task_leases(
         self,
@@ -1324,6 +1394,80 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
     assert payload["scheduler_audit_log"]["target_id"] == "project_empty"
     assert state_client.events[0].type == EventType.scheduler_tick
     assert state_client.audit_logs[0].action == "scheduler.tick"
+
+
+def test_list_task_review_queue_reads_state_service() -> None:
+    state_client = FakeStateClient()
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_gateway_review",
+            project_id="project_gateway_review",
+            title="Review gateway task",
+            status=TaskStatus.needs_review,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Reviewer can see this task."],
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC),
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/tasks/review-queue",
+            params={"project_id": "project_gateway_review"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert [task["id"] for task in response.json()] == ["task_gateway_review"]
+
+
+def test_apply_task_review_decision_forwards_reviewer_headers() -> None:
+    state_client = FakeStateClient()
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_gateway_retry",
+            project_id="project_gateway_retry",
+            title="Retry through gateway",
+            status=TaskStatus.needs_review,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Reviewer can retry this task."],
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC),
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/task_gateway_retry/review-decisions",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_gateway_review",
+            },
+            json={
+                "action": "retry",
+                "reason": "Retry after human clarification.",
+                "title": "Retry clarified task",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["status"] == "queued"
+    assert payload["task"]["title"] == "Retry clarified task"
+    assert payload["event"]["type"] == "task.reviewed"
+    assert payload["audit_log"]["actor_id"] == "hugo"
+    assert state_client.headers[-1] == {
+        "x-synarch-actor-type": "user",
+        "x-synarch-actor-id": "hugo",
+        "x-synarch-trace-id": "trace_gateway_review",
+    }
 
 
 def test_list_memory_items_filters_review_queue() -> None:

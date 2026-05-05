@@ -14,6 +14,7 @@ from .enums import (
     MemoryStatus,
     Priority,
     ServiceKind,
+    TaskReviewAction,
     TaskStatus,
 )
 
@@ -228,6 +229,17 @@ class TaskRecord(SynarchModel):
     dead_letter_reason: str | None = None
     dead_lettered_at: datetime | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class TaskReviewDecision(SynarchModel):
+    action: TaskReviewAction
+    reason: str = Field(min_length=1)
+    title: str | None = Field(default=None, min_length=1)
+    description: str | None = None
+    assigned_agent_id: str | None = None
+    acceptance_criteria: list[str] | None = None
+    max_attempts: int | None = Field(default=None, ge=1)
+    retry_after_at: datetime | None = None
 
 
 class EventRecord(SynarchModel):
@@ -538,6 +550,12 @@ class TaskRunBatchResult(SynarchModel):
     lease_recovery: TaskLeaseRecoveryResult | None = None
     scheduler_event: EventRecord | None = None
     scheduler_audit_log: AuditLogRecord | None = None
+
+
+class TaskReviewResult(SynarchModel):
+    task: TaskRecord
+    event: EventRecord
+    audit_log: AuditLogRecord | None = None
 
 
 class ProjectTimeline(SynarchModel):

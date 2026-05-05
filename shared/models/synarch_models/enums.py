@@ -25,6 +25,12 @@ class TaskStatus(StrEnum):
     needs_review = "needs_review"
 
 
+class TaskReviewAction(StrEnum):
+    retry = "retry"
+    cancel = "cancel"
+    update = "update"
+
+
 class EventType(StrEnum):
     goal_received = "goal.received"
     routing_decided = "routing.decided"
@@ -37,6 +43,7 @@ class EventType(StrEnum):
     task_started = "task.started"
     task_heartbeat = "task.heartbeat"
     task_lease_expired = "task.lease_expired"
+    task_reviewed = "task.reviewed"
     task_completed = "task.completed"
     task_blocked = "task.blocked"
     agent_reported = "agent.reported"

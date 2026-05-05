@@ -59,9 +59,10 @@
       "Project, workspace, assignment, task, dependency, and result records",
       "Task started/completed/blocked/needs_review transitions",
       "Project complexity reports and split requests",
-      "Opt-in scheduler worker for bounded autonomous ticks"
+      "Opt-in scheduler worker for bounded autonomous ticks",
+      "Task review queue and retry/cancel/update decisions"
     ],
-    "main_gap": "No durable worker queue or human review UI for dead-lettered tasks.",
+    "main_gap": "No durable worker queue or frontend review UI for dead-lettered tasks.",
     "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",
     "source": "docs/roadmap.md"
   },

@@ -65,6 +65,7 @@ GoalEnvelope
   -> Atomic task claim through state-service start endpoint
   -> Expired task lease recovery before each bounded ready-task batch
   -> Retry backoff prevents immediate re-execution after a lease expiry
+  -> Human task review can retry, cancel, or update dead-lettered work
   -> Optional scheduler worker loop for cron/server execution
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Event Service timeline
@@ -110,6 +111,8 @@ Before each batch, the gateway asks state-service to recover expired leases. Exp
 requeued while attempts remain with `retry_after_at`, otherwise moved to `needs_review` with
 `dead_letter_reason=lease_expired`. The scheduler ignores queued tasks whose retry backoff has not
 elapsed, so a crash loop is visible instead of burning repeated model calls.
+Reviewers can inspect `/tasks/review-queue` and apply `/tasks/{task_id}/review-decisions`; every
+decision emits `task.reviewed` and writes an audit log.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

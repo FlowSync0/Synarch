@@ -42,6 +42,8 @@ from .contracts import (
     TaskDraft,
     TaskLeaseRecoveryResult,
     TaskRecord,
+    TaskReviewDecision,
+    TaskReviewResult,
     TaskRunBatchResult,
     TaskRunResult,
     ToolCallRequest,
@@ -57,6 +59,7 @@ from .enums import (
     MemoryStatus,
     Priority,
     ServiceKind,
+    TaskReviewAction,
     TaskStatus,
 )
 
@@ -113,6 +116,9 @@ __all__ = [
     "TaskDraft",
     "TaskLeaseRecoveryResult",
     "TaskRecord",
+    "TaskReviewAction",
+    "TaskReviewDecision",
+    "TaskReviewResult",
     "TaskRunBatchResult",
     "TaskRunResult",
     "TaskStatus",

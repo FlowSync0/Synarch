@@ -15,6 +15,8 @@ from synarch_models import (
     ProjectWorkspace,
     TaskLeaseRecoveryResult,
     TaskRecord,
+    TaskReviewDecision,
+    TaskReviewResult,
 )
 
 
@@ -91,6 +93,16 @@ class StateClient(Protocol):
     def get_task(self, task_id: str) -> TaskRecord: ...
 
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]: ...
+
+    def list_task_review_queue(self, *, project_id: str | None = None) -> list[TaskRecord]: ...
+
+    def apply_task_review_decision(
+        self,
+        task_id: str,
+        decision: TaskReviewDecision,
+        *,
+        headers: dict[str, str],
+    ) -> TaskReviewResult: ...
 
     def recover_expired_task_leases(
         self,
@@ -242,6 +254,27 @@ class HttpStateClient:
     def list_tasks(self, *, project_id: str | None = None) -> list[TaskRecord]:
         response = self._get("/tasks", params=compact_params(project_id=project_id))
         return [TaskRecord.model_validate(task) for task in response.json()]
+
+    def list_task_review_queue(self, *, project_id: str | None = None) -> list[TaskRecord]:
+        response = self._get(
+            "/tasks/review-queue",
+            params=compact_params(project_id=project_id),
+        )
+        return [TaskRecord.model_validate(task) for task in response.json()]
+
+    def apply_task_review_decision(
+        self,
+        task_id: str,
+        decision: TaskReviewDecision,
+        *,
+        headers: dict[str, str],
+    ) -> TaskReviewResult:
+        response = self._post(
+            f"/tasks/{task_id}/review-decisions",
+            decision.model_dump(mode="json"),
+            headers,
+        )
+        return TaskReviewResult.model_validate(response.json())
 
     def recover_expired_task_leases(
         self,

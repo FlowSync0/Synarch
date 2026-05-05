@@ -167,6 +167,9 @@ Implemented baseline:
 - State-service `/tasks/recover-expired-leases` requeues expired running tasks while attempts remain,
   sets `retry_after_at` with exponential backoff, and moves exhausted tasks to `needs_review` with
   `dead_letter_reason`, recording `task.lease_expired`.
+- State-service and gateway expose `/tasks/review-queue` and `/tasks/{task_id}/review-decisions`,
+  so a human reviewer can retry, cancel, or update a dead-lettered task with `task.reviewed` event
+  and audit records.
 - `scripts/scheduler_tick.py` and `synarch_gateway.scheduler_worker` can run one bounded scheduler
   tick or a controlled server loop against `/tasks/run-ready`, making cron-style execution possible
   without hiding autonomous behavior.

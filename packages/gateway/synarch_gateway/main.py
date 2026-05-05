@@ -29,6 +29,8 @@ from synarch_models import (
     RoutingDecision,
     TaskDraft,
     TaskRecord,
+    TaskReviewDecision,
+    TaskReviewResult,
     TaskRunBatchResult,
     TaskRunResult,
     ToolCallRequest,
@@ -242,6 +244,16 @@ def tool_gate_headers(trace_id: str) -> dict[str, str]:
 
 
 def memory_reviewer_headers(request: Request, trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": request.headers.get(
+            "x-synarch-actor-type", ActorType.user.value
+        ),
+        "x-synarch-actor-id": request.headers.get("x-synarch-actor-id", "local-user"),
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def task_reviewer_headers(request: Request, trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": request.headers.get(
             "x-synarch-actor-type", ActorType.user.value
@@ -495,6 +507,39 @@ def run_ready_tasks(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(status_code=502, detail="Task runner dependency unavailable") from error
+
+
+@app.get("/tasks/review-queue", response_model=list[TaskRecord])
+def list_task_review_queue(
+    project_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[TaskRecord]:
+    try:
+        return state_client.list_task_review_queue(project_id=project_id)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post("/tasks/{task_id}/review-decisions", response_model=TaskReviewResult)
+def apply_task_review_decision(
+    task_id: str,
+    decision: TaskReviewDecision,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> TaskReviewResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    try:
+        return state_client.apply_task_review_decision(
+            task_id,
+            decision,
+            headers=task_reviewer_headers(request, trace_id),
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
 
 
 @app.post("/tools/call", response_model=ToolResult)

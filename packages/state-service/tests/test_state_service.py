@@ -423,6 +423,192 @@ def test_recover_expired_task_lease_needs_review_after_max_attempts() -> None:
     assert events[0]["payload"]["dead_letter_reason"] == "lease_expired"
 
 
+def test_task_review_queue_lists_needs_review_tasks() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Review queue",
+            "goal": "List tasks waiting for human review.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Needs review",
+            status="needs_review",
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    review_response = client.get(
+        "/tasks/review-queue",
+        params={"project_id": project_response.json()["id"]},
+    )
+
+    assert review_response.status_code == 200
+    assert [task["id"] for task in review_response.json()] == [task_response.json()["id"]]
+
+
+def test_task_review_retry_updates_task_and_allows_start() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_review_retry"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Retry review",
+            "goal": "Human reviewer fixes a dead-lettered task.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Old title",
+            status="needs_review",
+            attempt_count=2,
+            max_attempts=2,
+            result={"reason": "lease_expired"},
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    review_response = client.post(
+        f"/tasks/{task_response.json()['id']}/review-decisions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "hugo",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "action": "retry",
+            "reason": "Acceptance criteria clarified after lease expiry.",
+            "title": "Clarified retry task",
+            "acceptance_criteria": ["Retry has a specific expected output."],
+        },
+    )
+
+    assert review_response.status_code == 200
+    review = review_response.json()
+    reviewed_task = review["task"]
+    assert reviewed_task["status"] == "queued"
+    assert reviewed_task["title"] == "Clarified retry task"
+    assert reviewed_task["acceptance_criteria"] == ["Retry has a specific expected output."]
+    assert reviewed_task["max_attempts"] == 3
+    assert reviewed_task["dead_letter_reason"] is None
+    assert reviewed_task["dead_lettered_at"] is None
+    assert reviewed_task["result"]["review"]["action"] == "retry"
+    assert review["event"]["type"] == "task.reviewed"
+    assert review["audit_log"]["action"] == "task.reviewed"
+
+    start_response = client.post(f"/tasks/{reviewed_task['id']}/start")
+    assert start_response.status_code == 200
+    assert start_response.json()["status"] == "running"
+
+
+def test_task_review_cancel_marks_failed() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_review_cancel"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Cancel review",
+            "goal": "Human reviewer cancels unhelpful work.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Cancel me",
+            status="needs_review",
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    review_response = client.post(
+        f"/tasks/{task_response.json()['id']}/review-decisions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "hugo",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={"action": "cancel", "reason": "The task is no longer useful."},
+    )
+
+    assert review_response.status_code == 200
+    reviewed_task = review_response.json()["task"]
+    assert reviewed_task["status"] == "failed"
+    assert reviewed_task["dead_letter_reason"] == "lease_expired"
+    assert reviewed_task["result"]["review"]["action"] == "cancel"
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    audit_logs = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["task.reviewed"]
+    assert events[0]["payload"]["next_status"] == "failed"
+    assert [audit["action"] for audit in audit_logs] == ["task.reviewed"]
+
+
+def test_task_review_update_keeps_task_in_review() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_review_update"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Update review",
+            "goal": "Human reviewer edits task details before retry.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Needs edit",
+            status="needs_review",
+            dead_letter_reason="lease_expired",
+            dead_lettered_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    review_response = client.post(
+        f"/tasks/{task_response.json()['id']}/review-decisions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "hugo",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "action": "update",
+            "reason": "Split the expected output more clearly.",
+            "description": "Updated review details.",
+            "acceptance_criteria": ["The expected output is precise."],
+        },
+    )
+
+    assert review_response.status_code == 200
+    reviewed_task = review_response.json()["task"]
+    assert reviewed_task["status"] == "needs_review"
+    assert reviewed_task["description"] == "Updated review details."
+    assert reviewed_task["acceptance_criteria"] == ["The expected output is precise."]
+    assert reviewed_task["result"]["review"]["next_status"] == "needs_review"
+
+
 def test_events_are_listed_chronologically_for_trace() -> None:
     client = TestClient(app)
     trace_id = "trace-event-order"

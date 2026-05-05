@@ -36,6 +36,9 @@ from synarch_models import (
     SkillDefinition,
     TaskLeaseRecoveryResult,
     TaskRecord,
+    TaskReviewAction,
+    TaskReviewDecision,
+    TaskReviewResult,
     TaskStatus,
 )
 from synarch_state_service.repositories import RecordRepository, StateRepositories
@@ -157,9 +160,9 @@ def write_audit_log(
     target_type: str,
     target_id: str,
     payload: dict[str, Any] | None = None,
-) -> None:
+) -> AuditLogRecord | None:
     if context is None:
-        return
+        return None
 
     audit = AuditLogRecord(
         actor_type=context.actor_type,
@@ -170,7 +173,7 @@ def write_audit_log(
         trace_id=context.trace_id,
         payload=payload or {},
     )
-    create_record(REPOSITORIES.audit_logs, audit.id, audit)
+    return create_record(REPOSITORIES.audit_logs, audit.id, audit)
 
 
 def create_domain_event(event: EventRecord) -> EventRecord:
@@ -1155,6 +1158,17 @@ def list_tasks(project_id: str | None = None) -> list[TaskRecord]:
     return [task for task in tasks if task.project_id == project_id]
 
 
+@app.get("/tasks/review-queue", response_model=list[TaskRecord])
+def list_task_review_queue(project_id: str | None = None) -> list[TaskRecord]:
+    tasks = [
+        task
+        for task in REPOSITORIES.tasks.list_records()
+        if task.status == TaskStatus.needs_review
+        and (project_id is None or task.project_id == project_id)
+    ]
+    return sorted(tasks, key=lambda task: task.dead_lettered_at or task.created_at)
+
+
 @app.get("/tasks/{task_id}", response_model=TaskRecord)
 def read_task(task_id: str) -> TaskRecord:
     return read_record(REPOSITORIES.tasks, task_id, "task")
@@ -1426,6 +1440,169 @@ def recover_expired_task_leases(request: Request) -> TaskLeaseRecoveryResult:
         failed_tasks=failed_tasks,
         events=events,
     )
+
+
+def validate_review_assignment(task: TaskRecord) -> None:
+    assigned_agent = REPOSITORIES.agents.get(task.assigned_agent_id)
+    if assigned_agent is not None and assigned_agent.status != AgentStatus.active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is not active: {task.assigned_agent_id}",
+        )
+
+
+def reviewed_task_result(
+    task: TaskRecord,
+    *,
+    decision: TaskReviewDecision,
+    reviewed_at: datetime,
+    next_status: TaskStatus,
+) -> dict[str, Any]:
+    result = task.result if isinstance(task.result, dict) else {}
+    return {
+        **result,
+        "review": {
+            "action": decision.action,
+            "reason": decision.reason,
+            "reviewed_at": reviewed_at.isoformat(),
+            "next_status": next_status,
+        },
+    }
+
+
+def task_review_update(
+    task: TaskRecord,
+    decision: TaskReviewDecision,
+    reviewed_at: datetime,
+) -> TaskRecord:
+    update: dict[str, Any] = {
+        "result": reviewed_task_result(
+            task,
+            decision=decision,
+            reviewed_at=reviewed_at,
+            next_status=TaskStatus.needs_review,
+        )
+    }
+    if decision.title is not None:
+        update["title"] = decision.title
+    if decision.description is not None:
+        update["description"] = decision.description
+    if decision.assigned_agent_id is not None:
+        update["assigned_agent_id"] = decision.assigned_agent_id
+    if decision.acceptance_criteria is not None:
+        update["acceptance_criteria"] = decision.acceptance_criteria
+    if decision.max_attempts is not None:
+        update["max_attempts"] = decision.max_attempts
+
+    if decision.action == TaskReviewAction.retry:
+        max_attempts = update.get("max_attempts", task.max_attempts)
+        if max_attempts <= task.attempt_count:
+            max_attempts = task.attempt_count + 1
+        update.update(
+            {
+                "status": TaskStatus.queued,
+                "max_attempts": max_attempts,
+                "lease_owner_id": None,
+                "lease_expires_at": None,
+                "last_heartbeat_at": None,
+                "retry_after_at": decision.retry_after_at,
+                "dead_letter_reason": None,
+                "dead_lettered_at": None,
+            }
+        )
+    elif decision.action == TaskReviewAction.cancel:
+        update.update(
+            {
+                "status": TaskStatus.failed,
+                "lease_owner_id": None,
+                "lease_expires_at": None,
+                "last_heartbeat_at": None,
+                "retry_after_at": None,
+                "dead_letter_reason": task.dead_letter_reason or "review_cancelled",
+                "dead_lettered_at": task.dead_lettered_at or reviewed_at,
+            }
+        )
+    else:
+        update["status"] = TaskStatus.needs_review
+
+    updated_task = task.model_copy(update=update)
+    validate_task_breakdown(updated_task)
+    validate_review_assignment(updated_task)
+    return updated_task.model_copy(
+        update={
+            "result": reviewed_task_result(
+                updated_task,
+                decision=decision,
+                reviewed_at=reviewed_at,
+                next_status=updated_task.status,
+            )
+        }
+    )
+
+
+@app.post("/tasks/{task_id}/review-decisions", response_model=TaskReviewResult)
+def apply_task_review_decision(
+    task_id: str,
+    decision: TaskReviewDecision,
+    request: Request,
+) -> TaskReviewResult:
+    task = read_record(REPOSITORIES.tasks, task_id, "task")
+    if task.status != TaskStatus.needs_review:
+        raise HTTPException(status_code=409, detail=f"Task is not in review: {task.status}")
+
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    reviewed_at = datetime.now(UTC)
+    updated_task = task_review_update(task, decision, reviewed_at)
+    record = update_record_if(
+        REPOSITORIES.tasks,
+        task_id,
+        updated_task,
+        {"status": TaskStatus.needs_review},
+    )
+    if record is None:
+        current_task = read_record(REPOSITORIES.tasks, task_id, "task")
+        raise HTTPException(status_code=409, detail=f"Task is already {current_task.status}")
+
+    event = create_domain_event(
+        EventRecord(
+            type=EventType.task_reviewed,
+            source_agent_id=agent_event_source(
+                audit_context.actor_type,
+                audit_context.actor_id,
+            )
+            if audit_context is not None
+            else None,
+            target=record.project_id,
+            payload={
+                "task_id": record.id,
+                "action": decision.action,
+                "reason": decision.reason,
+                "previous_status": task.status,
+                "next_status": record.status,
+                "attempt_count": record.attempt_count,
+                "max_attempts": record.max_attempts,
+                "retry_after_at": record.retry_after_at.isoformat()
+                if record.retry_after_at is not None
+                else None,
+                "dead_letter_reason": record.dead_letter_reason,
+            },
+            trace_id=trace_id,
+        )
+    )
+    audit_log = write_audit_log(
+        audit_context,
+        action="task.reviewed",
+        target_type="task",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "action": decision.action,
+            "next_status": record.status,
+            "reason": decision.reason,
+        },
+    )
+    return TaskReviewResult(task=record, event=event, audit_log=audit_log)
 
 
 def task_result_payload(result: AgentResult) -> dict[str, Any]:
