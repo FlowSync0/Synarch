@@ -44,12 +44,14 @@ import {
 } from "../lib/control-plane-api";
 import {
   decideTaskReview,
+  getProjectTimeline,
   listTaskReviewQueue,
   runReadyTasks,
   submitGoal,
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
+  type ProjectTimeline,
   type TaskRunBatchResult,
   type TaskRecord,
   type TaskReviewAction,
@@ -592,6 +594,28 @@ function runCost(batch: TaskRunBatchResult): number {
   );
 }
 
+function taskCost(timeline: ProjectTimeline, taskId: string): number {
+  return timeline.cost_records
+    .filter((costRecord) => costRecord.task_id === taskId)
+    .reduce((total, costRecord) => total + costRecord.total_cost, 0);
+}
+
+function taskEventCount(timeline: ProjectTimeline, taskId: string): number {
+  return timeline.events.filter(
+    (event) => event.target === taskId || event.payload.task_id === taskId
+  ).length;
+}
+
+function taskResultSummary(task: TaskRecord): string {
+  if (task.result && typeof task.result.summary === "string") {
+    return task.result.summary;
+  }
+  if (task.result && typeof task.result.error === "string") {
+    return task.result.error;
+  }
+  return task.description;
+}
+
 function eventTone(event: EventRecord): Tone {
   if (event.type.includes("failed")) {
     return "risk";
@@ -647,6 +671,7 @@ export default function DashboardPage() {
     useState<GoalSubmissionResult | null>(null);
   const [runReadyDraft, setRunReadyDraft] = useState<RunReadyDraft>(initialRunReadyDraft);
   const [lastRunBatch, setLastRunBatch] = useState<TaskRunBatchResult | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -684,18 +709,24 @@ export default function DashboardPage() {
         projectId: result.project.id,
         maxTasks: "1"
       });
+      setSelectedProjectId(result.project.id);
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
   const runReadyMutation = useMutation({
     mutationFn: runReadyTasks,
     onSuccess: (result) => {
       setLastRunBatch(result);
+      if (result.project_id) {
+        setSelectedProjectId(result.project_id);
+      }
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
   const decisionMutation = useMutation({
@@ -710,6 +741,7 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
       setEditingTaskId(null);
       setTaskReviewDrafts({});
     }
@@ -803,6 +835,60 @@ export default function DashboardPage() {
       : projectMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing roadmap projects";
+  const liveProjectRows = projectRows.filter((project) => project.source === "api");
+  const effectiveSelectedProjectId =
+    selectedProjectId && liveProjectRows.some((project) => project.id === selectedProjectId)
+      ? selectedProjectId
+      : (liveProjectRows[0]?.id ?? "");
+  const selectedProjectRow = projectRows.find(
+    (project) => project.id === effectiveSelectedProjectId
+  );
+  const projectTimelineQuery = useQuery({
+    queryKey: ["project-timeline", effectiveSelectedProjectId],
+    queryFn: () => getProjectTimeline(effectiveSelectedProjectId),
+    enabled: effectiveSelectedProjectId.length > 0,
+    refetchInterval: 10_000
+  });
+  const projectTimelineTasks = useMemo(() => {
+    if (!projectTimelineQuery.isSuccess) {
+      return [];
+    }
+    return [...projectTimelineQuery.data.tasks].sort((left, right) => {
+      if (left.sequence !== right.sequence) {
+        return left.sequence - right.sequence;
+      }
+      return new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+    });
+  }, [projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+  const projectTimelineEvents = useMemo(() => {
+    if (!projectTimelineQuery.isSuccess) {
+      return [];
+    }
+    return [...projectTimelineQuery.data.events]
+      .sort(
+        (left, right) =>
+          new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+      )
+      .slice(0, 5);
+  }, [projectTimelineQuery.data, projectTimelineQuery.isSuccess]);
+  const projectTimelineMode = !effectiveSelectedProjectId
+    ? "sample"
+    : projectTimelineQuery.isLoading
+      ? "syncing"
+      : projectTimelineQuery.isError
+        ? "sample"
+        : "live";
+  const projectTimelineModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "No timeline"
+  }[projectTimelineMode];
+  const projectTimelineModeDetail =
+    projectTimelineMode === "live" && projectTimelineQuery.data
+      ? `${projectTimelineTasks.length} tasks / ${projectTimelineQuery.data.events.length} events / ${projectTimelineQuery.data.total_cost.toFixed(6)} ${projectTimelineQuery.data.currency}`
+      : projectTimelineMode === "syncing"
+        ? "Loading project timeline from gateway"
+        : "Select a live project to inspect its tasks";
   const taskReviewRows = useMemo<TaskReviewViewModel[]>(() => {
     if (taskReviewsQuery.isSuccess) {
       return taskReviewsQuery.data.map(taskReviewRow);
@@ -1193,7 +1279,9 @@ export default function DashboardPage() {
               {projectRows.map((project) => (
                 <article
                   key={project.id}
-                  className="grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_112px_150px]"
+                  className={`grid gap-3 px-4 py-4 md:grid-cols-[minmax(0,1fr)_112px_150px_auto] ${
+                    effectiveSelectedProjectId === project.id ? "bg-accent-soft/40" : ""
+                  }`}
                 >
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1217,9 +1305,181 @@ export default function DashboardPage() {
                     <ProgressBar value={project.progress} tone={projectProgressTone(project.status)} />
                     <p className="text-right text-xs text-muted">{project.progress}%</p>
                   </div>
+                  <div className="flex items-center justify-end">
+                    <button
+                      className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-accent transition enabled:hover:border-accent/40 enabled:hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                      disabled={project.source !== "api"}
+                      type="button"
+                      onClick={() => {
+                        setSelectedProjectId(project.id);
+                        setRunReadyDraft((draft) => ({
+                          ...draft,
+                          projectId: project.id
+                        }));
+                      }}
+                    >
+                      Inspect
+                    </button>
+                  </div>
                 </article>
               ))}
             </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader
+              eyebrow="Project detail"
+              title={selectedProjectRow ? selectedProjectRow.title : "Tâches et preuves"}
+            />
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs text-muted">{projectTimelineModeDetail}</p>
+                {effectiveSelectedProjectId ? (
+                  <p className="mt-1 truncate text-[11px] text-muted">
+                    {effectiveSelectedProjectId}
+                  </p>
+                ) : null}
+              </div>
+              <div className="flex min-w-0 items-center gap-2">
+                <select
+                  className="h-9 max-w-[220px] rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Projet inspecté"
+                  name="selected_project_id"
+                  value={effectiveSelectedProjectId}
+                  onChange={(event) => {
+                    setSelectedProjectId(event.target.value);
+                    setRunReadyDraft((draft) => ({
+                      ...draft,
+                      projectId: event.target.value
+                    }));
+                  }}
+                >
+                  {liveProjectRows.length === 0 ? <option value="">No project</option> : null}
+                  {liveProjectRows.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.title}
+                    </option>
+                  ))}
+                </select>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[projectTimelineMode]}`}
+                >
+                  {projectTimelineModeLabel}
+                </span>
+              </div>
+            </div>
+            {projectTimelineQuery.isSuccess ? (
+              <div className="divide-y divide-border">
+                <div className="grid gap-px bg-border sm:grid-cols-4">
+                  {[
+                    ["tasks", String(projectTimelineTasks.length)],
+                    ["events", String(projectTimelineQuery.data.events.length)],
+                    ["memory", String(projectTimelineQuery.data.memory_items.length)],
+                    [
+                      "cost",
+                      `${projectTimelineQuery.data.total_cost.toFixed(6)} ${projectTimelineQuery.data.currency}`
+                    ]
+                  ].map(([label, value]) => (
+                    <div key={label} className="min-w-0 bg-panel px-4 py-3">
+                      <p className="text-[11px] font-semibold uppercase text-muted">{label}</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-ink">{value}</p>
+                    </div>
+                  ))}
+                </div>
+                {projectTimelineTasks.length === 0 ? (
+                  <article className="px-4 py-5">
+                    <p className="text-sm font-medium text-ink">Aucune tâche projet</p>
+                    <p className="mt-1 text-xs text-muted">La timeline ne retourne pas encore de task.</p>
+                  </article>
+                ) : null}
+                {projectTimelineTasks.map((task) => (
+                  <article
+                    key={task.id}
+                    className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_180px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border">
+                          #{task.sequence}
+                        </span>
+                        <h3 className="min-w-0 truncate text-sm font-semibold text-ink">
+                          {task.title}
+                        </h3>
+                        <span
+                          className={`rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold ring-1 ring-border ${projectStatusClass[task.status]}`}
+                        >
+                          {task.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted">
+                        {task.id} / {task.assigned_agent_id} / attempts {task.attempt_count}
+                        /{task.max_attempts}
+                      </p>
+                      <BalancedText className="mt-2 text-sm text-muted" font="400 13px Inter Variable" lineHeight={18}>
+                        {taskResultSummary(task)}
+                      </BalancedText>
+                      {task.acceptance_criteria.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {task.acceptance_criteria.slice(0, 3).map((criterion) => (
+                            <span
+                              key={criterion}
+                              className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                            >
+                              {criterion}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="grid content-start gap-2 text-xs text-muted">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>cost</span>
+                        <span className="font-medium text-ink">
+                          {taskCost(projectTimelineQuery.data, task.id).toFixed(6)}{" "}
+                          {projectTimelineQuery.data.currency}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>events</span>
+                        <span className="font-medium text-ink">
+                          {taskEventCount(projectTimelineQuery.data, task.id)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>depends</span>
+                        <span className="font-medium text-ink">{task.depends_on.length}</span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+                {projectTimelineEvents.length > 0 ? (
+                  <div className="grid gap-2 px-4 py-3">
+                    <p className="text-[11px] font-semibold uppercase text-muted">Derniers events</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {projectTimelineEvents.map((event) => (
+                        <span
+                          key={event.id}
+                          className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                        >
+                          {event.type} / {event.target ?? event.trace_id ?? "system"}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="px-4 py-5">
+                <p className="text-sm font-medium text-ink">
+                  {projectTimelineQuery.isLoading ? "Chargement timeline projet" : "Timeline indisponible"}
+                </p>
+                <p className="mt-1 text-xs text-muted">
+                  {projectTimelineQuery.isError && projectTimelineQuery.error instanceof Error
+                    ? projectTimelineQuery.error.message
+                    : "Sélectionne un projet live pour afficher ses tâches, coûts, mémoire et événements."}
+                </p>
+              </div>
+            )}
           </section>
 
           <section className="rounded-md border border-border bg-panel">

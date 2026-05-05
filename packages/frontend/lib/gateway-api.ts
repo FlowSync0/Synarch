@@ -1,3 +1,5 @@
+import type { EventRecord, ProjectRecord } from "./state-service-api";
+
 export type TaskStatus =
   | "draft"
   | "queued"
@@ -78,6 +80,33 @@ export type TaskReviewResult = {
   task: TaskRecord;
   event: unknown;
   audit_log?: unknown | null;
+};
+
+export type CostRecord = {
+  id: string;
+  project_id?: string | null;
+  task_id?: string | null;
+  agent_id?: string | null;
+  provider_id: string;
+  model_id: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  currency: string;
+  trace_id?: string | null;
+  created_at: string;
+};
+
+export type ProjectTimeline = {
+  project_id: string;
+  project: ProjectRecord;
+  tasks: TaskRecord[];
+  events: EventRecord[];
+  cost_records: CostRecord[];
+  audit_logs: unknown[];
+  memory_items: unknown[];
+  total_cost: number;
+  currency: string;
 };
 
 export type RunReadyRequest = {
@@ -171,6 +200,16 @@ export async function runReadyTasks({
     }
   });
   return parseJsonResponse<TaskRunBatchResult>(response);
+}
+
+export async function getProjectTimeline(projectId: string): Promise<ProjectTimeline> {
+  const response = await fetch(
+    `/api/gateway/projects/${encodeURIComponent(projectId)}/timeline`,
+    {
+      cache: "no-store"
+    }
+  );
+  return parseJsonResponse<ProjectTimeline>(response);
 }
 
 export async function decideTaskReview({

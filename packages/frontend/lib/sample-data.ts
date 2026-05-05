@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Exécuter une tranche prête sans lancer tout le backlog",
+  title: "Inspecter un projet avant de relancer l'IA",
   body:
-    "Le dashboard declenche maintenant le runner avec un project_id obligatoire et un max_tasks explicite. Une execution produit task result, events, couts et trace_id sans demarrer tout le backlog.",
+    "Le dashboard lit maintenant la timeline projet du gateway: tasks, events, memory candidates, audit logs et couts sont visibles par projet avant toute nouvelle execution.",
   checks: [
-    "POST /tasks/run-ready exige un project_id cote frontend",
-    "max_tasks reste explicite avant execution",
-    "Resultat affiche stop_reason, runs, trace_id et cout",
-    "Dashboard rafraichit projets, timeline et review queue"
+    "GET /projects/{project_id}/timeline passe par le proxy frontend",
+    "Chaque task affiche statut, agent, criteres, events et cout",
+    "La selection projet pre-remplit le runner",
+    "Run, review et goal submit rafraichissent la timeline projet"
   ]
 };
 
@@ -269,6 +269,11 @@ export const backlog = [
   {
     label: "M3.3",
     title: "Project task detail view",
+    done: true
+  },
+  {
+    label: "M3.4",
+    title: "Timeline-driven task actions",
     done: false
   },
   {
