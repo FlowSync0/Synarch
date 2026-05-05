@@ -104,13 +104,13 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
         manager_id="agent-direction",
         capabilities=CapabilityMap(
             skills=["supplier_search", "rfq_comparison", "order_tracking"],
-            tools=["web.search", "spreadsheet.write", "event.emit"],
+            tools=["web.search", "web.fetch", "spreadsheet.write", "event.emit"],
             models=["worker-ops"],
         ),
         permissions=PermissionBundle(
             can_read_scopes=["division:ops-sourcing", "project:*"],
             can_write_scopes=["division:ops-sourcing", "event:*"],
-            allowed_tools=["web.search", "spreadsheet.write", "event.emit"],
+            allowed_tools=["web.search", "web.fetch", "spreadsheet.write", "event.emit"],
         ),
     ),
     AgentDefinition(
@@ -376,7 +376,7 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         id="connector-supplier-web",
         name="Supplier Web Search",
         kind=ServiceKind.tool_provider,
-        capabilities=["web.search"],
+        capabilities=["web.search", "web.fetch"],
         allowed_divisions=["ops-sourcing"],
         metadata={"connector_type": "supplier_research"},
     ),
@@ -458,7 +458,7 @@ DEFAULT_SKILLS: tuple[SkillDefinition, ...] = (
         id="supplier_search",
         name="Supplier Search",
         description="Find supplier candidates and preserve source evidence.",
-        required_tools=["web.search", "event.emit"],
+        required_tools=["web.search", "web.fetch", "event.emit"],
         allowed_divisions=["ops-sourcing"],
     ),
     SkillDefinition(

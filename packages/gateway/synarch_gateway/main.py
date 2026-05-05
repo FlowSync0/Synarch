@@ -1,6 +1,11 @@
+import ipaddress
+import socket
+from html.parser import HTMLParser
 from typing import Literal
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
+import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic_settings import BaseSettings
 
@@ -75,6 +80,9 @@ class Settings(BaseSettings):
     task_runner_model_id: str = LOCAL_RUNTIME_MODEL_ID
     task_runner_input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
     task_runner_output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
+    web_fetch_timeout_seconds: float = 10.0
+    web_fetch_max_bytes: int = 50_000
+    web_fetch_max_redirects: int = 5
 
 
 settings = Settings()
@@ -626,7 +634,184 @@ def execute_authorized_tool(
             headers=headers,
             trace_id=trace_id,
         )
+    if tool_call.tool_name == "web.fetch":
+        return execute_web_fetch_tool(tool_call)
     return {"executed": False, "adapter": None}
+
+
+class HtmlSummaryParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.in_title = False
+        self.ignored_depth = 0
+        self.title_parts: list[str] = []
+        self.text_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "title":
+            self.in_title = True
+        if tag in {"script", "style", "noscript"}:
+            self.ignored_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self.in_title = False
+        if tag in {"script", "style", "noscript"} and self.ignored_depth > 0:
+            self.ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        text = data.strip()
+        if not text:
+            return
+        if self.in_title:
+            self.title_parts.append(text)
+            return
+        if self.ignored_depth == 0:
+            self.text_parts.append(text)
+
+
+def execute_web_fetch_tool(tool_call: ToolCallRequest) -> dict[str, object]:
+    url = web_fetch_url_argument(tool_call)
+    max_bytes = web_fetch_max_bytes_argument(tool_call)
+    fetch_result = fetch_http_url(url, max_bytes=max_bytes)
+    return {
+        "executed": True,
+        "adapter": "web.fetch",
+        **fetch_result,
+    }
+
+
+def web_fetch_url_argument(tool_call: ToolCallRequest) -> str:
+    raw_url = tool_call.arguments.get("url")
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        raise HTTPException(status_code=400, detail="web.fetch requires string argument: url")
+
+    return validate_public_http_url(raw_url)
+
+
+def validate_public_http_url(url: str) -> str:
+    normalized_url = url.strip()
+    parsed = urlparse(normalized_url)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        raise HTTPException(status_code=400, detail="web.fetch only supports HTTP(S) URLs")
+    ensure_public_http_host(parsed.hostname)
+    return normalized_url
+
+
+def web_fetch_max_bytes_argument(tool_call: ToolCallRequest) -> int:
+    raw_max_bytes = tool_call.arguments.get("max_bytes", 12_000)
+    if isinstance(raw_max_bytes, bool) or not isinstance(raw_max_bytes, int):
+        raise HTTPException(status_code=400, detail="web.fetch max_bytes must be an integer")
+    if raw_max_bytes < 1 or raw_max_bytes > settings.web_fetch_max_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"web.fetch max_bytes must be between 1 and {settings.web_fetch_max_bytes}",
+        )
+    return int(raw_max_bytes)
+
+
+def ensure_public_http_host(hostname: str) -> None:
+    normalized = hostname.casefold()
+    if normalized in {"localhost", "localhost.localdomain"} or normalized.endswith(".local"):
+        raise HTTPException(status_code=400, detail="web.fetch cannot target local hosts")
+
+    try:
+        addresses = socket.getaddrinfo(normalized, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"web.fetch cannot resolve host: {hostname}",
+        ) from error
+
+    for address in addresses:
+        ip_address = ipaddress.ip_address(address[4][0])
+        if (
+            ip_address.is_private
+            or ip_address.is_loopback
+            or ip_address.is_link_local
+            or ip_address.is_multicast
+            or ip_address.is_reserved
+            or ip_address.is_unspecified
+        ):
+            raise HTTPException(status_code=400, detail="web.fetch cannot target private hosts")
+
+
+def fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+    try:
+        with httpx.Client(
+            timeout=settings.web_fetch_timeout_seconds,
+            headers={"User-Agent": "Synarch/0.1 web.fetch"},
+        ) as client:
+            response = fetch_http_response(client, url)
+            content, truncated = read_response_content(response, max_bytes=max_bytes)
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="web.fetch request failed") from error
+
+    content_type = response.headers.get("content-type", "")
+    encoding = response.encoding or "utf-8"
+    text = content.decode(encoding, errors="replace")
+    title, excerpt = summarize_fetched_text(text)
+    return {
+        "url": url,
+        "final_url": str(response.url),
+        "status_code": response.status_code,
+        "content_type": content_type,
+        "bytes_read": len(content),
+        "truncated": truncated,
+        "title": title,
+        "text_excerpt": excerpt,
+    }
+
+
+def fetch_http_response(client: httpx.Client, url: str) -> httpx.Response:
+    current_url = url
+    for _ in range(settings.web_fetch_max_redirects + 1):
+        request = client.build_request("GET", current_url)
+        streamed_response = client.send(request, stream=True, follow_redirects=False)
+        if not streamed_response.is_redirect:
+            return streamed_response
+
+        location = streamed_response.headers.get("location")
+        if not location:
+            return streamed_response
+        streamed_response.close()
+        current_url = validate_public_http_url(urljoin(current_url, location))
+
+    raise HTTPException(status_code=502, detail="web.fetch exceeded redirect limit")
+
+
+def read_response_content(response: httpx.Response, *, max_bytes: int) -> tuple[bytes, bool]:
+    chunks: list[bytes] = []
+    bytes_read = 0
+    truncated = False
+    try:
+        for chunk in response.iter_bytes():
+            remaining = max_bytes - bytes_read
+            if remaining <= 0:
+                truncated = True
+                break
+            if len(chunk) > remaining:
+                chunks.append(chunk[:remaining])
+                bytes_read += remaining
+                truncated = True
+                break
+            chunks.append(chunk)
+            bytes_read += len(chunk)
+    finally:
+        response.close()
+    return b"".join(chunks), truncated
+
+
+def summarize_fetched_text(text: str) -> tuple[str | None, str]:
+    parser = HtmlSummaryParser()
+    parser.feed(text)
+    title = collapse_whitespace(" ".join(parser.title_parts)) or None
+    body_text = " ".join(parser.text_parts) if parser.text_parts else text
+    return title, collapse_whitespace(body_text)[:1200]
+
+
+def collapse_whitespace(text: str) -> str:
+    return " ".join(text.split())
 
 
 def execute_event_emit_tool(

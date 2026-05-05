@@ -31,7 +31,7 @@ export const overview = [
   },
   {
     label: "Tests backend",
-    value: "101",
+    value: "103",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Exposer la porte permissions/connecteurs",
+  title: "Brancher un connecteur web en lecture seule",
   body:
-    "Le dashboard lit le world-view d'un agent, expose ses outils/services/connecteurs autorises et peut declencher un appel outil controle via le gateway.",
+    "Le dashboard peut declencher web.fetch via la porte permissions, le gateway valide l'URL publique, limite la lecture et retourne titre/extrait avec audit.",
   checks: [
-    "GET /agents/{id}/world-view passe par le proxy frontend",
-    "POST /tools/call passe par le proxy frontend",
-    "Allowed tools, denied tools et connectors sont visibles",
-    "Un appel event.emit autorise produit event et audit"
+    "agent-ops-sourcing possede web.fetch dans ses outils autorises",
+    "connector-supplier-web expose web.search et web.fetch",
+    "POST /tools/call execute web.fetch seulement apres autorisation",
+    "Les URL locales ou privees sont bloquees avant appel HTTP"
   ]
 };
 
@@ -191,10 +191,10 @@ export const layers = [
   {
     id: "G",
     name: "Execution",
-    status: "later" as Status,
+    status: "partial" as Status,
     icon: PlugZap,
-    summary: "Contrats tool-call presents, execution reelle volontairement retardee.",
-    next: "Registry + permission check avant execution."
+    summary: "Tool gate permissionne event.emit et web.fetch avec audit et validation basique.",
+    next: "Brancher les appels outils dans la boucle runtime agent."
   },
   {
     id: "H",
@@ -299,6 +299,11 @@ export const backlog = [
   {
     label: "M3.9",
     title: "Concrete connector adapters",
+    done: true
+  },
+  {
+    label: "M4.1",
+    title: "Tool-use runtime loop",
     done: false
   },
   {

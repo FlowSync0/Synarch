@@ -350,6 +350,7 @@ type ToolCallDraft = {
   projectId: string;
   reason: string;
   summary: string;
+  url: string;
 };
 
 type TimelineViewModel = {
@@ -389,7 +390,8 @@ const initialToolCallDraft: ToolCallDraft = {
   serviceId: "service-event-log",
   projectId: "",
   reason: "Record a controlled tool-gate smoke event from the Synarch dashboard.",
-  summary: "Permission gate smoke event from Synarch dashboard."
+  summary: "Permission gate smoke event from Synarch dashboard.",
+  url: "https://example.com"
 };
 
 function formatLifecycleAge(createdAt: string): string {
@@ -639,17 +641,23 @@ function toolCallFromDraft(
   const toolName = draft.toolName.trim();
   const { agentId, projectId } = options;
   const targetProjectId = projectId.trim();
-  const argumentsPayload =
-    toolName === "event.emit"
-      ? {
-          type: "agent.reported",
-          target: targetProjectId || undefined,
-          payload: {
-            summary: draft.summary.trim(),
-            source: "frontend.permission_gate"
-          }
-        }
-      : {};
+  let argumentsPayload: Record<string, unknown> = {};
+  if (toolName === "event.emit") {
+    argumentsPayload = {
+      type: "agent.reported",
+      target: targetProjectId || undefined,
+      payload: {
+        summary: draft.summary.trim(),
+        source: "frontend.permission_gate"
+      }
+    };
+  }
+  if (toolName === "web.fetch") {
+    argumentsPayload = {
+      url: draft.url.trim(),
+      max_bytes: 12000
+    };
+  }
 
   return {
     agent_id: agentId,
@@ -659,6 +667,30 @@ function toolCallFromDraft(
     reason: draft.reason.trim(),
     arguments: argumentsPayload
   };
+}
+
+function preferredServiceForTool(toolName: string, serviceIds: string[]): string | null {
+  if (toolName === "web.fetch" || toolName === "web.search") {
+    return (
+      serviceIds.find(
+        (serviceId) => serviceId.includes("supplier-web") || serviceId.includes("web-fetch")
+      ) ?? null
+    );
+  }
+  if (toolName === "event.emit") {
+    return serviceIds.find((serviceId) => serviceId.includes("event-log")) ?? null;
+  }
+  return null;
+}
+
+function serviceMatchesTool(toolName: string, serviceId: string): boolean {
+  if (toolName === "web.fetch" || toolName === "web.search") {
+    return serviceId.includes("supplier-web") || serviceId.includes("web-fetch");
+  }
+  if (toolName === "event.emit") {
+    return serviceId.includes("event-log");
+  }
+  return true;
 }
 
 function runCost(batch: TaskRunBatchResult): number {
@@ -1250,20 +1282,41 @@ export default function DashboardPage() {
   const effectiveToolName = availableToolOptions.includes(toolCallDraft.toolName)
     ? toolCallDraft.toolName
     : (availableToolOptions[0] ?? toolCallDraft.toolName);
-  const effectiveToolServiceId = availableServiceOptions.includes(toolCallDraft.serviceId)
-    ? toolCallDraft.serviceId
-    : (availableServiceOptions[0] ?? toolCallDraft.serviceId);
+  const preferredToolServiceId = preferredServiceForTool(
+    effectiveToolName,
+    availableServiceOptions
+  );
+  const effectiveToolServiceId =
+    availableServiceOptions.includes(toolCallDraft.serviceId) &&
+    serviceMatchesTool(effectiveToolName, toolCallDraft.serviceId)
+      ? toolCallDraft.serviceId
+      : (preferredToolServiceId ?? availableServiceOptions[0] ?? toolCallDraft.serviceId);
   const effectiveToolProjectId = toolCallDraft.projectId.trim() || effectiveSelectedProjectId;
+  const hasToolArguments =
+    effectiveToolName === "event.emit"
+      ? toolCallDraft.summary.trim().length > 0
+      : effectiveToolName === "web.fetch"
+        ? toolCallDraft.url.trim().length > 0
+        : true;
   const canCallTool =
     effectiveToolAgentId.length > 0 &&
     effectiveToolName.length > 0 &&
     toolCallDraft.reason.trim().length > 0 &&
-    (effectiveToolName !== "event.emit" || toolCallDraft.summary.trim().length > 0) &&
+    hasToolArguments &&
     !toolCallMutation.isPending;
   const updateToolCallDraft = (field: keyof ToolCallDraft, value: string) => {
     setToolCallDraft((draft) => ({
       ...draft,
       [field]: value
+    }));
+  };
+  const handleToolNameChange = (toolName: string) => {
+    setToolCallDraft((draft) => ({
+      ...draft,
+      toolName,
+      serviceId:
+        preferredServiceForTool(toolName, availableServiceOptions) ??
+        draft.serviceId
     }));
   };
   const handleToolCallSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -2367,7 +2420,7 @@ export default function DashboardPage() {
                   className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
                   aria-label="Tool name"
                   value={effectiveToolName}
-                  onChange={(event) => updateToolCallDraft("toolName", event.target.value)}
+                  onChange={(event) => handleToolNameChange(event.target.value)}
                 >
                   {availableToolOptions.length === 0 ? <option value="">No tool</option> : null}
                   {availableToolOptions.map((tool) => (
@@ -2411,6 +2464,15 @@ export default function DashboardPage() {
                   aria-label="Event summary"
                   value={toolCallDraft.summary}
                   onChange={(event) => updateToolCallDraft("summary", event.target.value)}
+                />
+              ) : null}
+              {effectiveToolName === "web.fetch" ? (
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Fetch URL"
+                  placeholder="https://example.com"
+                  value={toolCallDraft.url}
+                  onChange={(event) => updateToolCallDraft("url", event.target.value)}
                 />
               ) : null}
               <button

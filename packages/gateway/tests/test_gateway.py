@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
+import synarch_gateway.main as gateway_main
 from synarch_gateway.main import (
     app,
     get_control_plane_client,
@@ -868,6 +869,116 @@ def test_tool_gate_executes_event_emit_adapter() -> None:
     assert state_client.events[1].source_agent_id == "agent-direction"
     assert state_client.events[1].target == "project_demo"
     assert state_client.events[1].payload == {"summary": "Supplier response is blocked."}
+
+
+def test_tool_gate_executes_web_fetch_adapter() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web", "service-event-log"],
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        assert url == "https://example.com"
+        assert max_bytes == 2048
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": 512,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain This domain is for use in illustrative examples.",
+        }
+
+    original_fetch_http_url = gateway_main.fetch_http_url
+    gateway_main.fetch_http_url = fake_fetch_http_url
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_fetch_adapter"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.fetch",
+                "service_id": "connector-supplier-web",
+                "project_id": "project_sourcing",
+                "reason": "Fetch supplier evidence before outreach.",
+                "arguments": {
+                    "url": "https://example.com",
+                    "max_bytes": 2048,
+                },
+            },
+        )
+    finally:
+        gateway_main.fetch_http_url = original_fetch_http_url
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["executed"] is True
+    assert payload["output"]["adapter"] == "web.fetch"
+    assert payload["output"]["status_code"] == 200
+    assert payload["output"]["title"] == "Example Domain"
+    assert payload["output"]["truncated"] is False
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert state_client.events[0].payload["argument_keys"] == ["max_bytes", "url"]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_tool_gate_rejects_private_web_fetch_url() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_private_web_fetch"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.fetch",
+                "service_id": "connector-supplier-web",
+                "reason": "Try to fetch a local URL.",
+                "arguments": {"url": "http://127.0.0.1:8020/healthz"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "web.fetch cannot target private hosts"
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert state_client.audit_logs[0].action == "tool.allowed"
 
 
 def test_run_next_task_executes_first_ready_task() -> None:
