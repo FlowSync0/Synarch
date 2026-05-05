@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Lire une trace sans fouiller les logs",
+  title: "Valider la mémoire avant réutilisation",
   body:
-    "La vue projet regroupe maintenant les traces reelles avec events, couts et payload inspectable. On peut isoler une trace ou une tache avant de debuguer une integration.",
+    "Les memory candidates d'un projet sont visibles dans la timeline et peuvent etre approuvees ou rejetees. Une memoire proposee ne devient reutilisable qu'apres revue.",
   checks: [
-    "Les traces sont groupees par trace_id avec events et couts",
-    "All traces restaure la vue projet complete",
-    "Chaque event ouvre son payload JSON",
-    "Le detail event affiche target, source et spend de trace"
+    "PATCH /memory-items/{id}/status passe par le proxy frontend",
+    "Chaque memoire affiche scope, agent, statut et contenu",
+    "Approve et Reject rafraichissent events et timeline projet",
+    "Le detail memoire expose le JSON complet"
   ]
 };
 
@@ -284,6 +284,11 @@ export const backlog = [
   {
     label: "M3.6",
     title: "Memory candidate review",
+    done: true
+  },
+  {
+    label: "M3.7",
+    title: "Memory-aware run verification",
     done: false
   },
   {

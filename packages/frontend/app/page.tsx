@@ -49,9 +49,11 @@ import {
   runReadyTasks,
   runTask,
   submitGoal,
+  updateMemoryStatus,
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
+  type MemoryStatus,
   type ProjectTimeline,
   type TaskRunBatchResult,
   type TaskRunResult,
@@ -132,6 +134,12 @@ const approvalStatusClass: Record<string, string> = {
   requested: "bg-warn-soft text-warn ring-warn/15",
   approved: "bg-info-soft text-info ring-info/15",
   applied: "bg-ok-soft text-ok ring-ok/15",
+  rejected: "bg-risk-soft text-risk ring-risk/15"
+};
+
+const memoryStatusClass: Record<MemoryStatus, string> = {
+  proposed: "bg-warn-soft text-warn ring-warn/15",
+  approved: "bg-ok-soft text-ok ring-ok/15",
   rejected: "bg-risk-soft text-risk ring-risk/15"
 };
 
@@ -631,6 +639,10 @@ function formatPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
 
+function memoryCountByStatus(timeline: ProjectTimeline, status: MemoryStatus): number {
+  return timeline.memory_items.filter((item) => item.status === status).length;
+}
+
 function taskEventCount(timeline: ProjectTimeline, taskId: string): number {
   return timeline.events.filter((event) => eventBelongsToTask(event, taskId)).length;
 }
@@ -705,6 +717,7 @@ export default function DashboardPage() {
   const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
   const [selectedTimelineTraceId, setSelectedTimelineTraceId] = useState("");
   const [selectedTimelineEventId, setSelectedTimelineEventId] = useState("");
+  const [selectedMemoryItemId, setSelectedMemoryItemId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
@@ -779,6 +792,16 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const memoryStatusMutation = useMutation({
+    mutationFn: updateMemoryStatus,
+    onSuccess: (memoryItem) => {
+      setSelectedMemoryItemId(memoryItem.id);
+      setSelectedTimelineTraceId("");
+      setSelectedTimelineEventId("");
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1001,6 +1024,11 @@ export default function DashboardPage() {
           (costRecord) => traceIdForCost(costRecord) === traceIdForEvent(selectedTimelineEvent)
         )
       : [];
+  const selectedMemoryItem =
+    projectTimelineQuery.isSuccess && selectedMemoryItemId
+      ? (projectTimelineQuery.data.memory_items.find((item) => item.id === selectedMemoryItemId) ??
+        null)
+      : null;
   const projectTimelineMode = !effectiveSelectedProjectId
     ? "sample"
     : projectTimelineQuery.isLoading
@@ -1445,6 +1473,7 @@ export default function DashboardPage() {
                         setFocusedTimelineTaskId("");
                         setSelectedTimelineTraceId("");
                         setSelectedTimelineEventId("");
+                        setSelectedMemoryItemId("");
                         setRunReadyDraft((draft) => ({
                           ...draft,
                           projectId: project.id
@@ -1490,6 +1519,7 @@ export default function DashboardPage() {
                     setFocusedTimelineTaskId("");
                     setSelectedTimelineTraceId("");
                     setSelectedTimelineEventId("");
+                    setSelectedMemoryItemId("");
                     setRunReadyDraft((draft) => ({
                       ...draft,
                       projectId: event.target.value
@@ -1572,6 +1602,125 @@ export default function DashboardPage() {
                     </div>
                   </div>
                 ) : null}
+                {projectTimelineQuery.data.memory_items.length > 0 ? (
+                  <div className="grid gap-3 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase text-muted">
+                          Memory review
+                        </p>
+                        <p className="mt-1 truncate text-xs text-muted">
+                          proposed {memoryCountByStatus(projectTimelineQuery.data, "proposed")} /
+                          approved {memoryCountByStatus(projectTimelineQuery.data, "approved")} /
+                          rejected {memoryCountByStatus(projectTimelineQuery.data, "rejected")}
+                        </p>
+                      </div>
+                      {selectedMemoryItem ? (
+                        <button
+                          className="h-8 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-accent/40 hover:text-accent"
+                          type="button"
+                          onClick={() => setSelectedMemoryItemId("")}
+                        >
+                          Close memory
+                        </button>
+                      ) : null}
+                    </div>
+                    <div className="grid gap-2">
+                      {projectTimelineQuery.data.memory_items.map((memoryItem) => {
+                        const isMutatingMemory =
+                          memoryStatusMutation.isPending &&
+                          memoryStatusMutation.variables?.itemId === memoryItem.id;
+                        return (
+                          <article
+                            key={memoryItem.id}
+                            className={`grid gap-3 rounded-md border border-border px-3 py-3 md:grid-cols-[minmax(0,1fr)_auto] ${
+                              selectedMemoryItemId === memoryItem.id ? "bg-ok-soft/30" : "bg-white"
+                            }`}
+                          >
+                            <button
+                              className="min-w-0 text-left"
+                              type="button"
+                              onClick={() =>
+                                setSelectedMemoryItemId(
+                                  selectedMemoryItemId === memoryItem.id ? "" : memoryItem.id
+                                )
+                              }
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${memoryStatusClass[memoryItem.status]}`}
+                                >
+                                  {memoryItem.status}
+                                </span>
+                                <span className="max-w-full truncate text-xs text-muted">
+                                  {memoryItem.id} / {memoryItem.agent_id ?? "agent"} /{" "}
+                                  {memoryItem.scope}
+                                </span>
+                              </div>
+                              <BalancedText className="mt-2 text-sm text-muted" font="400 13px Inter Variable" lineHeight={18}>
+                                {memoryItem.content}
+                              </BalancedText>
+                            </button>
+                            <div className="flex items-center gap-1.5 md:justify-end">
+                              <button
+                                className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={
+                                  memoryItem.status === "approved" ||
+                                  isMutatingMemory ||
+                                  memoryStatusMutation.isPending
+                                }
+                                type="button"
+                                onClick={() =>
+                                  memoryStatusMutation.mutate({
+                                    itemId: memoryItem.id,
+                                    status: "approved"
+                                  })
+                                }
+                              >
+                                <Check size={13} />
+                                <span>{isMutatingMemory ? "Saving" : "Approve"}</span>
+                              </button>
+                              <button
+                                className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={
+                                  memoryItem.status === "rejected" ||
+                                  isMutatingMemory ||
+                                  memoryStatusMutation.isPending
+                                }
+                                type="button"
+                                onClick={() =>
+                                  memoryStatusMutation.mutate({
+                                    itemId: memoryItem.id,
+                                    status: "rejected"
+                                  })
+                                }
+                              >
+                                <X size={13} />
+                                <span>{isMutatingMemory ? "Saving" : "Reject"}</span>
+                              </button>
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {selectedMemoryItem ? (
+                      <pre className="max-h-44 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                        {formatPayload(selectedMemoryItem)}
+                      </pre>
+                    ) : null}
+                    {memoryStatusMutation.isError ? (
+                      <p className="text-xs font-medium text-risk">
+                        {memoryStatusMutation.error instanceof Error
+                          ? memoryStatusMutation.error.message
+                          : "Memory status update failed."}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="px-4 py-3">
+                    <p className="text-xs text-muted">Aucune memory candidate pour ce projet.</p>
+                  </div>
+                )}
                 {focusedTimelineTask ? (
                   <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2">
                     <p className="min-w-0 truncate text-xs text-muted">

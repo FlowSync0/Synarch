@@ -97,6 +97,20 @@ export type CostRecord = {
   created_at: string;
 };
 
+export type MemoryStatus = "proposed" | "approved" | "rejected";
+
+export type MemoryItem = {
+  id: string;
+  scope: string;
+  content: string;
+  status: MemoryStatus;
+  agent_id?: string | null;
+  project_id?: string | null;
+  embedding?: number[] | null;
+  created_at: string;
+  expires_at?: string | null;
+};
+
 export type ProjectTimeline = {
   project_id: string;
   project: ProjectRecord;
@@ -104,7 +118,7 @@ export type ProjectTimeline = {
   events: EventRecord[];
   cost_records: CostRecord[];
   audit_logs: unknown[];
-  memory_items: unknown[];
+  memory_items: MemoryItem[];
   total_cost: number;
   currency: string;
 };
@@ -242,6 +256,29 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     }
   });
   return parseJsonResponse<TaskRunResult>(response);
+}
+
+export async function updateMemoryStatus({
+  itemId,
+  status
+}: {
+  itemId: string;
+  status: MemoryStatus;
+}): Promise<MemoryItem> {
+  const response = await fetch(
+    `/api/gateway/memory-items/${encodeURIComponent(itemId)}/status`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_memory_review_${Date.now()}`
+      },
+      body: JSON.stringify({ status })
+    }
+  );
+  return parseJsonResponse<MemoryItem>(response);
 }
 
 export async function decideTaskReview({
