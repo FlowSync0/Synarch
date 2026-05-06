@@ -750,7 +750,33 @@ def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) ->
                 f"Tool not exposed by service: {tool_call.tool_name} "
                 f"via {tool_call.service_id}"
             )
+    credential_error = tool_credential_scope_error(tool_call, world_view)
+    if credential_error is not None:
+        return credential_error
     return None
+
+
+def tool_credential_scope_error(
+    tool_call: ToolCallRequest,
+    world_view: LocalWorldView,
+) -> str | None:
+    if tool_call.service_id is None:
+        return None
+    manifest = TOOL_ADAPTER_MANIFESTS.get(tool_call.tool_name)
+    if manifest is None or not manifest.credential_scopes:
+        return None
+    service_scopes = world_view.available_service_credential_scopes.get(
+        tool_call.service_id, []
+    )
+    missing_scopes = [
+        scope for scope in manifest.credential_scopes if scope not in service_scopes
+    ]
+    if not missing_scopes:
+        return None
+    return (
+        f"Missing credential scopes for service {tool_call.service_id}: "
+        f"{', '.join(missing_scopes)}"
+    )
 
 
 def execute_authorized_tool(

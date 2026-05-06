@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 import synarch_gateway.main as gateway_main
@@ -906,6 +907,70 @@ def test_tool_gate_denies_tool_not_exposed_by_selected_service() -> None:
     )
     assert state_client.events[0].type == EventType.tool_failed
     assert state_client.events[0].payload["service_id"] == "service-event-log"
+    assert state_client.audit_logs[0].action == "tool.denied"
+
+
+def test_tool_gate_denies_missing_required_credential_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        gateway_main.TOOL_ADAPTER_MANIFESTS,
+        "web.fetch",
+        gateway_main.ToolAdapterManifest(
+            tool_name="web.fetch",
+            adapter="web.fetch",
+            required_arguments=("url",),
+            credential_scopes=("browser:authenticated_fetch",),
+            requires_credentials=True,
+            network_access=True,
+            risk_level="medium",
+        ),
+    )
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+                available_service_credential_scopes={"connector-supplier-web": []},
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_tool_missing_credential_scope"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.fetch",
+                "service_id": "connector-supplier-web",
+                "project_id": "project_sourcing",
+                "task_id": "task_sourcing",
+                "reason": "Try to fetch through a connector without required credentials.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Missing credential scopes for service connector-supplier-web: "
+        "browser:authenticated_fetch"
+    )
+    assert state_client.events[0].type == EventType.tool_failed
     assert state_client.audit_logs[0].action == "tool.denied"
 
 

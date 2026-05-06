@@ -41,6 +41,7 @@ def test_service_and_skill_registry_capture_access_rules() -> None:
             "name": "GitHub",
             "kind": "tool_provider",
             "capabilities": ["git.read", "git.write"],
+            "credential_scopes": ["github:contents:read", "github:contents:write"],
             "allowed_divisions": ["dev"],
             "audit_required": True,
             "metadata": {"connector_type": "source_control"},
@@ -65,6 +66,10 @@ def test_service_and_skill_registry_capture_access_rules() -> None:
 
     assert services_response.status_code == 200
     assert services_response.json()[0]["allowed_divisions"] == ["dev"]
+    assert services_response.json()[0]["credential_scopes"] == [
+        "github:contents:read",
+        "github:contents:write",
+    ]
     assert services_response.json()[0]["metadata"] == {"connector_type": "source_control"}
     assert skills_response.status_code == 200
     assert skills_response.json()[0]["required_tools"] == ["git.read", "git.write"]

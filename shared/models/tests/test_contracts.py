@@ -84,6 +84,9 @@ def test_task_run_result_captures_execution_boundary() -> None:
         division="dev",
         available_services=["connector-github"],
         available_service_capabilities={"connector-github": ["git.read"]},
+        available_service_credential_scopes={
+            "connector-github": ["github:contents:read"]
+        },
     )
     memory_context = MemoryContext(
         agent_id="agent-dev",
@@ -141,6 +144,9 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["world_view"]["available_service_capabilities"] == {
         "connector-github": ["git.read"]
+    }
+    assert payload["world_view"]["available_service_credential_scopes"] == {
+        "connector-github": ["github:contents:read"]
     }
     assert payload["agent_result"]["status"] == "needs_review"
     assert payload["tool_results"][0]["tool_name"] == "event.emit"

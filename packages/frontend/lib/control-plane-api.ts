@@ -44,6 +44,7 @@ export type LocalWorldView = {
   policies: string[];
   available_services: string[];
   available_service_capabilities: Record<string, string[]>;
+  available_service_credential_scopes: Record<string, string[]>;
   available_connector_ids: string[];
   available_skill_ids: string[];
 };

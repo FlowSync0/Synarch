@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.5",
-    detail: "Adapter manifests",
+    value: "M4.6",
+    detail: "Credential scopes",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "109",
+    value: "110",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Manifests adapters",
+  title: "Scopes credentials",
   body:
-    "Le gateway expose les adapters avec arguments requis, scopes credentials, risque, acces reseau et audit attendu.",
+    "Les services declarent leurs credential_scopes, la world view les expose, et le gateway refuse un adapter si un scope requis manque.",
   checks: [
-    "GET /tools/registry retourne les manifests",
-    "event.emit declare type comme argument requis",
-    "web.fetch declare url, max_bytes et acces reseau",
+    "ServiceDefinition persiste credential_scopes",
+    "LocalWorldView expose les scopes par service",
+    "Gateway bloque un adapter sans scope requis",
     "Tests backend complets passent"
   ]
 };
@@ -329,6 +329,11 @@ export const backlog = [
   {
     label: "M4.6",
     title: "Credential scope enforcement",
+    done: true
+  },
+  {
+    label: "M4.7",
+    title: "Credential status observability",
     done: false
   },
   {

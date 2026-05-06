@@ -361,6 +361,7 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         name="GitHub",
         kind=ServiceKind.tool_provider,
         capabilities=["git.read", "git.write"],
+        credential_scopes=["github:contents:read", "github:contents:write"],
         allowed_divisions=["dev"],
         metadata={"connector_type": "source_control"},
     ),

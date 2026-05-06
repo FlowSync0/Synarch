@@ -141,6 +141,7 @@ class LocalWorldView(SynarchModel):
     policies: list[str] = Field(default_factory=list)
     available_services: list[str] = Field(default_factory=list)
     available_service_capabilities: dict[str, list[str]] = Field(default_factory=dict)
+    available_service_credential_scopes: dict[str, list[str]] = Field(default_factory=dict)
     available_connector_ids: list[str] = Field(default_factory=list)
     available_skill_ids: list[str] = Field(default_factory=list)
 
@@ -319,6 +320,7 @@ class ServiceDefinition(SynarchModel):
     base_url: str | None = None
     health_endpoint: str | None = "/healthz"
     capabilities: list[str] = Field(default_factory=list)
+    credential_scopes: list[str] = Field(default_factory=list)
     owner_agent_id: str | None = None
     allowed_agent_ids: list[str] = Field(default_factory=list)
     allowed_divisions: list[str] = Field(default_factory=list)

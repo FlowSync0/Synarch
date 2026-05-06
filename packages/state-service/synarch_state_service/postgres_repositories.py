@@ -359,6 +359,7 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "base_url",
                 "health_endpoint",
                 "capabilities",
+                "credential_scopes",
                 "owner_agent_id",
                 "allowed_agent_ids",
                 "allowed_divisions",

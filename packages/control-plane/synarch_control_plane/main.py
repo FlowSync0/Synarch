@@ -235,6 +235,9 @@ def read_world_view(agent_id: str) -> LocalWorldView:
             service.id: service_capabilities_available_to_agent(agent, service)
             for service in available_services
         },
+        available_service_credential_scopes={
+            service.id: service.credential_scopes for service in available_services
+        },
         available_connector_ids=list_available_connector_ids(available_services),
         available_skill_ids=list_available_skill_ids(agent),
     )

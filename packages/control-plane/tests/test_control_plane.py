@@ -129,6 +129,7 @@ def test_world_view_includes_state_backed_services_and_model_policy(
                         "name": "Finance Documents",
                         "kind": "tool_provider",
                         "capabilities": ["document.read"],
+                        "credential_scopes": ["drive:readonly"],
                         "allowed_divisions": ["finance"],
                     },
                     {
@@ -210,6 +211,9 @@ def test_world_view_includes_state_backed_services_and_model_policy(
     assert payload["available_service_capabilities"]["service-ledger"] == ["ledger.write"]
     assert payload["available_service_capabilities"]["connector-finance-docs"] == [
         "document.read"
+    ]
+    assert payload["available_service_credential_scopes"]["connector-finance-docs"] == [
+        "drive:readonly"
     ]
     assert payload["available_service_capabilities"]["connector-finance-mixed"] == [
         "document.read"
