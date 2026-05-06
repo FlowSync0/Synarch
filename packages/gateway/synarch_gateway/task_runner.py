@@ -24,6 +24,7 @@ from synarch_models import (
     TaskRecord,
     TaskRunBatchResult,
     TaskRunResult,
+    TaskSkipRecord,
     TaskStatus,
     ToolCallRequest,
     ToolResult,
@@ -208,6 +209,7 @@ class TaskRunner:
         lease_recovery = self.state.recover_expired_task_leases(headers=headers)
         runs: list[TaskRunResult] = []
         skipped_task_ids: list[str] = []
+        skipped_tasks: list[TaskSkipRecord] = []
         stop_reason = "max_tasks_reached"
         while len(runs) < max_tasks:
             task = next_ready_task(
@@ -220,6 +222,13 @@ class TaskRunner:
             blockers = self.credential_blockers_for_task(task)
             if blockers:
                 skipped_task_ids.append(task.id)
+                skipped_tasks.append(
+                    TaskSkipRecord(
+                        task_id=task.id,
+                        category="credential_readiness",
+                        reason="; ".join(blockers),
+                    )
+                )
                 continue
             try:
                 runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
@@ -227,6 +236,13 @@ class TaskRunner:
                 if not is_task_claim_conflict(error):
                     raise
                 skipped_task_ids.append(task.id)
+                skipped_tasks.append(
+                    TaskSkipRecord(
+                        task_id=task.id,
+                        category="claim_conflict",
+                        reason="Task was already claimed by another scheduler.",
+                    )
+                )
 
         batch_result = TaskRunBatchResult(
             trace_id=trace_id,
@@ -235,6 +251,7 @@ class TaskRunner:
             stop_reason=stop_reason,
             runs=runs,
             skipped_task_ids=skipped_task_ids,
+            skipped_tasks=skipped_tasks,
             lease_recovery=lease_recovery,
         )
         scheduler_event = self.state.create_event(
@@ -855,6 +872,10 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
         "run_count": len(batch_result.runs),
         "task_ids": [run.task.id for run in batch_result.runs],
         "skipped_task_ids": batch_result.skipped_task_ids,
+        "skipped_tasks": [
+            skipped_task.model_dump(mode="json")
+            for skipped_task in batch_result.skipped_tasks
+        ],
         "skipped_task_count": len(batch_result.skipped_task_ids),
         "lease_recovered_task_ids": lease_recovered_task_ids(batch_result.lease_recovery),
         "lease_failed_task_ids": lease_failed_task_ids(batch_result.lease_recovery),

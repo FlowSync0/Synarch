@@ -548,6 +548,12 @@ class TaskLeaseRecoveryResult(SynarchModel):
     events: list[EventRecord] = Field(default_factory=list)
 
 
+class TaskSkipRecord(SynarchModel):
+    task_id: str
+    category: str
+    reason: str
+
+
 class TaskRunBatchResult(SynarchModel):
     trace_id: str
     max_tasks: int
@@ -555,6 +561,7 @@ class TaskRunBatchResult(SynarchModel):
     stop_reason: str
     runs: list[TaskRunResult] = Field(default_factory=list)
     skipped_task_ids: list[str] = Field(default_factory=list)
+    skipped_tasks: list[TaskSkipRecord] = Field(default_factory=list)
     lease_recovery: TaskLeaseRecoveryResult | None = None
     scheduler_event: EventRecord | None = None
     scheduler_audit_log: AuditLogRecord | None = None

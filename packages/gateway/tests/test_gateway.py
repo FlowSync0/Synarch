@@ -1804,6 +1804,13 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
     )
 
     assert result.skipped_task_ids == ["task_missing_credentials"]
+    assert [skip.model_dump(mode="json") for skip in result.skipped_tasks] == [
+        {
+            "task_id": "task_missing_credentials",
+            "category": "credential_readiness",
+            "reason": "Credential scopes missing for required tool: web.fetch",
+        }
+    ]
     assert [run.task.id for run in result.runs] == ["task_no_required_tools"]
     assert [request.task.id for request in runtime_client.requests] == [
         "task_no_required_tools"
@@ -1812,6 +1819,13 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
     assert state_client.tasks[1].status == TaskStatus.completed
     assert state_client.events[-1].payload["skipped_task_ids"] == [
         "task_missing_credentials"
+    ]
+    assert state_client.events[-1].payload["skipped_tasks"] == [
+        {
+            "task_id": "task_missing_credentials",
+            "category": "credential_readiness",
+            "reason": "Credential scopes missing for required tool: web.fetch",
+        }
     ]
 
 
@@ -2004,10 +2018,24 @@ def test_run_ready_tasks_skips_claim_conflict_and_continues() -> None:
     payload = response.json()
     assert payload["stop_reason"] == "no_ready_task"
     assert payload["skipped_task_ids"] == ["task_claimed_elsewhere"]
+    assert payload["skipped_tasks"] == [
+        {
+            "task_id": "task_claimed_elsewhere",
+            "category": "claim_conflict",
+            "reason": "Task was already claimed by another scheduler.",
+        }
+    ]
     assert [run["task"]["id"] for run in payload["runs"]] == ["task_after_conflict"]
     assert payload["scheduler_event"]["payload"]["skipped_task_count"] == 1
     assert payload["scheduler_event"]["payload"]["skipped_task_ids"] == [
         "task_claimed_elsewhere"
+    ]
+    assert payload["scheduler_event"]["payload"]["skipped_tasks"] == [
+        {
+            "task_id": "task_claimed_elsewhere",
+            "category": "claim_conflict",
+            "reason": "Task was already claimed by another scheduler.",
+        }
     ]
     assert [task.status for task in state_client.tasks] == [
         TaskStatus.running,
@@ -2127,6 +2155,7 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "run_count": 0,
         "task_ids": [],
         "skipped_task_ids": [],
+        "skipped_tasks": [],
         "skipped_task_count": 0,
         "lease_recovered_task_ids": [],
         "lease_failed_task_ids": [],

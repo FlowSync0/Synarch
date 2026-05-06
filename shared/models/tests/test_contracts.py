@@ -16,7 +16,9 @@ from synarch_models import (
     ProjectSplitDecision,
     ProjectSplitRequest,
     TaskRecord,
+    TaskRunBatchResult,
     TaskRunResult,
+    TaskSkipRecord,
     TaskStatus,
     ToolCallRequest,
     ToolResult,
@@ -155,6 +157,34 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["tool_results"][0]["tool_name"] == "event.emit"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"
     assert payload["cost_records"][0]["trace_id"] == "trace_123"
+
+
+def test_task_run_batch_result_captures_skip_reasons() -> None:
+    result = TaskRunBatchResult(
+        trace_id="trace_scheduler",
+        max_tasks=2,
+        project_id="project_demo",
+        stop_reason="no_ready_task",
+        skipped_task_ids=["task_blocked"],
+        skipped_tasks=[
+            TaskSkipRecord(
+                task_id="task_blocked",
+                category="credential_readiness",
+                reason="Credential scopes missing for required tool: web.fetch",
+            )
+        ],
+    )
+
+    payload = result.model_dump(mode="json")
+
+    assert payload["skipped_task_ids"] == ["task_blocked"]
+    assert payload["skipped_tasks"] == [
+        {
+            "task_id": "task_blocked",
+            "category": "credential_readiness",
+            "reason": "Credential scopes missing for required tool: web.fetch",
+        }
+    ]
 
 
 def test_memory_item_defaults_to_approved_status() -> None:

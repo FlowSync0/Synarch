@@ -2280,6 +2280,18 @@ export default function DashboardPage() {
                       ) : null}
                     </div>
                   ))}
+                  {lastRunBatch.skipped_tasks.length > 0 ? (
+                    <div className="grid gap-1 rounded-md border border-warn/25 bg-warn-soft p-3">
+                      {lastRunBatch.skipped_tasks.map((skippedTask) => (
+                        <div key={skippedTask.task_id} className="grid gap-0.5">
+                          <p className="text-[11px] font-semibold text-warn">
+                            skipped {skippedTask.category} / {skippedTask.task_id}
+                          </p>
+                          <p className="text-[11px] text-muted">{skippedTask.reason}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
                   <p className="text-xs text-muted">
                     cost {runCost(lastRunBatch).toFixed(6)} USD / skipped{" "}
                     {lastRunBatch.skipped_task_ids.length}

@@ -46,6 +46,7 @@ from .contracts import (
     TaskReviewResult,
     TaskRunBatchResult,
     TaskRunResult,
+    TaskSkipRecord,
     ToolCallRequest,
     ToolResult,
 )
@@ -121,6 +122,7 @@ __all__ = [
     "TaskReviewResult",
     "TaskRunBatchResult",
     "TaskRunResult",
+    "TaskSkipRecord",
     "TaskStatus",
     "ToolCallRequest",
     "ToolResult",

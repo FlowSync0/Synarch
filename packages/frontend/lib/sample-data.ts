@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.8",
-    detail: "Scheduler readiness",
+    value: "M4.9",
+    detail: "Skip reason visibility",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "113",
+    value: "114",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Scheduler readiness",
+  title: "Skip reasons visibles",
   body:
-    "Le scheduler ignore les taches dont les outils requis ne sont pas couverts par un service credential-ready.",
+    "Le scheduler expose maintenant pourquoi une tache est ignoree, dans la reponse API, les events et l'audit.",
   checks: [
-    "TaskRecord porte required_tools dans le contrat partage",
-    "State-service persiste les outils requis par tache",
-    "Le scheduler garde les taches bloquees en queue et lance les autres taches pretes",
+    "TaskRunBatchResult porte skipped_tasks avec categorie et raison",
+    "scheduler.tick event/audit journalisent les raisons de skip",
+    "L'interface affiche les raisons de skip apres un run-ready",
     "Tests backend complets passent"
   ]
 };
@@ -194,7 +194,7 @@ export const layers = [
     status: "partial" as Status,
     icon: PlugZap,
     summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes, manifests et readiness scheduler.",
-    next: "Ajouter raisons de skip visibles et politiques par environnement."
+    next: "Transformer les skips credentials en demandes d'acces actionnables."
   },
   {
     id: "H",
@@ -344,6 +344,11 @@ export const backlog = [
   {
     label: "M4.9",
     title: "Visible scheduler skip reasons",
+    done: true
+  },
+  {
+    label: "M5.1",
+    title: "Credential request workflow",
     done: false
   },
   {

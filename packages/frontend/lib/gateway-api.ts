@@ -179,6 +179,12 @@ export type RunReadyRequest = {
   maxTasks: number;
 };
 
+export type TaskSkipRecord = {
+  task_id: string;
+  category: string;
+  reason: string;
+};
+
 export type TaskRunBatchResult = {
   trace_id: string;
   max_tasks: number;
@@ -186,6 +192,7 @@ export type TaskRunBatchResult = {
   stop_reason: string;
   runs: TaskRunResult[];
   skipped_task_ids: string[];
+  skipped_tasks: TaskSkipRecord[];
   lease_recovery?: unknown | null;
   scheduler_event?: unknown | null;
   scheduler_audit_log?: unknown | null;
