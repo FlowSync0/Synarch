@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M3",
-    detail: "Goal to Project",
+    value: "M4.3",
+    detail: "Connector registry",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "106",
+    value: "107",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Scheduler worker outille",
+  title: "Connecteurs par capacite",
   body:
-    "Le scheduler peut lancer une tache ready qui demande un outil, puis le tick expose les tool_results, les echecs outil et le cout total.",
+    "Le tool gate verifie maintenant que le service choisi expose bien l'outil demande, pas seulement que le service est visible par l'agent.",
   checks: [
-    "POST /tasks/run-ready transporte la boucle outillee",
-    "scheduler.tick expose tool_result_count",
-    "scheduler worker resume run_count et total_cost",
-    "Le dashboard affiche les outils utilises par run"
+    "LocalWorldView expose les capacites par service",
+    "Control Plane filtre les capacites par permissions agent",
+    "Gateway refuse un tool via un service non compatible",
+    "Tests backend complets passent"
   ]
 };
 
@@ -193,8 +193,8 @@ export const layers = [
     name: "Execution",
     status: "partial" as Status,
     icon: PlugZap,
-    summary: "Tool gate permissionne event.emit et web.fetch avec audit et validation basique.",
-    next: "Brancher les appels outils dans la boucle runtime agent."
+    summary: "Tool gate permissionne event.emit et web.fetch avec audit, validation et controle service/capacite.",
+    next: "Declarer un registre d'adapters executable au lieu des branches par outil."
   },
   {
     id: "H",
@@ -314,6 +314,11 @@ export const backlog = [
   {
     label: "M4.3",
     title: "Connector registry hardening",
+    done: true
+  },
+  {
+    label: "M4.4",
+    title: "Executable adapter registry",
     done: false
   },
   {

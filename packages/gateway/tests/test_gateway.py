@@ -800,6 +800,10 @@ def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
                     denied_tools=["payment.execute"],
                 ),
                 available_services=["connector-github", "service-event-log"],
+                available_service_capabilities={
+                    "connector-github": ["git.read", "git.write"],
+                    "service-event-log": ["event.emit"],
+                },
                 available_connector_ids=["connector-github"],
             )
         }
@@ -838,6 +842,52 @@ def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-tool-gate"
 
 
+def test_tool_gate_denies_tool_not_exposed_by_selected_service() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["service-event-log"],
+                available_service_capabilities={"service-event-log": ["event.emit"]},
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_tool_service_capability_denied"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.fetch",
+                "service_id": "service-event-log",
+                "project_id": "project_sourcing",
+                "task_id": "task_sourcing",
+                "reason": "Try to fetch via the event log service.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Tool not exposed by service: web.fetch via service-event-log"
+    )
+    assert state_client.events[0].type == EventType.tool_failed
+    assert state_client.events[0].payload["service_id"] == "service-event-log"
+    assert state_client.audit_logs[0].action == "tool.denied"
+
+
 def test_tool_gate_denies_forbidden_tool_and_records_logs() -> None:
     state_client = FakeStateClient()
     control_plane = FakeControlPlaneClient(
@@ -851,6 +901,7 @@ def test_tool_gate_denies_forbidden_tool_and_records_logs() -> None:
                     denied_tools=["payment.execute"],
                 ),
                 available_services=["service-ledger"],
+                available_service_capabilities={"service-ledger": ["ledger.write"]},
             )
         }
     )
@@ -893,6 +944,7 @@ def test_tool_gate_executes_event_emit_adapter() -> None:
                     denied_tools=[],
                 ),
                 available_services=["service-event-log"],
+                available_service_capabilities={"service-event-log": ["event.emit"]},
             )
         }
     )
@@ -946,6 +998,10 @@ def test_tool_gate_executes_web_fetch_adapter() -> None:
                     denied_tools=[],
                 ),
                 available_services=["connector-supplier-web", "service-event-log"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.search", "web.fetch"],
+                    "service-event-log": ["event.emit"],
+                },
                 available_connector_ids=["connector-supplier-web"],
             )
         }
@@ -1015,6 +1071,9 @@ def test_tool_gate_rejects_private_web_fetch_url() -> None:
                     denied_tools=[],
                 ),
                 available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.search", "web.fetch"]
+                },
                 available_connector_ids=["connector-supplier-web"],
             )
         }
@@ -1244,6 +1303,10 @@ def test_run_next_task_executes_agent_requested_tool_call() -> None:
                     denied_tools=[],
                 ),
                 available_services=["connector-supplier-web", "service-event-log"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.search", "web.fetch"],
+                    "service-event-log": ["event.emit"],
+                },
                 available_connector_ids=["connector-supplier-web"],
             )
         }
@@ -1483,6 +1546,10 @@ def test_run_ready_tasks_records_tool_loop_metrics() -> None:
                     denied_tools=[],
                 ),
                 available_services=["connector-supplier-web", "service-event-log"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.search", "web.fetch"],
+                    "service-event-log": ["event.emit"],
+                },
                 available_connector_ids=["connector-supplier-web"],
             )
         }

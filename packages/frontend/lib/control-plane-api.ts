@@ -43,6 +43,7 @@ export type LocalWorldView = {
   capabilities: AgentDefinition["capabilities"];
   policies: string[];
   available_services: string[];
+  available_service_capabilities: Record<string, string[]>;
   available_connector_ids: string[];
   available_skill_ids: string[];
 };

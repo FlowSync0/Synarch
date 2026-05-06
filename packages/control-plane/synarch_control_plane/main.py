@@ -90,6 +90,19 @@ def required_tools_are_allowed(agent: AgentDefinition, required_tools: list[str]
     return not required_tools or set(required_tools).issubset(allowed_tools)
 
 
+def service_capabilities_available_to_agent(
+    agent: AgentDefinition,
+    service: ServiceDefinition,
+) -> list[str]:
+    allowed_tools = set(agent.permissions.allowed_tools)
+    denied_tools = set(agent.permissions.denied_tools)
+    return [
+        capability
+        for capability in service.capabilities
+        if capability in allowed_tools and capability not in denied_tools
+    ]
+
+
 def service_is_available_to_agent(agent: AgentDefinition, service: ServiceDefinition) -> bool:
     if not service.enabled:
         return False
@@ -99,11 +112,15 @@ def service_is_available_to_agent(agent: AgentDefinition, service: ServiceDefini
         allowed_divisions=service.allowed_divisions,
     ):
         return False
-    if not required_tools_are_allowed(agent, service.capabilities):
+    if service.capabilities and not service_capabilities_available_to_agent(agent, service):
         return False
     if service.owner_agent_id is None or service.owner_agent_id == agent.id:
         return True
-    return bool(service.allowed_agent_ids or service.allowed_divisions or service.capabilities)
+    return bool(
+        service.allowed_agent_ids
+        or service.allowed_divisions
+        or service_capabilities_available_to_agent(agent, service)
+    )
 
 
 def skill_is_available_to_agent(agent: AgentDefinition, skill: SkillDefinition) -> bool:
@@ -214,6 +231,10 @@ def read_world_view(agent_id: str) -> LocalWorldView:
         capabilities=agent.capabilities,
         policies=world_view_policy_labels(agent),
         available_services=[service.id for service in available_services],
+        available_service_capabilities={
+            service.id: service_capabilities_available_to_agent(agent, service)
+            for service in available_services
+        },
         available_connector_ids=list_available_connector_ids(available_services),
         available_skill_ids=list_available_skill_ids(agent),
     )

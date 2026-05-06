@@ -14,6 +14,10 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0007_services_skills_access.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0008_task_leases.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0009_task_retry_review.sql").exists()
+    assert (
+        DEFAULT_MIGRATIONS_DIR / "0010_ops_sourcing_web_fetch_permission.sql"
+    ).exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0011_supplier_web_fetch_capability.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

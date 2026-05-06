@@ -695,6 +695,17 @@ def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) ->
         and tool_call.service_id not in world_view.available_services
     ):
         return f"Service not available for agent: {tool_call.service_id}"
+    if tool_call.service_id is not None:
+        service_capabilities = world_view.available_service_capabilities.get(
+            tool_call.service_id
+        )
+        if service_capabilities is None:
+            return f"Service capabilities unavailable for agent: {tool_call.service_id}"
+        if tool_call.tool_name not in service_capabilities:
+            return (
+                f"Tool not exposed by service: {tool_call.tool_name} "
+                f"via {tool_call.service_id}"
+            )
     return None
 
 

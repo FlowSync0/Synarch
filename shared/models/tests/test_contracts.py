@@ -78,7 +78,13 @@ def test_task_run_result_captures_execution_boundary() -> None:
         acceptance_criteria=["Plan has a verifiable next action."],
         sequence=1,
     )
-    world_view = LocalWorldView(agent_id="agent-dev", role="Code and infra", division="dev")
+    world_view = LocalWorldView(
+        agent_id="agent-dev",
+        role="Code and infra",
+        division="dev",
+        available_services=["connector-github"],
+        available_service_capabilities={"connector-github": ["git.read"]},
+    )
     memory_context = MemoryContext(
         agent_id="agent-dev",
         project_id=task.project_id,
@@ -133,6 +139,9 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["task"]["acceptance_criteria"] == ["Plan has a verifiable next action."]
     assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
+    assert payload["world_view"]["available_service_capabilities"] == {
+        "connector-github": ["git.read"]
+    }
     assert payload["agent_result"]["status"] == "needs_review"
     assert payload["tool_results"][0]["tool_name"] == "event.emit"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"

@@ -132,6 +132,20 @@ def test_world_view_includes_state_backed_services_and_model_policy(
                         "allowed_divisions": ["finance"],
                     },
                     {
+                        "id": "connector-finance-mixed",
+                        "name": "Finance Mixed",
+                        "kind": "tool_provider",
+                        "capabilities": ["document.read", "payment.execute"],
+                        "allowed_divisions": ["finance"],
+                    },
+                    {
+                        "id": "connector-payments",
+                        "name": "Payments",
+                        "kind": "tool_provider",
+                        "capabilities": ["payment.execute"],
+                        "allowed_divisions": ["finance"],
+                    },
+                    {
                         "id": "connector-dev-github",
                         "name": "GitHub",
                         "kind": "tool_provider",
@@ -186,8 +200,20 @@ def test_world_view_includes_state_backed_services_and_model_policy(
     payload = response.json()
     assert "service-ledger" in payload["available_services"]
     assert "connector-finance-docs" in payload["available_services"]
+    assert "connector-finance-mixed" in payload["available_services"]
+    assert "connector-payments" not in payload["available_services"]
     assert "connector-dev-github" not in payload["available_services"]
-    assert payload["available_connector_ids"] == ["connector-finance-docs"]
+    assert payload["available_connector_ids"] == [
+        "connector-finance-docs",
+        "connector-finance-mixed",
+    ]
+    assert payload["available_service_capabilities"]["service-ledger"] == ["ledger.write"]
+    assert payload["available_service_capabilities"]["connector-finance-docs"] == [
+        "document.read"
+    ]
+    assert payload["available_service_capabilities"]["connector-finance-mixed"] == [
+        "document.read"
+    ]
     assert payload["available_skill_ids"] == ["invoice_ocr"]
     assert "model_policy:policy-finance-default" in payload["policies"]
     assert "default_model:model-finance" in payload["policies"]

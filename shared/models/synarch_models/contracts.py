@@ -140,6 +140,7 @@ class LocalWorldView(SynarchModel):
     capabilities: CapabilityMap = Field(default_factory=CapabilityMap)
     policies: list[str] = Field(default_factory=list)
     available_services: list[str] = Field(default_factory=list)
+    available_service_capabilities: dict[str, list[str]] = Field(default_factory=dict)
     available_connector_ids: list[str] = Field(default_factory=list)
     available_skill_ids: list[str] = Field(default_factory=list)
 
