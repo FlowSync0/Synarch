@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.3",
-    detail: "Connector registry",
+    value: "M4.4",
+    detail: "Adapter registry",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "107",
+    value: "108",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connecteurs par capacite",
+  title: "Registre adapters",
   body:
-    "Le tool gate verifie maintenant que le service choisi expose bien l'outil demande, pas seulement que le service est visible par l'agent.",
+    "Le gateway execute maintenant les outils via un registre d'adapters explicite, au lieu de branches codees en dur par tool_name.",
   checks: [
-    "LocalWorldView expose les capacites par service",
-    "Control Plane filtre les capacites par permissions agent",
-    "Gateway refuse un tool via un service non compatible",
+    "event.emit est enregistre comme adapter executable",
+    "web.fetch est enregistre comme adapter executable",
+    "Les outils autorises sans adapter restent audites mais non executes",
     "Tests backend complets passent"
   ]
 };
@@ -194,7 +194,7 @@ export const layers = [
     status: "partial" as Status,
     icon: PlugZap,
     summary: "Tool gate permissionne event.emit et web.fetch avec audit, validation et controle service/capacite.",
-    next: "Declarer un registre d'adapters executable au lieu des branches par outil."
+    next: "Ajouter manifests adapters, credential scopes et politiques par environnement."
   },
   {
     id: "H",
@@ -319,6 +319,11 @@ export const backlog = [
   {
     label: "M4.4",
     title: "Executable adapter registry",
+    done: true
+  },
+  {
+    label: "M4.5",
+    title: "Adapter manifests and scopes",
     done: false
   },
   {

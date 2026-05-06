@@ -1,7 +1,7 @@
 import ipaddress
 import socket
 from html.parser import HTMLParser
-from typing import Literal
+from typing import Literal, Protocol
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
@@ -66,6 +66,17 @@ from .task_runner import (
 )
 
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
+
+
+class ToolAdapter(Protocol):
+    def __call__(
+        self,
+        tool_call: ToolCallRequest,
+        *,
+        state_client: StateClient,
+        headers: dict[str, str],
+        trace_id: str,
+    ) -> dict[str, object]: ...
 
 
 class Settings(BaseSettings):
@@ -716,16 +727,44 @@ def execute_authorized_tool(
     headers: dict[str, str],
     trace_id: str,
 ) -> dict[str, object]:
-    if tool_call.tool_name == "event.emit":
-        return execute_event_emit_tool(
-            tool_call,
-            state_client=state_client,
-            headers=headers,
-            trace_id=trace_id,
-        )
-    if tool_call.tool_name == "web.fetch":
-        return execute_web_fetch_tool(tool_call)
-    return {"executed": False, "adapter": None}
+    adapter = TOOL_ADAPTERS.get(tool_call.tool_name)
+    if adapter is None:
+        return {"executed": False, "adapter": None}
+    return adapter(
+        tool_call,
+        state_client=state_client,
+        headers=headers,
+        trace_id=trace_id,
+    )
+
+
+def registered_tool_names() -> list[str]:
+    return sorted(TOOL_ADAPTERS)
+
+
+def execute_event_emit_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_event_emit_tool(
+        tool_call,
+        state_client=state_client,
+        headers=headers,
+        trace_id=trace_id,
+    )
+
+
+def execute_web_fetch_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_web_fetch_tool(tool_call)
 
 
 class HtmlSummaryParser(HTMLParser):
@@ -929,6 +968,12 @@ def execute_event_emit_tool(
         "emitted_event_id": emitted_event.id,
         "emitted_event_type": emitted_event.type,
     }
+
+
+TOOL_ADAPTERS: dict[str, ToolAdapter] = {
+    "event.emit": execute_event_emit_adapter,
+    "web.fetch": execute_web_fetch_adapter,
+}
 
 
 def event_type_argument(tool_call: ToolCallRequest) -> EventType:

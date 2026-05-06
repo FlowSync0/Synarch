@@ -787,6 +787,10 @@ def test_gateway_applies_project_split_through_state_service() -> None:
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_gateway_split_apply"
 
 
+def test_tool_adapter_registry_exposes_executable_tools() -> None:
+    assert gateway_main.registered_tool_names() == ["event.emit", "web.fetch"]
+
+
 def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
     state_client = FakeStateClient()
     control_plane = FakeControlPlaneClient(
