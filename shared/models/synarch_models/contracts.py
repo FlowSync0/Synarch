@@ -218,6 +218,7 @@ class TaskRecord(SynarchModel):
     status: TaskStatus = TaskStatus.queued
     assigned_agent_id: str
     depends_on: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
     acceptance_criteria: list[str] = Field(default_factory=list)
     parent_task_id: str | None = None
     sequence: int = 0

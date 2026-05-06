@@ -35,6 +35,7 @@ def test_agent_result_is_serializable() -> None:
         project_id="project_demo",
         title="Draft plan",
         assigned_agent_id="agent-dev",
+        required_tools=["git.read"],
         acceptance_criteria=["Plan has a verifiable next action."],
         sequence=1,
     )
@@ -75,6 +76,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
         project_id="project_demo",
         title="Draft plan",
         assigned_agent_id="agent-dev",
+        required_tools=["git.read"],
         acceptance_criteria=["Plan has a verifiable next action."],
         sequence=1,
     )
@@ -140,6 +142,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["trace_id"] == "trace_123"
     assert payload["task"]["id"] == task.id
     assert payload["task"]["acceptance_criteria"] == ["Plan has a verifiable next action."]
+    assert payload["task"]["required_tools"] == ["git.read"]
     assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["world_view"]["available_service_capabilities"] == {

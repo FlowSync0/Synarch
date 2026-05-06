@@ -193,6 +193,7 @@ def get_task_runner() -> TaskRunner:
         input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
         tool_runner=GatewayToolRunner(),
+        tool_readiness=GatewayToolReadinessChecker(),
     )
 
 
@@ -684,6 +685,26 @@ class GatewayToolRunner:
             trace_id=trace_id,
             raise_on_failure=False,
         )
+
+
+class GatewayToolReadinessChecker:
+    def credential_blockers(
+        self,
+        task: TaskRecord,
+        world_view: LocalWorldView,
+    ) -> list[str]:
+        statuses = tool_credential_statuses_for_world_view(world_view)
+        blockers: list[str] = []
+        for required_tool in task.required_tools:
+            matching_statuses = [
+                status for status in statuses if status.tool_name == required_tool
+            ]
+            if not matching_statuses:
+                blockers.append(f"No credential-ready service for required tool: {required_tool}")
+                continue
+            if all(status.status == "missing_scopes" for status in matching_statuses):
+                blockers.append(f"Credential scopes missing for required tool: {required_tool}")
+        return blockers
 
 
 def execute_tool_call_through_gate(

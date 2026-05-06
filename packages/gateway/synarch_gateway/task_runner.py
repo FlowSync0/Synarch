@@ -89,6 +89,14 @@ class ToolRunner(Protocol):
     ) -> ToolResult: ...
 
 
+class ToolReadinessChecker(Protocol):
+    def credential_blockers(
+        self,
+        task: TaskRecord,
+        world_view: LocalWorldView,
+    ) -> list[str]: ...
+
+
 @dataclass(frozen=True)
 class HttpControlPlaneClient:
     base_url: str
@@ -179,6 +187,7 @@ class TaskRunner:
     input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
     output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
     tool_runner: ToolRunner | None = None
+    tool_readiness: ToolReadinessChecker | None = None
     max_tool_rounds: int = 1
 
     def run_next(self, *, trace_id: str, headers: dict[str, str]) -> TaskRunResult:
@@ -208,6 +217,10 @@ class TaskRunner:
             if task is None:
                 stop_reason = "no_ready_task"
                 break
+            blockers = self.credential_blockers_for_task(task)
+            if blockers:
+                skipped_task_ids.append(task.id)
+                continue
             try:
                 runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
             except StateServiceRequestError as error:
@@ -238,6 +251,12 @@ class TaskRunner:
                 "scheduler_audit_log": scheduler_audit_log,
             }
         )
+
+    def credential_blockers_for_task(self, task: TaskRecord) -> list[str]:
+        if self.tool_readiness is None or not task.required_tools:
+            return []
+        world_view = self.control_plane.get_world_view(task.assigned_agent_id)
+        return self.tool_readiness.credential_blockers(task, world_view)
 
     def run_task(
         self,

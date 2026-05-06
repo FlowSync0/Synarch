@@ -1718,6 +1718,103 @@ def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
     assert state_client.audit_logs[-1].payload["stop_reason"] == "no_ready_task"
 
 
+def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        gateway_main.TOOL_ADAPTER_MANIFESTS,
+        "web.fetch",
+        gateway_main.ToolAdapterManifest(
+            tool_name="web.fetch",
+            adapter="web.fetch",
+            required_arguments=("url",),
+            credential_scopes=("browser:authenticated_fetch",),
+            requires_credentials=True,
+            network_access=True,
+            risk_level="medium",
+        ),
+    )
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_readiness",
+            title="Credential readiness",
+            goal="Skip blocked tool tasks and run the next ready task.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_missing_credentials",
+                project_id="project_readiness",
+                title="Fetch authenticated page",
+                assigned_agent_id="agent-ops-sourcing",
+                required_tools=["web.fetch"],
+                acceptance_criteria=["Authenticated fetch has evidence."],
+                sequence=1,
+            ),
+            TaskRecord(
+                id="task_no_required_tools",
+                project_id="project_readiness",
+                title="Run fallback planning",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Fallback planning completes."],
+                sequence=2,
+            ),
+        ]
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+                available_service_credential_scopes={"connector-supplier-web": []},
+            ),
+            "agent-dev": LocalWorldView(
+                agent_id="agent-dev",
+                role="Code and infra",
+                division="dev",
+            ),
+        }
+    )
+    runtime_client = CompletingAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_readiness=gateway_main.GatewayToolReadinessChecker(),
+    )
+
+    result = runner.run_ready(
+        max_tasks=1,
+        trace_id="trace_readiness_skip",
+        headers=gateway_main.service_headers("trace_readiness_skip"),
+        project_id="project_readiness",
+    )
+
+    assert result.skipped_task_ids == ["task_missing_credentials"]
+    assert [run.task.id for run in result.runs] == ["task_no_required_tools"]
+    assert [request.task.id for request in runtime_client.requests] == [
+        "task_no_required_tools"
+    ]
+    assert state_client.tasks[0].status == TaskStatus.queued
+    assert state_client.tasks[1].status == TaskStatus.completed
+    assert state_client.events[-1].payload["skipped_task_ids"] == [
+        "task_missing_credentials"
+    ]
+
+
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:
     state_client = FakeStateClient()
     state_client.projects.append(

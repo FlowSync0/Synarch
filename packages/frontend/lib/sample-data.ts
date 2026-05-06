@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.7",
-    detail: "Credential status",
+    value: "M4.8",
+    detail: "Scheduler readiness",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "112",
+    value: "113",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Statut credentials",
+  title: "Scheduler readiness",
   body:
-    "Le gateway expose le statut credentials par agent, service et outil sans stocker ni afficher de secret.",
+    "Le scheduler ignore les taches dont les outils requis ne sont pas couverts par un service credential-ready.",
   checks: [
-    "GET /tools/credential-status calcule ready/not_required/missing_scopes",
-    "Le proxy frontend expose le statut credentials",
-    "Les statuts ne contiennent que des noms de scopes",
+    "TaskRecord porte required_tools dans le contrat partage",
+    "State-service persiste les outils requis par tache",
+    "Le scheduler garde les taches bloquees en queue et lance les autres taches pretes",
     "Tests backend complets passent"
   ]
 };
@@ -193,8 +193,8 @@ export const layers = [
     name: "Execution",
     status: "partial" as Status,
     icon: PlugZap,
-    summary: "Tool gate permissionne event.emit et web.fetch avec audit, validation et controle service/capacite.",
-    next: "Ajouter manifests adapters, credential scopes et politiques par environnement."
+    summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes, manifests et readiness scheduler.",
+    next: "Ajouter raisons de skip visibles et politiques par environnement."
   },
   {
     id: "H",
@@ -339,6 +339,11 @@ export const backlog = [
   {
     label: "M4.8",
     title: "Credential readiness in scheduler",
+    done: true
+  },
+  {
+    label: "M4.9",
+    title: "Visible scheduler skip reasons",
     done: false
   },
   {

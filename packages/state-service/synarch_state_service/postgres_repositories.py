@@ -325,6 +325,7 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "status",
                 "assigned_agent_id",
                 "depends_on",
+                "required_tools",
                 "acceptance_criteria",
                 "parent_task_id",
                 "sequence",

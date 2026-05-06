@@ -27,6 +27,7 @@ export type TaskRecord = {
   status: TaskStatus;
   assigned_agent_id: string;
   depends_on: string[];
+  required_tools: string[];
   acceptance_criteria: string[];
   parent_task_id?: string | null;
   sequence: number;

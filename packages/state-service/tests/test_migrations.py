@@ -19,6 +19,7 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     ).exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0011_supplier_web_fetch_capability.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0012_service_credential_scopes.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0013_task_required_tools.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:
