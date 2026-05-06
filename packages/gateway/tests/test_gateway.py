@@ -809,6 +809,122 @@ def test_tool_registry_endpoint_returns_adapter_manifests() -> None:
     assert manifests["web.fetch"]["network_access"] is True
 
 
+def test_tool_credential_status_endpoint_reports_missing_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        gateway_main.TOOL_ADAPTER_MANIFESTS,
+        "web.fetch",
+        gateway_main.ToolAdapterManifest(
+            tool_name="web.fetch",
+            adapter="web.fetch",
+            required_arguments=("url",),
+            credential_scopes=("browser:authenticated_fetch",),
+            requires_credentials=True,
+            network_access=True,
+            risk_level="medium",
+        ),
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web", "service-event-log"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"],
+                    "service-event-log": ["event.emit"],
+                },
+                available_service_credential_scopes={
+                    "connector-supplier-web": [],
+                    "service-event-log": [],
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).get(
+            "/tools/credential-status",
+            params={"agent_id": "agent-ops-sourcing"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    statuses = {
+        (status["service_id"], status["tool_name"]): status
+        for status in response.json()["credential_statuses"]
+    }
+    assert statuses[("service-event-log", "event.emit")]["status"] == "not_required"
+    assert statuses[("connector-supplier-web", "web.fetch")] == {
+        "agent_id": "agent-ops-sourcing",
+        "service_id": "connector-supplier-web",
+        "tool_name": "web.fetch",
+        "status": "missing_scopes",
+        "required_scopes": ["browser:authenticated_fetch"],
+        "available_scopes": [],
+        "missing_scopes": ["browser:authenticated_fetch"],
+    }
+
+
+def test_tool_credential_status_endpoint_reports_ready_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        gateway_main.TOOL_ADAPTER_MANIFESTS,
+        "web.fetch",
+        gateway_main.ToolAdapterManifest(
+            tool_name="web.fetch",
+            adapter="web.fetch",
+            required_arguments=("url",),
+            credential_scopes=("browser:authenticated_fetch",),
+            requires_credentials=True,
+            network_access=True,
+            risk_level="medium",
+        ),
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+                available_service_credential_scopes={
+                    "connector-supplier-web": ["browser:authenticated_fetch"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).get(
+            "/tools/credential-status",
+            params={"agent_id": "agent-ops-sourcing"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["credential_statuses"][0]["status"] == "ready"
+    assert response.json()["credential_statuses"][0]["missing_scopes"] == []
+
+
 def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
     state_client = FakeStateClient()
     control_plane = FakeControlPlaneClient(

@@ -112,6 +112,16 @@ export type ToolAdapterManifest = {
   audit_required: boolean;
 };
 
+export type ToolCredentialStatus = {
+  agent_id: string;
+  service_id: string;
+  tool_name: string;
+  status: "not_required" | "ready" | "missing_scopes";
+  required_scopes: string[];
+  available_scopes: string[];
+  missing_scopes: string[];
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -308,6 +318,19 @@ export async function listToolAdapterManifests(): Promise<ToolAdapterManifest[]>
   });
   const payload = await parseJsonResponse<{ tools: ToolAdapterManifest[] }>(response);
   return payload.tools;
+}
+
+export async function listToolCredentialStatuses(
+  agentId: string
+): Promise<ToolCredentialStatus[]> {
+  const params = new URLSearchParams({ agent_id: agentId });
+  const response = await fetch(`/api/gateway/tools/credential-status?${params}`, {
+    cache: "no-store"
+  });
+  const payload = await parseJsonResponse<{
+    credential_statuses: ToolCredentialStatus[];
+  }>(response);
+  return payload.credential_statuses;
 }
 
 export async function updateMemoryStatus({

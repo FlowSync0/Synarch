@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.6",
-    detail: "Credential scopes",
+    value: "M4.7",
+    detail: "Credential status",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "110",
+    value: "112",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Scopes credentials",
+  title: "Statut credentials",
   body:
-    "Les services declarent leurs credential_scopes, la world view les expose, et le gateway refuse un adapter si un scope requis manque.",
+    "Le gateway expose le statut credentials par agent, service et outil sans stocker ni afficher de secret.",
   checks: [
-    "ServiceDefinition persiste credential_scopes",
-    "LocalWorldView expose les scopes par service",
-    "Gateway bloque un adapter sans scope requis",
+    "GET /tools/credential-status calcule ready/not_required/missing_scopes",
+    "Le proxy frontend expose le statut credentials",
+    "Les statuts ne contiennent que des noms de scopes",
     "Tests backend complets passent"
   ]
 };
@@ -334,6 +334,11 @@ export const backlog = [
   {
     label: "M4.7",
     title: "Credential status observability",
+    done: true
+  },
+  {
+    label: "M4.8",
+    title: "Credential readiness in scheduler",
     done: false
   },
   {

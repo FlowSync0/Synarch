@@ -68,6 +68,7 @@ from .task_runner import (
 
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 ToolRiskLevel = Literal["low", "medium", "high"]
+ToolCredentialState = Literal["not_required", "ready", "missing_scopes"]
 
 
 class ToolAdapter(Protocol):
@@ -104,6 +105,28 @@ class ToolAdapterManifest:
             "requires_credentials": self.requires_credentials,
             "network_access": self.network_access,
             "audit_required": self.audit_required,
+        }
+
+
+@dataclass(frozen=True)
+class ToolCredentialStatus:
+    agent_id: str
+    service_id: str
+    tool_name: str
+    status: ToolCredentialState
+    required_scopes: tuple[str, ...] = ()
+    available_scopes: tuple[str, ...] = ()
+    missing_scopes: tuple[str, ...] = ()
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "agent_id": self.agent_id,
+            "service_id": self.service_id,
+            "tool_name": self.tool_name,
+            "status": self.status,
+            "required_scopes": list(self.required_scopes),
+            "available_scopes": list(self.available_scopes),
+            "missing_scopes": list(self.missing_scopes),
         }
 
 
@@ -623,6 +646,26 @@ def list_tool_registry() -> dict[str, object]:
     return {"tools": registered_tool_manifests()}
 
 
+@app.get("/tools/credential-status")
+def list_tool_credential_status(
+    agent_id: str,
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> dict[str, object]:
+    try:
+        world_view = control_plane.get_world_view(agent_id)
+    except TaskRunnerRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except TaskRunnerUnavailable as error:
+        raise HTTPException(status_code=502, detail="Control plane unavailable") from error
+    return {
+        "agent_id": agent_id,
+        "credential_statuses": [
+            status.as_response()
+            for status in tool_credential_statuses_for_world_view(world_view)
+        ],
+    }
+
+
 class GatewayToolRunner:
     def call_tool(
         self,
@@ -777,6 +820,46 @@ def tool_credential_scope_error(
         f"Missing credential scopes for service {tool_call.service_id}: "
         f"{', '.join(missing_scopes)}"
     )
+
+
+def tool_credential_statuses_for_world_view(
+    world_view: LocalWorldView,
+) -> list[ToolCredentialStatus]:
+    statuses: list[ToolCredentialStatus] = []
+    available_services = set(world_view.available_services)
+    for service_id in sorted(world_view.available_service_capabilities):
+        if service_id not in available_services:
+            continue
+        service_tools = world_view.available_service_capabilities[service_id]
+        available_scopes = tuple(
+            world_view.available_service_credential_scopes.get(service_id, [])
+        )
+        for tool_name in sorted(service_tools):
+            manifest = TOOL_ADAPTER_MANIFESTS.get(tool_name)
+            if manifest is None:
+                continue
+            required_scopes = manifest.credential_scopes
+            missing_scopes = tuple(
+                scope for scope in required_scopes if scope not in available_scopes
+            )
+            if not required_scopes:
+                state: ToolCredentialState = "not_required"
+            elif missing_scopes:
+                state = "missing_scopes"
+            else:
+                state = "ready"
+            statuses.append(
+                ToolCredentialStatus(
+                    agent_id=world_view.agent_id,
+                    service_id=service_id,
+                    tool_name=tool_name,
+                    status=state,
+                    required_scopes=required_scopes,
+                    available_scopes=available_scopes,
+                    missing_scopes=missing_scopes,
+                )
+            )
+    return statuses
 
 
 def execute_authorized_tool(
