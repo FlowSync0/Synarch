@@ -10,6 +10,7 @@ from synarch_models import (
     AgentSoul,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     DivisionRecord,
     EventRecord,
     ModelDefinition,
@@ -101,6 +102,7 @@ class StateRepositories:
     cost_records: RecordRepository[CostRecord]
     audit_logs: RecordRepository[AuditLogRecord]
     agent_lifecycle_requests: RecordRepository[AgentLifecycleRequest]
+    credential_access_requests: RecordRepository[CredentialAccessRequest]
 
     @classmethod
     def in_memory(cls) -> StateRepositories:
@@ -123,6 +125,7 @@ class StateRepositories:
             cost_records=InMemoryRecordRepository(),
             audit_logs=InMemoryRecordRepository(),
             agent_lifecycle_requests=InMemoryRecordRepository(),
+            credential_access_requests=InMemoryRecordRepository(),
         )
 
     @classmethod

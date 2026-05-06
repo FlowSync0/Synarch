@@ -6,6 +6,7 @@ from synarch_models import (
     AiProviderType,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     DivisionRecord,
     LifecycleAction,
     LocalWorldView,
@@ -89,6 +90,27 @@ def test_agent_lifecycle_request_requires_auditable_actor() -> None:
     assert payload["action"] == "create_agent"
     assert payload["requires_human_approval"] is True
     assert payload["proposed_agent"]["created_by"] == "agent-direction"
+
+
+def test_credential_access_request_captures_blocking_tool_scope() -> None:
+    request = CredentialAccessRequest(
+        id="credential-access-task-fetch-web",
+        task_id="task_fetch",
+        project_id="project_supplier",
+        agent_id="agent-ops-sourcing",
+        tool_name="web.fetch",
+        requested_scopes=["browser:authenticated_fetch"],
+        candidate_service_ids=["connector-supplier-web"],
+        reason="Credential scopes missing for required tool: web.fetch",
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["status"] == "requested"
+    assert payload["requested_by_type"] == "service"
+    assert payload["requested_by_id"] == "gateway-scheduler"
+    assert payload["requested_scopes"] == ["browser:authenticated_fetch"]
+    assert payload["candidate_service_ids"] == ["connector-supplier-web"]
 
 
 def test_agent_soul_captures_persistent_identity() -> None:

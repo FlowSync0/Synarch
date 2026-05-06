@@ -17,6 +17,7 @@ import {
   Database,
   FileText,
   GitBranch,
+  KeyRound,
   Layers3,
   Menu,
   Network,
@@ -49,6 +50,7 @@ import {
   callTool,
   decideTaskReview,
   getProjectTimeline,
+  listCredentialAccessRequests,
   listTaskReviewQueue,
   runReadyTasks,
   runTask,
@@ -57,6 +59,7 @@ import {
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
+  type CredentialAccessRequest,
   type MemoryStatus,
   type ProjectTimeline,
   type TaskRunBatchResult,
@@ -283,7 +286,7 @@ type ApprovalViewModel = {
   tone: Tone;
   icon: typeof UserRoundPlus;
   impact: string;
-  source: "api" | "sample";
+  source: "api" | "credential" | "sample";
 };
 
 type AgentViewModel = {
@@ -449,6 +452,26 @@ function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel
     icon: lifecycleIcon(request),
     impact: request.reason,
     source: "api"
+  };
+}
+
+function credentialApprovalRow(request: CredentialAccessRequest): ApprovalViewModel {
+  const scopes =
+    request.requested_scopes.length > 0
+      ? request.requested_scopes.join(", ")
+      : "tool/service mapping";
+  return {
+    id: request.id,
+    title: `${request.tool_name} access`,
+    action: "credential_access",
+    requester: request.requested_by_id,
+    division: request.agent_id,
+    status: request.status,
+    age: formatLifecycleAge(request.created_at),
+    tone: "warn",
+    icon: KeyRound,
+    impact: `${request.reason} / ${scopes}`,
+    source: "credential"
   };
 }
 
@@ -834,6 +857,11 @@ export default function DashboardPage() {
     queryFn: listAgentLifecycleRequests,
     refetchInterval: 15_000
   });
+  const credentialAccessQuery = useQuery({
+    queryKey: ["credential-access-requests"],
+    queryFn: listCredentialAccessRequests,
+    refetchInterval: 15_000
+  });
   const taskReviewsQuery = useQuery({
     queryKey: ["task-review-queue"],
     queryFn: listTaskReviewQueue,
@@ -855,6 +883,7 @@ export default function DashboardPage() {
       setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
@@ -935,18 +964,26 @@ export default function DashboardPage() {
     []
   );
   const approvalRows = useMemo<ApprovalViewModel[]>(() => {
-    if (lifecycleQuery.isSuccess) {
-      return lifecycleQuery.data.map(lifecycleApprovalRow);
+    if (lifecycleQuery.isSuccess || credentialAccessQuery.isSuccess) {
+      return [
+        ...(lifecycleQuery.data ?? []).map(lifecycleApprovalRow),
+        ...(credentialAccessQuery.data ?? []).map(credentialApprovalRow)
+      ];
     }
 
     return approvals.map((approval) => ({
       ...approval,
       source: "sample" as const
     }));
-  }, [lifecycleQuery.data, lifecycleQuery.isSuccess]);
-  const approvalMode = lifecycleQuery.isLoading
+  }, [
+    credentialAccessQuery.data,
+    credentialAccessQuery.isSuccess,
+    lifecycleQuery.data,
+    lifecycleQuery.isSuccess
+  ]);
+  const approvalMode = lifecycleQuery.isLoading || credentialAccessQuery.isLoading
     ? "syncing"
-    : lifecycleQuery.isError
+    : lifecycleQuery.isError && credentialAccessQuery.isError
       ? "sample"
       : "live";
   const approvalModeLabel = {
@@ -956,10 +993,10 @@ export default function DashboardPage() {
   }[approvalMode];
   const approvalModeDetail =
     approvalMode === "live"
-      ? `${approvalRows.length} lifecycle records from control-plane`
+      ? `${approvalRows.length} approval records from control-plane/gateway`
       : approvalMode === "syncing"
-        ? "Connecting to control-plane"
-        : "Control-plane unavailable, showing sample lifecycle records";
+        ? "Connecting to control-plane/gateway"
+        : "Control-plane and gateway unavailable, showing sample records";
   const agentRows = useMemo<AgentViewModel[]>(() => {
     if (agentsQuery.isSuccess) {
       return agentsQuery.data.map(agentRow);
@@ -2743,8 +2780,10 @@ export default function DashboardPage() {
             <div className="divide-y divide-border">
               {approvalRows.length === 0 ? (
                 <article className="px-4 py-5">
-                  <p className="text-sm font-medium text-ink">Aucune demande lifecycle</p>
-                  <p className="mt-1 text-xs text-muted">La queue control-plane est vide.</p>
+                  <p className="text-sm font-medium text-ink">Aucune demande</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Les queues control-plane et credentials sont vides.
+                  </p>
                 </article>
               ) : null}
               {approvalRows.map((approval) => {

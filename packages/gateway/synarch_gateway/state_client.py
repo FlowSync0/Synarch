@@ -8,6 +8,7 @@ from synarch_models import (
     AgentResult,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     EventRecord,
     ProjectComplexityAssessment,
     ProjectRecord,
@@ -157,6 +158,22 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> AuditLogRecord: ...
+
+    def create_credential_access_request(
+        self,
+        access_request: CredentialAccessRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessRequest: ...
+
+    def list_credential_access_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        status: str | None = None,
+    ) -> list[CredentialAccessRequest]: ...
 
 
 @dataclass(frozen=True)
@@ -364,6 +381,41 @@ class HttpStateClient:
     ) -> AuditLogRecord:
         response = self._post("/audit-logs", audit.model_dump(mode="json"), headers)
         return AuditLogRecord.model_validate(response.json())
+
+    def create_credential_access_request(
+        self,
+        access_request: CredentialAccessRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessRequest:
+        response = self._post(
+            "/credential-access-requests",
+            access_request.model_dump(mode="json"),
+            headers,
+        )
+        return CredentialAccessRequest.model_validate(response.json())
+
+    def list_credential_access_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        status: str | None = None,
+    ) -> list[CredentialAccessRequest]:
+        response = self._get(
+            "/credential-access-requests",
+            params=compact_params(
+                project_id=project_id,
+                task_id=task_id,
+                agent_id=agent_id,
+                status=status,
+            ),
+        )
+        return [
+            CredentialAccessRequest.model_validate(access_request)
+            for access_request in response.json()
+        ]
 
     def _get(
         self,

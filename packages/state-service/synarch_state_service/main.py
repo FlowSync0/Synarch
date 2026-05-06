@@ -17,6 +17,7 @@ from synarch_models import (
     ApprovalStatus,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     DivisionRecord,
     EventRecord,
     EventType,
@@ -307,6 +308,32 @@ def validate_task_breakdown(task: TaskRecord) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown parent task: {task.parent_task_id}",
+        )
+
+
+def validate_credential_access_request(access_request: CredentialAccessRequest) -> None:
+    if not REPOSITORIES.projects.exists(access_request.project_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown project: {access_request.project_id}",
+        )
+    task = REPOSITORIES.tasks.get(access_request.task_id)
+    if task is None:
+        raise HTTPException(status_code=400, detail=f"Unknown task: {access_request.task_id}")
+    if task.project_id != access_request.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential access request task must belong to project",
+        )
+    if task.assigned_agent_id != access_request.agent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential access request agent must match task assignment",
+        )
+    if access_request.tool_name not in task.required_tools:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential access request tool must be required by task",
         )
 
 
@@ -1993,6 +2020,102 @@ def list_audit_logs(
 @app.get("/audit-logs/{audit_id}", response_model=AuditLogRecord)
 def read_audit_log(audit_id: str) -> AuditLogRecord:
     return read_record(REPOSITORIES.audit_logs, audit_id, "audit log")
+
+
+@app.post(
+    "/credential-access-requests",
+    response_model=CredentialAccessRequest,
+    status_code=201,
+)
+def create_credential_access_request(
+    access_request: CredentialAccessRequest,
+    request: Request,
+) -> CredentialAccessRequest:
+    validate_credential_access_request(access_request)
+    audit_context = audit_context_from_request(request)
+    record = create_record(
+        REPOSITORIES.credential_access_requests,
+        access_request.id,
+        access_request,
+    )
+    create_domain_event(
+        EventRecord(
+            type=EventType.approval_requested,
+            source_agent_id=agent_event_source(
+                record.requested_by_type,
+                record.requested_by_id,
+            ),
+            target=record.project_id,
+            payload={
+                "request_type": "credential_access",
+                "credential_access_request_id": record.id,
+                "task_id": record.task_id,
+                "agent_id": record.agent_id,
+                "tool_name": record.tool_name,
+                "requested_scopes": record.requested_scopes,
+                "candidate_service_ids": record.candidate_service_ids,
+                "status": record.status,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="credential_access_request.created",
+        target_type="credential_access_request",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "task_id": record.task_id,
+            "agent_id": record.agent_id,
+            "tool_name": record.tool_name,
+            "requested_scopes": record.requested_scopes,
+            "status": record.status,
+        },
+    )
+    return record
+
+
+@app.get("/credential-access-requests", response_model=list[CredentialAccessRequest])
+def list_credential_access_requests(
+    project_id: str | None = None,
+    task_id: str | None = None,
+    agent_id: str | None = None,
+    status: str | None = None,
+) -> list[CredentialAccessRequest]:
+    access_requests = REPOSITORIES.credential_access_requests.list_records()
+    if project_id is not None:
+        access_requests = [
+            access_request
+            for access_request in access_requests
+            if access_request.project_id == project_id
+        ]
+    if task_id is not None:
+        access_requests = [
+            access_request
+            for access_request in access_requests
+            if access_request.task_id == task_id
+        ]
+    if agent_id is not None:
+        access_requests = [
+            access_request
+            for access_request in access_requests
+            if access_request.agent_id == agent_id
+        ]
+    if status is not None:
+        access_requests = [
+            access_request for access_request in access_requests if access_request.status == status
+        ]
+    return sorted(access_requests, key=lambda access_request: access_request.created_at)
+
+
+@app.get("/credential-access-requests/{request_id}", response_model=CredentialAccessRequest)
+def read_credential_access_request(request_id: str) -> CredentialAccessRequest:
+    return read_record(
+        REPOSITORIES.credential_access_requests,
+        request_id,
+        "credential access request",
+    )
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)

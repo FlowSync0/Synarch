@@ -210,6 +210,21 @@ class ProjectComplexityAssessment(SynarchModel):
     split_request: ProjectSplitRequest | None = None
 
 
+class CredentialAccessRequest(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("credential_access"))
+    task_id: str
+    project_id: str
+    agent_id: str
+    tool_name: str
+    requested_scopes: list[str] = Field(default_factory=list)
+    candidate_service_ids: list[str] = Field(default_factory=list)
+    reason: str
+    requested_by_type: ActorType = ActorType.service
+    requested_by_id: str = "gateway-scheduler"
+    status: ApprovalStatus = ApprovalStatus.requested
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str
@@ -562,6 +577,7 @@ class TaskRunBatchResult(SynarchModel):
     runs: list[TaskRunResult] = Field(default_factory=list)
     skipped_task_ids: list[str] = Field(default_factory=list)
     skipped_tasks: list[TaskSkipRecord] = Field(default_factory=list)
+    credential_access_requests: list[CredentialAccessRequest] = Field(default_factory=list)
     lease_recovery: TaskLeaseRecoveryResult | None = None
     scheduler_event: EventRecord | None = None
     scheduler_audit_log: AuditLogRecord | None = None

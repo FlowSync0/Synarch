@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.9",
-    detail: "Skip reason visibility",
+    value: "M5.1",
+    detail: "Credential request workflow",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "114",
+    value: "117",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Skip reasons visibles",
+  title: "Demandes credentials",
   body:
-    "Le scheduler expose maintenant pourquoi une tache est ignoree, dans la reponse API, les events et l'audit.",
+    "Les skips credentials creent maintenant une demande d'acces persistante, listable et visible dans la queue approvals.",
   checks: [
-    "TaskRunBatchResult porte skipped_tasks avec categorie et raison",
-    "scheduler.tick event/audit journalisent les raisons de skip",
-    "L'interface affiche les raisons de skip apres un run-ready",
+    "State-service persiste CredentialAccessRequest",
+    "Le scheduler cree une demande lors d'un skip credential_readiness",
+    "Gateway/frontend exposent la queue des demandes credentials",
     "Tests backend complets passent"
   ]
 };
@@ -194,7 +194,7 @@ export const layers = [
     status: "partial" as Status,
     icon: PlugZap,
     summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes, manifests et readiness scheduler.",
-    next: "Transformer les skips credentials en demandes d'acces actionnables."
+    next: "Ajouter decisions approve/reject pour les demandes credentials."
   },
   {
     id: "H",
@@ -349,6 +349,11 @@ export const backlog = [
   {
     label: "M5.1",
     title: "Credential request workflow",
+    done: true
+  },
+  {
+    label: "M5.2",
+    title: "Credential request decisions",
     done: false
   },
   {

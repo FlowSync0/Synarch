@@ -19,6 +19,7 @@ from synarch_models import (
     AgentTaskRequest,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     EventRecord,
     EventType,
     LocalWorldView,
@@ -53,6 +54,7 @@ class FakeStateClient:
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
+        self.credential_access_requests: list[CredentialAccessRequest] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.split_applications: list[ProjectSplitApplication] = []
         self.headers: list[dict[str, str]] = []
@@ -398,6 +400,59 @@ class FakeStateClient:
         self.headers.append(headers)
         self.audit_logs.append(audit)
         return audit
+
+    def create_credential_access_request(
+        self,
+        access_request: CredentialAccessRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessRequest:
+        self.headers.append(headers)
+        if any(
+            existing_request.id == access_request.id
+            for existing_request in self.credential_access_requests
+        ):
+            raise StateServiceRequestError(
+                409,
+                f"Record already exists: {access_request.id}",
+            )
+        self.credential_access_requests.append(access_request)
+        return access_request
+
+    def list_credential_access_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        status: str | None = None,
+    ) -> list[CredentialAccessRequest]:
+        access_requests = self.credential_access_requests
+        if project_id is not None:
+            access_requests = [
+                access_request
+                for access_request in access_requests
+                if access_request.project_id == project_id
+            ]
+        if task_id is not None:
+            access_requests = [
+                access_request
+                for access_request in access_requests
+                if access_request.task_id == task_id
+            ]
+        if agent_id is not None:
+            access_requests = [
+                access_request
+                for access_request in access_requests
+                if access_request.agent_id == agent_id
+            ]
+        if status is not None:
+            access_requests = [
+                access_request
+                for access_request in access_requests
+                if access_request.status == status
+            ]
+        return access_requests
 
 
 class FailingStateClient(FakeStateClient):
@@ -1811,6 +1866,21 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
             "reason": "Credential scopes missing for required tool: web.fetch",
         }
     ]
+    access_request_payload = result.credential_access_requests[0].model_dump(mode="json")
+    assert access_request_payload | {"created_at": None} == {
+        "id": "credential_access_task_missing_credentials_web_fetch",
+        "task_id": "task_missing_credentials",
+        "project_id": "project_readiness",
+        "agent_id": "agent-ops-sourcing",
+        "tool_name": "web.fetch",
+        "requested_scopes": ["browser:authenticated_fetch"],
+        "candidate_service_ids": ["connector-supplier-web"],
+        "reason": "Credential scopes missing for required tool: web.fetch",
+        "requested_by_type": "service",
+        "requested_by_id": "gateway-scheduler",
+        "status": "requested",
+        "created_at": None,
+    }
     assert [run.task.id for run in result.runs] == ["task_no_required_tools"]
     assert [request.task.id for request in runtime_client.requests] == [
         "task_no_required_tools"
@@ -1827,6 +1897,41 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
             "reason": "Credential scopes missing for required tool: web.fetch",
         }
     ]
+    assert state_client.events[-1].payload["credential_access_request_ids"] == [
+        "credential_access_task_missing_credentials_web_fetch"
+    ]
+    assert state_client.credential_access_requests[0].requested_scopes == [
+        "browser:authenticated_fetch"
+    ]
+
+
+def test_list_credential_access_requests_forwards_state_filters() -> None:
+    state_client = FakeStateClient()
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential-access-visible",
+            task_id="task_fetch_supplier",
+            project_id="project_supplier",
+            agent_id="agent-ops-sourcing",
+            tool_name="web.fetch",
+            requested_scopes=["browser:authenticated_fetch"],
+            candidate_service_ids=["connector-supplier-web"],
+            reason="Credential scopes missing for required tool: web.fetch",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/credential-access-requests",
+            params={"project_id": "project_supplier", "status": "requested"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == "credential-access-visible"
+    assert response.json()[0]["requested_scopes"] == ["browser:authenticated_fetch"]
 
 
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:
@@ -2157,6 +2262,8 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "skipped_task_ids": [],
         "skipped_tasks": [],
         "skipped_task_count": 0,
+        "credential_access_request_ids": [],
+        "credential_access_request_count": 0,
         "lease_recovered_task_ids": [],
         "lease_failed_task_ids": [],
         "created_sub_task_count": 0,

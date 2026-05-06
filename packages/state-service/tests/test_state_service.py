@@ -118,6 +118,74 @@ def test_project_then_task_flow() -> None:
     ]
 
 
+def test_credential_access_request_records_event_and_audit() -> None:
+    client = TestClient(app)
+    trace_id = "trace_credential_access_request"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Credential request",
+            "goal": "Request missing connector credentials",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Fetch supplier portal",
+            assigned_agent_id="agent-ops-sourcing",
+            required_tools=["web.fetch"],
+        ),
+    )
+    assert task_response.status_code == 201
+
+    access_response = client.post(
+        "/credential-access-requests",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-scheduler",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "credential-access-test",
+            "task_id": task_response.json()["id"],
+            "project_id": project_response.json()["id"],
+            "agent_id": "agent-ops-sourcing",
+            "tool_name": "web.fetch",
+            "requested_scopes": ["browser:authenticated_fetch"],
+            "candidate_service_ids": ["connector-supplier-web"],
+            "reason": "Credential scopes missing for required tool: web.fetch",
+        },
+    )
+
+    assert access_response.status_code == 201
+    access_request = access_response.json()
+    assert access_request["status"] == "requested"
+    assert access_request["requested_by_id"] == "gateway-scheduler"
+
+    list_response = client.get(
+        "/credential-access-requests",
+        params={"project_id": project_response.json()["id"], "status": "requested"},
+    )
+    assert list_response.status_code == 200
+    assert [request["id"] for request in list_response.json()] == [
+        "credential-access-test"
+    ]
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["approval.requested"]
+    assert events[0]["payload"]["request_type"] == "credential_access"
+    assert events[0]["payload"]["tool_name"] == "web.fetch"
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [audit["action"] for audit in audits] == [
+        "credential_access_request.created"
+    ]
+    assert audits[0]["target_id"] == "credential-access-test"
+
+
 def test_task_requires_acceptance_criteria() -> None:
     client = TestClient(app)
     project_response = client.post(

@@ -185,6 +185,21 @@ export type TaskSkipRecord = {
   reason: string;
 };
 
+export type CredentialAccessRequest = {
+  id: string;
+  task_id: string;
+  project_id: string;
+  agent_id: string;
+  tool_name: string;
+  requested_scopes: string[];
+  candidate_service_ids: string[];
+  reason: string;
+  requested_by_type: "user" | "agent" | "system" | "service";
+  requested_by_id: string;
+  status: "requested" | "approved" | "rejected" | "applied";
+  created_at: string;
+};
+
 export type TaskRunBatchResult = {
   trace_id: string;
   max_tasks: number;
@@ -193,6 +208,7 @@ export type TaskRunBatchResult = {
   runs: TaskRunResult[];
   skipped_task_ids: string[];
   skipped_tasks: TaskSkipRecord[];
+  credential_access_requests: CredentialAccessRequest[];
   lease_recovery?: unknown | null;
   scheduler_event?: unknown | null;
   scheduler_audit_log?: unknown | null;
@@ -339,6 +355,13 @@ export async function listToolCredentialStatuses(
     credential_statuses: ToolCredentialStatus[];
   }>(response);
   return payload.credential_statuses;
+}
+
+export async function listCredentialAccessRequests(): Promise<CredentialAccessRequest[]> {
+  const response = await fetch("/api/gateway/credential-access-requests?status=requested", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<CredentialAccessRequest[]>(response);
 }
 
 export async function updateMemoryStatus({

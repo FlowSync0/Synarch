@@ -1,6 +1,7 @@
 from synarch_models import (
     AgentResult,
     CostRecord,
+    CredentialAccessRequest,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -173,6 +174,18 @@ def test_task_run_batch_result_captures_skip_reasons() -> None:
                 reason="Credential scopes missing for required tool: web.fetch",
             )
         ],
+        credential_access_requests=[
+            CredentialAccessRequest(
+                id="credential-access-task-blocked-web-fetch",
+                task_id="task_blocked",
+                project_id="project_demo",
+                agent_id="agent-dev",
+                tool_name="web.fetch",
+                requested_scopes=["browser:authenticated_fetch"],
+                candidate_service_ids=["connector-web"],
+                reason="Credential scopes missing for required tool: web.fetch",
+            )
+        ],
     )
 
     payload = result.model_dump(mode="json")
@@ -185,6 +198,9 @@ def test_task_run_batch_result_captures_skip_reasons() -> None:
             "reason": "Credential scopes missing for required tool: web.fetch",
         }
     ]
+    assert payload["credential_access_requests"][0]["id"] == (
+        "credential-access-task-blocked-web-fetch"
+    )
 
 
 def test_memory_item_defaults_to_approved_status() -> None:

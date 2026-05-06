@@ -10,6 +10,7 @@ from synarch_models import (
     AgentTaskRequest,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessRequest,
     EventRecord,
     EventType,
     LocalWorldView,
@@ -90,12 +91,20 @@ class ToolRunner(Protocol):
     ) -> ToolResult: ...
 
 
+@dataclass(frozen=True)
+class CredentialReadinessBlocker:
+    tool_name: str
+    reason: str
+    requested_scopes: tuple[str, ...] = ()
+    candidate_service_ids: tuple[str, ...] = ()
+
+
 class ToolReadinessChecker(Protocol):
     def credential_blockers(
         self,
         task: TaskRecord,
         world_view: LocalWorldView,
-    ) -> list[str]: ...
+    ) -> list[CredentialReadinessBlocker]: ...
 
 
 @dataclass(frozen=True)
@@ -210,6 +219,7 @@ class TaskRunner:
         runs: list[TaskRunResult] = []
         skipped_task_ids: list[str] = []
         skipped_tasks: list[TaskSkipRecord] = []
+        credential_access_requests: list[CredentialAccessRequest] = []
         stop_reason = "max_tasks_reached"
         while len(runs) < max_tasks:
             task = next_ready_task(
@@ -226,7 +236,14 @@ class TaskRunner:
                     TaskSkipRecord(
                         task_id=task.id,
                         category="credential_readiness",
-                        reason="; ".join(blockers),
+                        reason="; ".join(blocker.reason for blocker in blockers),
+                    )
+                )
+                credential_access_requests.extend(
+                    self.create_credential_access_requests(
+                        task,
+                        blockers,
+                        headers=headers,
                     )
                 )
                 continue
@@ -252,6 +269,7 @@ class TaskRunner:
             runs=runs,
             skipped_task_ids=skipped_task_ids,
             skipped_tasks=skipped_tasks,
+            credential_access_requests=credential_access_requests,
             lease_recovery=lease_recovery,
         )
         scheduler_event = self.state.create_event(
@@ -269,11 +287,42 @@ class TaskRunner:
             }
         )
 
-    def credential_blockers_for_task(self, task: TaskRecord) -> list[str]:
+    def credential_blockers_for_task(self, task: TaskRecord) -> list[CredentialReadinessBlocker]:
         if self.tool_readiness is None or not task.required_tools:
             return []
         world_view = self.control_plane.get_world_view(task.assigned_agent_id)
         return self.tool_readiness.credential_blockers(task, world_view)
+
+    def create_credential_access_requests(
+        self,
+        task: TaskRecord,
+        blockers: list[CredentialReadinessBlocker],
+        *,
+        headers: dict[str, str],
+    ) -> list[CredentialAccessRequest]:
+        created_requests: list[CredentialAccessRequest] = []
+        for blocker in blockers:
+            access_request = CredentialAccessRequest(
+                id=credential_access_request_id(task.id, blocker.tool_name),
+                task_id=task.id,
+                project_id=task.project_id,
+                agent_id=task.assigned_agent_id,
+                tool_name=blocker.tool_name,
+                requested_scopes=list(blocker.requested_scopes),
+                candidate_service_ids=list(blocker.candidate_service_ids),
+                reason=blocker.reason,
+            )
+            try:
+                created_requests.append(
+                    self.state.create_credential_access_request(
+                        access_request,
+                        headers=headers,
+                    )
+                )
+            except StateServiceRequestError as error:
+                if error.status_code != 409:
+                    raise
+        return created_requests
 
     def run_task(
         self,
@@ -643,6 +692,14 @@ def deduplicate(values: list[str]) -> list[str]:
     return result
 
 
+def credential_access_request_id(task_id: str, tool_name: str) -> str:
+    safe_tool_name = "".join(
+        character if character.isalnum() else "_"
+        for character in tool_name
+    ).strip("_")
+    return f"credential_access_{task_id}_{safe_tool_name}"
+
+
 def next_ready_task(
     tasks: list[TaskRecord],
     *,
@@ -877,6 +934,11 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
             for skipped_task in batch_result.skipped_tasks
         ],
         "skipped_task_count": len(batch_result.skipped_task_ids),
+        "credential_access_request_ids": [
+            access_request.id
+            for access_request in batch_result.credential_access_requests
+        ],
+        "credential_access_request_count": len(batch_result.credential_access_requests),
         "lease_recovered_task_ids": lease_recovered_task_ids(batch_result.lease_recovery),
         "lease_failed_task_ids": lease_failed_task_ids(batch_result.lease_recovery),
         "created_sub_task_count": sum(

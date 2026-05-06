@@ -13,11 +13,13 @@ from pydantic_settings import BaseSettings
 from synarch_models import (
     ActorType,
     AgentProjectAssignment,
+    ApprovalStatus,
     AuditLogRecord,
     CostBudgetEvaluation,
     CostRecord,
     CostSummary,
     CostSummaryGroup,
+    CredentialAccessRequest,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -56,6 +58,7 @@ from .task_runner import (
     LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION,
     LOCAL_RUNTIME_PROVIDER_ID,
     ControlPlaneClient,
+    CredentialReadinessBlocker,
     HttpAgentRuntimeClient,
     HttpControlPlaneClient,
     HttpMemoryClient,
@@ -667,6 +670,25 @@ def list_tool_credential_status(
     }
 
 
+@app.get("/credential-access-requests", response_model=list[CredentialAccessRequest])
+def list_credential_access_requests(
+    project_id: str | None = None,
+    task_id: str | None = None,
+    agent_id: str | None = None,
+    status: ApprovalStatus | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[CredentialAccessRequest]:
+    try:
+        return state_client.list_credential_access_requests(
+            project_id=project_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            status=status.value if status is not None else None,
+        )
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
 class GatewayToolRunner:
     def call_tool(
         self,
@@ -692,18 +714,51 @@ class GatewayToolReadinessChecker:
         self,
         task: TaskRecord,
         world_view: LocalWorldView,
-    ) -> list[str]:
+    ) -> list[CredentialReadinessBlocker]:
         statuses = tool_credential_statuses_for_world_view(world_view)
-        blockers: list[str] = []
+        blockers: list[CredentialReadinessBlocker] = []
         for required_tool in task.required_tools:
             matching_statuses = [
                 status for status in statuses if status.tool_name == required_tool
             ]
+            candidate_service_ids = candidate_service_ids_for_tool(world_view, required_tool)
             if not matching_statuses:
-                blockers.append(f"No credential-ready service for required tool: {required_tool}")
+                manifest = TOOL_ADAPTER_MANIFESTS.get(required_tool)
+                blockers.append(
+                    CredentialReadinessBlocker(
+                        tool_name=required_tool,
+                        reason=(
+                            "No credential-ready service for required tool: "
+                            f"{required_tool}"
+                        ),
+                        requested_scopes=manifest.credential_scopes
+                        if manifest is not None
+                        else (),
+                        candidate_service_ids=tuple(candidate_service_ids),
+                    )
+                )
                 continue
             if all(status.status == "missing_scopes" for status in matching_statuses):
-                blockers.append(f"Credential scopes missing for required tool: {required_tool}")
+                missing_scopes = tuple(
+                    dict.fromkeys(
+                        scope
+                        for status in matching_statuses
+                        for scope in status.missing_scopes
+                    )
+                )
+                blockers.append(
+                    CredentialReadinessBlocker(
+                        tool_name=required_tool,
+                        reason=(
+                            "Credential scopes missing for required tool: "
+                            f"{required_tool}"
+                        ),
+                        requested_scopes=missing_scopes,
+                        candidate_service_ids=tuple(
+                            status.service_id for status in matching_statuses
+                        ),
+                    )
+                )
         return blockers
 
 
@@ -881,6 +936,19 @@ def tool_credential_statuses_for_world_view(
                 )
             )
     return statuses
+
+
+def candidate_service_ids_for_tool(
+    world_view: LocalWorldView,
+    tool_name: str,
+) -> list[str]:
+    available_services = set(world_view.available_services)
+    return [
+        service_id
+        for service_id in sorted(world_view.available_service_capabilities)
+        if service_id in available_services
+        and tool_name in world_view.available_service_capabilities[service_id]
+    ]
 
 
 def execute_authorized_tool(
