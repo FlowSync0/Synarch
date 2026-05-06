@@ -789,6 +789,23 @@ def test_gateway_applies_project_split_through_state_service() -> None:
 
 def test_tool_adapter_registry_exposes_executable_tools() -> None:
     assert gateway_main.registered_tool_names() == ["event.emit", "web.fetch"]
+    assert gateway_main.tool_adapter_registry_errors() == []
+
+
+def test_tool_registry_endpoint_returns_adapter_manifests() -> None:
+    response = TestClient(app).get("/tools/registry")
+
+    assert response.status_code == 200
+    manifests = {
+        manifest["tool_name"]: manifest for manifest in response.json()["tools"]
+    }
+    assert manifests["event.emit"]["required_arguments"] == ["type"]
+    assert manifests["event.emit"]["credential_scopes"] == []
+    assert manifests["event.emit"]["audit_required"] is True
+    assert manifests["web.fetch"]["required_arguments"] == ["url"]
+    assert manifests["web.fetch"]["optional_arguments"] == ["max_bytes"]
+    assert manifests["web.fetch"]["risk_level"] == "medium"
+    assert manifests["web.fetch"]["network_access"] is True
 
 
 def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:

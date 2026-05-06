@@ -100,6 +100,18 @@ export type ToolResult = {
   error?: string | null;
 };
 
+export type ToolAdapterManifest = {
+  tool_name: string;
+  adapter: string;
+  required_arguments: string[];
+  optional_arguments: string[];
+  credential_scopes: string[];
+  risk_level: "low" | "medium" | "high";
+  requires_credentials: boolean;
+  network_access: boolean;
+  audit_required: boolean;
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -288,6 +300,14 @@ export async function callTool(toolCall: ToolCallRequest): Promise<ToolResult> {
     body: JSON.stringify(toolCall)
   });
   return parseJsonResponse<ToolResult>(response);
+}
+
+export async function listToolAdapterManifests(): Promise<ToolAdapterManifest[]> {
+  const response = await fetch("/api/gateway/tools/registry", {
+    cache: "no-store"
+  });
+  const payload = await parseJsonResponse<{ tools: ToolAdapterManifest[] }>(response);
+  return payload.tools;
 }
 
 export async function updateMemoryStatus({

@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Literal, Protocol
 from urllib.parse import urljoin, urlparse
@@ -66,6 +67,7 @@ from .task_runner import (
 )
 
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
+ToolRiskLevel = Literal["low", "medium", "high"]
 
 
 class ToolAdapter(Protocol):
@@ -77,6 +79,32 @@ class ToolAdapter(Protocol):
         headers: dict[str, str],
         trace_id: str,
     ) -> dict[str, object]: ...
+
+
+@dataclass(frozen=True)
+class ToolAdapterManifest:
+    tool_name: str
+    adapter: str
+    required_arguments: tuple[str, ...] = ()
+    optional_arguments: tuple[str, ...] = ()
+    credential_scopes: tuple[str, ...] = ()
+    risk_level: ToolRiskLevel = "low"
+    requires_credentials: bool = False
+    network_access: bool = False
+    audit_required: bool = True
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "tool_name": self.tool_name,
+            "adapter": self.adapter,
+            "required_arguments": list(self.required_arguments),
+            "optional_arguments": list(self.optional_arguments),
+            "credential_scopes": list(self.credential_scopes),
+            "risk_level": self.risk_level,
+            "requires_credentials": self.requires_credentials,
+            "network_access": self.network_access,
+            "audit_required": self.audit_required,
+        }
 
 
 class Settings(BaseSettings):
@@ -590,6 +618,11 @@ def call_tool(
         raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
 
 
+@app.get("/tools/registry")
+def list_tool_registry() -> dict[str, object]:
+    return {"tools": registered_tool_manifests()}
+
+
 class GatewayToolRunner:
     def call_tool(
         self,
@@ -740,6 +773,27 @@ def execute_authorized_tool(
 
 def registered_tool_names() -> list[str]:
     return sorted(TOOL_ADAPTERS)
+
+
+def registered_tool_manifests() -> list[dict[str, object]]:
+    return [
+        TOOL_ADAPTER_MANIFESTS[tool_name].as_response()
+        for tool_name in sorted(TOOL_ADAPTER_MANIFESTS)
+    ]
+
+
+def tool_adapter_registry_errors() -> list[str]:
+    adapter_names = set(TOOL_ADAPTERS)
+    manifest_names = set(TOOL_ADAPTER_MANIFESTS)
+    errors: list[str] = []
+    for tool_name in sorted(adapter_names - manifest_names):
+        errors.append(f"Missing manifest for adapter: {tool_name}")
+    for tool_name in sorted(manifest_names - adapter_names):
+        errors.append(f"Manifest without adapter: {tool_name}")
+    for tool_name, manifest in TOOL_ADAPTER_MANIFESTS.items():
+        if manifest.tool_name != tool_name:
+            errors.append(f"Manifest key mismatch: {tool_name}")
+    return errors
 
 
 def execute_event_emit_adapter(
@@ -973,6 +1027,24 @@ def execute_event_emit_tool(
 TOOL_ADAPTERS: dict[str, ToolAdapter] = {
     "event.emit": execute_event_emit_adapter,
     "web.fetch": execute_web_fetch_adapter,
+}
+
+TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
+    "event.emit": ToolAdapterManifest(
+        tool_name="event.emit",
+        adapter="event.emit",
+        required_arguments=("type",),
+        optional_arguments=("target", "payload"),
+        risk_level="low",
+    ),
+    "web.fetch": ToolAdapterManifest(
+        tool_name="web.fetch",
+        adapter="web.fetch",
+        required_arguments=("url",),
+        optional_arguments=("max_bytes",),
+        risk_level="medium",
+        network_access=True,
+    ),
 }
 
 

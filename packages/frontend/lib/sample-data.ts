@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M4.4",
-    detail: "Adapter registry",
+    value: "M4.5",
+    detail: "Adapter manifests",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "108",
+    value: "109",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Registre adapters",
+  title: "Manifests adapters",
   body:
-    "Le gateway execute maintenant les outils via un registre d'adapters explicite, au lieu de branches codees en dur par tool_name.",
+    "Le gateway expose les adapters avec arguments requis, scopes credentials, risque, acces reseau et audit attendu.",
   checks: [
-    "event.emit est enregistre comme adapter executable",
-    "web.fetch est enregistre comme adapter executable",
-    "Les outils autorises sans adapter restent audites mais non executes",
+    "GET /tools/registry retourne les manifests",
+    "event.emit declare type comme argument requis",
+    "web.fetch declare url, max_bytes et acces reseau",
     "Tests backend complets passent"
   ]
 };
@@ -324,6 +324,11 @@ export const backlog = [
   {
     label: "M4.5",
     title: "Adapter manifests and scopes",
+    done: true
+  },
+  {
+    label: "M4.6",
+    title: "Credential scope enforcement",
     done: false
   },
   {
