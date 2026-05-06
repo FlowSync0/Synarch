@@ -56,9 +56,68 @@ def run_scheduler_tick(
             "project_id": project_id,
             "max_tasks": max_tasks,
             "trace_id": request_trace_id,
+            **scheduler_result_summary(payload),
         },
         "result": payload,
     }
+
+
+def scheduler_result_summary(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {
+            "stop_reason": None,
+            "run_count": 0,
+            "tool_result_count": 0,
+            "failed_tool_result_count": 0,
+            "total_cost": 0.0,
+        }
+    runs = payload.get("runs", [])
+    if not isinstance(runs, list):
+        runs = []
+    return {
+        "stop_reason": payload.get("stop_reason"),
+        "run_count": len(runs),
+        "tool_result_count": tool_result_count(runs),
+        "failed_tool_result_count": failed_tool_result_count(runs),
+        "total_cost": round(total_run_cost(runs), 8),
+    }
+
+
+def tool_result_count(runs: list[Any]) -> int:
+    return sum(len(tool_results_for_run(run)) for run in runs)
+
+
+def failed_tool_result_count(runs: list[Any]) -> int:
+    return sum(
+        1
+        for run in runs
+        for tool_result in tool_results_for_run(run)
+        if isinstance(tool_result, dict) and tool_result.get("status") == "failed"
+    )
+
+
+def total_run_cost(runs: list[Any]) -> float:
+    total = 0.0
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        cost_records = run.get("cost_records", [])
+        if not isinstance(cost_records, list):
+            continue
+        for cost_record in cost_records:
+            if not isinstance(cost_record, dict):
+                continue
+            total += float(cost_record.get("total_cost") or 0)
+    return total
+
+
+def tool_results_for_run(run: Any) -> list[Any]:
+    if not isinstance(run, dict):
+        return []
+    tool_results = run.get("tool_results", [])
+    if not isinstance(tool_results, list):
+        return []
+    return tool_results
 
 
 def positive_int(value: str) -> int:

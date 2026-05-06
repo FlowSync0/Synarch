@@ -35,7 +35,14 @@ def test_scheduler_tick_posts_to_gateway_with_trace(monkeypatch: Any) -> None:
                     "max_tasks": 2,
                     "project_id": "project_demo",
                     "stop_reason": "no_ready_task",
-                    "runs": [],
+                    "runs": [
+                        {
+                            "tool_results": [
+                                {"tool_name": "web.fetch", "status": "completed"}
+                            ],
+                            "cost_records": [{"total_cost": 0.0001}],
+                        }
+                    ],
                 }
             ).encode()
 
@@ -67,7 +74,40 @@ def test_scheduler_tick_posts_to_gateway_with_trace(monkeypatch: Any) -> None:
     }
     assert result["scheduler"]["worker_id"] == "worker-test"
     assert result["scheduler"]["max_tasks"] == 2
+    assert result["scheduler"]["run_count"] == 1
+    assert result["scheduler"]["tool_result_count"] == 1
+    assert result["scheduler"]["failed_tool_result_count"] == 0
+    assert result["scheduler"]["total_cost"] == 0.0001
     assert result["result"]["stop_reason"] == "no_ready_task"
+
+
+def test_scheduler_summary_counts_tool_results() -> None:
+    summary = scheduler_tick.scheduler_result_summary(
+        {
+            "stop_reason": "max_tasks_reached",
+            "runs": [
+                {
+                    "tool_results": [
+                        {"tool_name": "web.fetch", "status": "completed"},
+                        {"tool_name": "event.emit", "status": "failed"},
+                    ],
+                    "cost_records": [{"total_cost": 0.10}],
+                },
+                {
+                    "tool_results": [],
+                    "cost_records": [{"total_cost": 0.05}],
+                },
+            ],
+        }
+    )
+
+    assert summary == {
+        "stop_reason": "max_tasks_reached",
+        "run_count": 2,
+        "tool_result_count": 2,
+        "failed_tool_result_count": 1,
+        "total_cost": 0.15,
+    }
 
 
 def test_run_loop_stops_at_max_ticks(monkeypatch: Any, capsys: Any) -> None:

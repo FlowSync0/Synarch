@@ -7,6 +7,7 @@ from synarch_gateway.scheduler_worker import (
     positive_int,
     run_loop,
     run_scheduler_tick,
+    scheduler_result_summary,
 )
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "positive_int",
     "run_loop",
     "run_scheduler_tick",
+    "scheduler_result_summary",
 ]
 
 

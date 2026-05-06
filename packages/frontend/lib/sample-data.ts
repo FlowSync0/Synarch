@@ -31,7 +31,7 @@ export const overview = [
   },
   {
     label: "Tests backend",
-    value: "104",
+    value: "106",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Boucle runtime outillee",
+  title: "Scheduler worker outille",
   body:
-    "Un agent peut demander un tool call pendant une execution de tache, le gateway l'autorise via la porte permissions, puis le runtime recoit le resultat pour finaliser.",
+    "Le scheduler peut lancer une tache ready qui demande un outil, puis le tick expose les tool_results, les echecs outil et le cout total.",
   checks: [
-    "AgentResult expose tool_calls_requested",
-    "AgentTaskRequest renvoie tool_results au runtime",
-    "TaskRunResult expose les tool_results au dashboard",
-    "Le cout cumule les deux appels modele de la boucle"
+    "POST /tasks/run-ready transporte la boucle outillee",
+    "scheduler.tick expose tool_result_count",
+    "scheduler worker resume run_count et total_cost",
+    "Le dashboard affiche les outils utilises par run"
   ]
 };
 
@@ -309,6 +309,11 @@ export const backlog = [
   {
     label: "M4.2",
     title: "Scheduler worker live loop",
+    done: true
+  },
+  {
+    label: "M4.3",
+    title: "Connector registry hardening",
     done: false
   },
   {

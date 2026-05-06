@@ -1453,6 +1453,87 @@ def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
     assert state_client.audit_logs[-1].payload["stop_reason"] == "no_ready_task"
 
 
+def test_run_ready_tasks_records_tool_loop_metrics() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_scheduler_tool_loop",
+            title="Scheduler tool loop",
+            goal="Run a ready task that needs source evidence.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_scheduler_tool_loop",
+            project_id="project_scheduler_tool_loop",
+            title="Verify supplier source from scheduler",
+            assigned_agent_id="agent-ops-sourcing",
+            acceptance_criteria=["web.fetch evidence is returned to the runtime."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web", "service-event-log"],
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=ToolLoopAgentRuntimeClient(),
+        tool_runner=gateway_main.GatewayToolRunner(),
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": max_bytes,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain This domain is for examples.",
+        }
+
+    original_fetch_http_url = gateway_main.fetch_http_url
+    gateway_main.fetch_http_url = fake_fetch_http_url
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_scheduler_tool_loop", "max_tasks": 1},
+            headers={"X-Synarch-Trace-Id": "trace_scheduler_tool_loop"},
+        )
+    finally:
+        gateway_main.fetch_http_url = original_fetch_http_url
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    scheduler_payload = payload["scheduler_event"]["payload"]
+    assert payload["runs"][0]["tool_results"][0]["tool_name"] == "web.fetch"
+    assert scheduler_payload["run_count"] == 1
+    assert scheduler_payload["tool_result_count"] == 1
+    assert scheduler_payload["failed_tool_result_count"] == 0
+    assert scheduler_payload["tool_names"] == ["web.fetch"]
+    assert scheduler_payload["total_cost"] == 0.000005
+    assert state_client.events[-1].type == EventType.scheduler_tick
+    assert state_client.events[-1].payload["tool_result_count"] == 1
+
+
 def test_run_ready_tasks_stops_at_max_tasks() -> None:
     state_client = FakeStateClient()
     state_client.projects.append(
@@ -1684,7 +1765,11 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "lease_recovered_task_ids": [],
         "lease_failed_task_ids": [],
         "created_sub_task_count": 0,
+        "tool_result_count": 0,
+        "failed_tool_result_count": 0,
+        "tool_names": [],
         "cost_ids": [],
+        "total_cost": 0,
     }
     assert payload["scheduler_audit_log"]["actor_id"] == "gateway-scheduler"
     assert payload["scheduler_audit_log"]["target_id"] == "project_empty"

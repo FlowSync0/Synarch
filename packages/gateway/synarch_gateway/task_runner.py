@@ -842,11 +842,33 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
         "created_sub_task_count": sum(
             len(run.created_sub_tasks) for run in batch_result.runs
         ),
+        "tool_result_count": sum(len(run.tool_results) for run in batch_result.runs),
+        "failed_tool_result_count": sum(
+            1
+            for run in batch_result.runs
+            for tool_result in run.tool_results
+            if tool_result.status == TaskStatus.failed
+        ),
+        "tool_names": deduplicate(
+            [
+                tool_result.tool_name
+                for run in batch_result.runs
+                for tool_result in run.tool_results
+            ]
+        ),
         "cost_ids": [
             cost_record.id
             for run in batch_result.runs
             for cost_record in run.cost_records
         ],
+        "total_cost": round(
+            sum(
+                cost_record.total_cost
+                for run in batch_result.runs
+                for cost_record in run.cost_records
+            ),
+            8,
+        ),
     }
 
 
