@@ -6,6 +6,7 @@ from synarch_models import (
     AiProviderType,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessDecision,
     CredentialAccessRequest,
     DivisionRecord,
     LifecycleAction,
@@ -111,6 +112,23 @@ def test_credential_access_request_captures_blocking_tool_scope() -> None:
     assert payload["requested_by_id"] == "gateway-scheduler"
     assert payload["requested_scopes"] == ["browser:authenticated_fetch"]
     assert payload["candidate_service_ids"] == ["connector-supplier-web"]
+
+
+def test_credential_access_decision_is_auditable() -> None:
+    decision = CredentialAccessDecision(
+        request_id="credential-access-task-fetch-web",
+        status="approved",
+        decided_by_type=ActorType.user,
+        decided_by_id="local-user",
+        rationale="Access approved for a scoped supplier task.",
+    )
+
+    payload = decision.model_dump(mode="json")
+
+    assert payload["request_id"] == "credential-access-task-fetch-web"
+    assert payload["status"] == "approved"
+    assert payload["decided_by_type"] == "user"
+    assert payload["events_emitted"] == []
 
 
 def test_agent_soul_captures_persistent_identity() -> None:

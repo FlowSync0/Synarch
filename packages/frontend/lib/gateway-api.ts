@@ -200,6 +200,16 @@ export type CredentialAccessRequest = {
   created_at: string;
 };
 
+export type CredentialAccessDecision = {
+  request_id: string;
+  status: "approved" | "rejected";
+  decided_by_type: "user" | "agent" | "system" | "service";
+  decided_by_id: string;
+  rationale: string;
+  events_emitted: unknown[];
+  decided_at: string;
+};
+
 export type TaskRunBatchResult = {
   trace_id: string;
   max_tasks: number;
@@ -362,6 +372,38 @@ export async function listCredentialAccessRequests(): Promise<CredentialAccessRe
     cache: "no-store"
   });
   return parseJsonResponse<CredentialAccessRequest[]>(response);
+}
+
+export async function decideCredentialAccessRequest({
+  requestId,
+  status
+}: {
+  requestId: string;
+  status: "approved" | "rejected";
+}): Promise<CredentialAccessDecision> {
+  const response = await fetch(
+    `/api/gateway/credential-access-requests/${encodeURIComponent(requestId)}/decisions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_credential_access_${Date.now()}`
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        status,
+        decided_by_type: "user",
+        decided_by_id: "local-user",
+        rationale:
+          status === "approved"
+            ? "Credential access approved from Synarch dashboard."
+            : "Credential access rejected from Synarch dashboard."
+      })
+    }
+  );
+  return parseJsonResponse<CredentialAccessDecision>(response);
 }
 
 export async function updateMemoryStatus({

@@ -48,6 +48,7 @@ import {
 } from "../lib/control-plane-api";
 import {
   callTool,
+  decideCredentialAccessRequest,
   decideTaskReview,
   getProjectTimeline,
   listCredentialAccessRequests,
@@ -932,6 +933,14 @@ export default function DashboardPage() {
     mutationFn: decideAgentLifecycleRequest,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+    }
+  });
+  const credentialDecisionMutation = useMutation({
+    mutationFn: decideCredentialAccessRequest,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
   const taskReviewMutation = useMutation({
@@ -2788,10 +2797,24 @@ export default function DashboardPage() {
               ) : null}
               {approvalRows.map((approval) => {
                 const Icon = approval.icon;
-                const isPending = approval.status === "requested" && approval.source === "api";
+                const isCredentialApproval = approval.source === "credential";
+                const isPending = approval.status === "requested" && approval.source !== "sample";
+                const isDecisionPending =
+                  decisionMutation.isPending || credentialDecisionMutation.isPending;
                 const isMutatingThisApproval =
-                  decisionMutation.isPending &&
-                  decisionMutation.variables?.requestId === approval.id;
+                  isCredentialApproval
+                    ? credentialDecisionMutation.isPending &&
+                      credentialDecisionMutation.variables?.requestId === approval.id
+                    : decisionMutation.isPending &&
+                      decisionMutation.variables?.requestId === approval.id;
+                const decideApproval = (status: "approved" | "rejected") => {
+                  const payload = { requestId: approval.id, status };
+                  if (isCredentialApproval) {
+                    credentialDecisionMutation.mutate(payload);
+                    return;
+                  }
+                  decisionMutation.mutate(payload);
+                };
                 return (
                   <article key={approval.id} className="px-4 py-3">
                     <div className="flex items-start gap-3">
@@ -2824,13 +2847,8 @@ export default function DashboardPage() {
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Approve ${approval.title}`}
                               title={`Approve ${approval.title}`}
-                              disabled={!isPending || decisionMutation.isPending}
-                              onClick={() =>
-                                decisionMutation.mutate({
-                                  requestId: approval.id,
-                                  status: "approved"
-                                })
-                              }
+                              disabled={!isPending || isDecisionPending}
+                              onClick={() => decideApproval("approved")}
                             >
                               <Check size={15} />
                             </button>
@@ -2838,13 +2856,8 @@ export default function DashboardPage() {
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Reject ${approval.title}`}
                               title={`Reject ${approval.title}`}
-                              disabled={!isPending || decisionMutation.isPending}
-                              onClick={() =>
-                                decisionMutation.mutate({
-                                  requestId: approval.id,
-                                  status: "rejected"
-                                })
-                              }
+                              disabled={!isPending || isDecisionPending}
+                              onClick={() => decideApproval("rejected")}
                             >
                               <X size={15} />
                             </button>

@@ -186,6 +186,97 @@ def test_credential_access_request_records_event_and_audit() -> None:
     assert audits[0]["target_id"] == "credential-access-test"
 
 
+def test_credential_access_decision_updates_request_and_records_event() -> None:
+    client = TestClient(app)
+    trace_id = "trace_credential_access_decision"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Credential decision",
+            "goal": "Approve or reject missing connector credentials",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Read private repository",
+            assigned_agent_id="agent-dev",
+            required_tools=["git.read"],
+        ),
+    )
+    assert task_response.status_code == 201
+    access_response = client.post(
+        "/credential-access-requests",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-scheduler",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "credential-access-decision-test",
+            "task_id": task_response.json()["id"],
+            "project_id": project_response.json()["id"],
+            "agent_id": "agent-dev",
+            "tool_name": "git.read",
+            "candidate_service_ids": ["connector-github"],
+            "reason": "No credential-ready service for required tool: git.read",
+        },
+    )
+    assert access_response.status_code == 201
+
+    decision_response = client.post(
+        "/credential-access-requests/credential-access-decision-test/decisions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "request_id": "credential-access-decision-test",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Approved for a scoped repository read.",
+        },
+    )
+
+    assert decision_response.status_code == 201
+    decision = decision_response.json()
+    assert [event["type"] for event in decision["events_emitted"]] == [
+        "approval.decided"
+    ]
+    assert decision["events_emitted"][0]["payload"]["request_type"] == "credential_access"
+    request_response = client.get(
+        "/credential-access-requests/credential-access-decision-test"
+    )
+    assert request_response.json()["status"] == "approved"
+
+    repeat_response = client.post(
+        "/credential-access-requests/credential-access-decision-test/decisions",
+        json={
+            "request_id": "credential-access-decision-test",
+            "status": "rejected",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Duplicate decision.",
+        },
+    )
+    assert repeat_response.status_code == 409
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "approval.requested",
+        "approval.decided",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert "credential_access_request.approved" in [
+        audit["action"] for audit in audits
+    ]
+
+
 def test_task_requires_acceptance_criteria() -> None:
     client = TestClient(app)
     project_response = client.post(

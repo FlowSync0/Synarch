@@ -19,6 +19,7 @@ from synarch_models import (
     AgentTaskRequest,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessDecision,
     CredentialAccessRequest,
     EventRecord,
     EventType,
@@ -453,6 +454,42 @@ class FakeStateClient:
                 if access_request.status == status
             ]
         return access_requests
+
+    def decide_credential_access_request(
+        self,
+        request_id: str,
+        decision: CredentialAccessDecision,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessDecision:
+        self.headers.append(headers)
+        access_request = next(
+            request
+            for request in self.credential_access_requests
+            if request.id == request_id
+        )
+        if access_request.status != "requested":
+            raise StateServiceRequestError(
+                409,
+                f"Credential access request is already {access_request.status}",
+            )
+        updated_request = access_request.model_copy(update={"status": decision.status})
+        self.credential_access_requests[
+            self.credential_access_requests.index(access_request)
+        ] = updated_request
+        event = EventRecord(
+            type=EventType.approval_decided,
+            target=access_request.project_id,
+            payload={
+                "request_type": "credential_access",
+                "credential_access_request_id": access_request.id,
+                "status": decision.status,
+                "rationale": decision.rationale,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        return decision.model_copy(update={"events_emitted": [event]})
 
 
 class FailingStateClient(FakeStateClient):
@@ -1932,6 +1969,45 @@ def test_list_credential_access_requests_forwards_state_filters() -> None:
     assert response.status_code == 200
     assert response.json()[0]["id"] == "credential-access-visible"
     assert response.json()[0]["requested_scopes"] == ["browser:authenticated_fetch"]
+
+
+def test_decide_credential_access_request_forwards_decision() -> None:
+    state_client = FakeStateClient()
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential-access-decision-visible",
+            task_id="task_fetch_supplier",
+            project_id="project_supplier",
+            agent_id="agent-ops-sourcing",
+            tool_name="web.fetch",
+            requested_scopes=["browser:authenticated_fetch"],
+            candidate_service_ids=["connector-supplier-web"],
+            reason="Credential scopes missing for required tool: web.fetch",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/credential-access-requests/credential-access-decision-visible/decisions",
+            headers={"X-Synarch-Trace-Id": "trace_credential_gateway_decision"},
+            json={
+                "request_id": "credential-access-decision-visible",
+                "status": "approved",
+                "decided_by_type": "user",
+                "decided_by_id": "local-user",
+                "rationale": "Approved for a scoped supplier lookup.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["events_emitted"][0]["type"] == "approval.decided"
+    assert state_client.credential_access_requests[0].status == "approved"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == (
+        "trace_credential_gateway_decision"
+    )
 
 
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:

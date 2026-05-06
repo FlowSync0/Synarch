@@ -17,6 +17,7 @@ from synarch_models import (
     ApprovalStatus,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessDecision,
     CredentialAccessRequest,
     DivisionRecord,
     EventRecord,
@@ -147,6 +148,17 @@ def decision_audit_context(decision: AgentLifecycleDecision, request: Request) -
 
 
 def split_decision_audit_context(decision: ProjectSplitDecision, request: Request) -> AuditContext:
+    return AuditContext(
+        actor_type=decision.decided_by_type,
+        actor_id=decision.decided_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def credential_decision_audit_context(
+    decision: CredentialAccessDecision,
+    request: Request,
+) -> AuditContext:
     return AuditContext(
         actor_type=decision.decided_by_type,
         actor_id=decision.decided_by_id,
@@ -2116,6 +2128,83 @@ def read_credential_access_request(request_id: str) -> CredentialAccessRequest:
         request_id,
         "credential access request",
     )
+
+
+def credential_access_decided_event(
+    access_request: CredentialAccessRequest,
+    decision: CredentialAccessDecision,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.approval_decided,
+        source_agent_id=agent_event_source(decision.decided_by_type, decision.decided_by_id),
+        target=access_request.project_id,
+        payload={
+            "request_type": "credential_access",
+            "credential_access_request_id": access_request.id,
+            "task_id": access_request.task_id,
+            "agent_id": access_request.agent_id,
+            "tool_name": access_request.tool_name,
+            "status": decision.status,
+            "rationale": decision.rationale,
+        },
+        trace_id=trace_id,
+    )
+
+
+@app.post(
+    "/credential-access-requests/{request_id}/decisions",
+    response_model=CredentialAccessDecision,
+    status_code=201,
+)
+def decide_credential_access_request(
+    request_id: str,
+    decision: CredentialAccessDecision,
+    request: Request,
+) -> CredentialAccessDecision:
+    if decision.request_id != request_id:
+        raise HTTPException(status_code=400, detail="Decision request_id must match path")
+    if decision.status not in {ApprovalStatus.approved, ApprovalStatus.rejected}:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential access decisions must be approved or rejected",
+        )
+
+    access_request = read_record(
+        REPOSITORIES.credential_access_requests,
+        request_id,
+        "credential access request",
+    )
+    if access_request.status != ApprovalStatus.requested:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Credential access request is already {access_request.status}",
+        )
+
+    context = credential_decision_audit_context(decision, request)
+    event = create_domain_event(
+        credential_access_decided_event(access_request, decision, context.trace_id)
+    )
+    update_record(
+        REPOSITORIES.credential_access_requests,
+        request_id,
+        access_request.model_copy(update={"status": decision.status}),
+        "credential access request",
+    )
+    write_audit_log(
+        context,
+        action=f"credential_access_request.{decision.status}",
+        target_type="credential_access_request",
+        target_id=request_id,
+        payload={
+            "project_id": access_request.project_id,
+            "task_id": access_request.task_id,
+            "agent_id": access_request.agent_id,
+            "tool_name": access_request.tool_name,
+            "rationale": decision.rationale,
+        },
+    )
+    return decision.model_copy(update={"events_emitted": [event]})
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)

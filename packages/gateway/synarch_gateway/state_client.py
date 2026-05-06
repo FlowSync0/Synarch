@@ -8,6 +8,7 @@ from synarch_models import (
     AgentResult,
     AuditLogRecord,
     CostRecord,
+    CredentialAccessDecision,
     CredentialAccessRequest,
     EventRecord,
     ProjectComplexityAssessment,
@@ -174,6 +175,14 @@ class StateClient(Protocol):
         agent_id: str | None = None,
         status: str | None = None,
     ) -> list[CredentialAccessRequest]: ...
+
+    def decide_credential_access_request(
+        self,
+        request_id: str,
+        decision: CredentialAccessDecision,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessDecision: ...
 
 
 @dataclass(frozen=True)
@@ -416,6 +425,20 @@ class HttpStateClient:
             CredentialAccessRequest.model_validate(access_request)
             for access_request in response.json()
         ]
+
+    def decide_credential_access_request(
+        self,
+        request_id: str,
+        decision: CredentialAccessDecision,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialAccessDecision:
+        response = self._post(
+            f"/credential-access-requests/{request_id}/decisions",
+            decision.model_dump(mode="json"),
+            headers,
+        )
+        return CredentialAccessDecision.model_validate(response.json())
 
     def _get(
         self,

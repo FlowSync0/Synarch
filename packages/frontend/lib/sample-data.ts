@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.1",
-    detail: "Credential request workflow",
+    value: "M5.2",
+    detail: "Credential request decisions",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "117",
+    value: "120",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Demandes credentials",
+  title: "Decisions credentials",
   body:
-    "Les skips credentials creent maintenant une demande d'acces persistante, listable et visible dans la queue approvals.",
+    "Les demandes credentials peuvent maintenant etre approuvees ou rejetees avec event, audit et statut persistant.",
   checks: [
-    "State-service persiste CredentialAccessRequest",
-    "Le scheduler cree une demande lors d'un skip credential_readiness",
-    "Gateway/frontend exposent la queue des demandes credentials",
+    "CredentialAccessDecision trace l'acteur et la rationale",
+    "State-service refuse les decisions dupliquees",
+    "L'interface route approve/reject vers le bon endpoint",
     "Tests backend complets passent"
   ]
 };
@@ -354,6 +354,11 @@ export const backlog = [
   {
     label: "M5.2",
     title: "Credential request decisions",
+    done: true
+  },
+  {
+    label: "M5.3",
+    title: "Credential grant application",
     done: false
   },
   {

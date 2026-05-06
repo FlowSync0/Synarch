@@ -19,6 +19,7 @@ from synarch_models import (
     CostRecord,
     CostSummary,
     CostSummaryGroup,
+    CredentialAccessDecision,
     CredentialAccessRequest,
     EventRecord,
     EventType,
@@ -685,6 +686,30 @@ def list_credential_access_requests(
             agent_id=agent_id,
             status=status.value if status is not None else None,
         )
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post(
+    "/credential-access-requests/{request_id}/decisions",
+    response_model=CredentialAccessDecision,
+)
+def decide_credential_access_request(
+    request_id: str,
+    decision: CredentialAccessDecision,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> CredentialAccessDecision:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = task_reviewer_headers(request, trace_id)
+    try:
+        return state_client.decide_credential_access_request(
+            request_id,
+            decision,
+            headers=headers,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
 
