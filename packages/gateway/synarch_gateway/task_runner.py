@@ -17,12 +17,16 @@ from synarch_models import (
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
+    ModelUsage,
+    ProjectRecord,
     TaskDraft,
     TaskLeaseRecoveryResult,
     TaskRecord,
     TaskRunBatchResult,
     TaskRunResult,
     TaskStatus,
+    ToolCallRequest,
+    ToolResult,
 )
 
 from .state_client import StateClient, StateServiceRequestError
@@ -71,6 +75,18 @@ class MemoryClient(Protocol):
 
 class AgentRuntimeClient(Protocol):
     def run_task(self, request: AgentTaskRequest) -> AgentResult: ...
+
+
+class ToolRunner(Protocol):
+    def call_tool(
+        self,
+        tool_call: ToolCallRequest,
+        *,
+        state_client: StateClient,
+        control_plane: ControlPlaneClient,
+        headers: dict[str, str],
+        trace_id: str,
+    ) -> ToolResult: ...
 
 
 @dataclass(frozen=True)
@@ -162,6 +178,8 @@ class TaskRunner:
     model_id: str = LOCAL_RUNTIME_MODEL_ID
     input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
     output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
+    tool_runner: ToolRunner | None = None
+    max_tool_rounds: int = 1
 
     def run_next(self, *, trace_id: str, headers: dict[str, str]) -> TaskRunResult:
         task = next_ready_task(self.state.list_tasks())
@@ -252,15 +270,13 @@ class TaskRunner:
             headers=headers,
         )
         try:
-            agent_result = self.runtime.run_task(
-                AgentTaskRequest(
-                    task=started_task,
-                    project=project,
-                    world_view=world_view,
-                    memory_context=memory_context,
-                    provider_id=self.provider_id,
-                    model_id=self.model_id,
-                )
+            agent_result, tool_results = self.run_agent_task_with_tools(
+                task=started_task,
+                project=project,
+                world_view=world_view,
+                memory_context=memory_context,
+                trace_id=trace_id,
+                headers=headers,
             )
         except (TaskRunnerRequestError, TaskRunnerUnavailable) as error:
             failed_event = self.state.create_event(
@@ -294,6 +310,7 @@ class TaskRunner:
                 memory_context=memory_context,
                 agent_result=failure_result,
                 model_call_events=[started_event, failed_event],
+                tool_results=[],
                 cost_records=[],
             )
 
@@ -361,8 +378,76 @@ class TaskRunner:
             created_sub_tasks=created_sub_tasks,
             sub_task_events=sub_task_events,
             memory_events=memory_events,
+            tool_results=tool_results,
             cost_records=[cost_record],
         )
+
+    def run_agent_task_with_tools(
+        self,
+        *,
+        task: TaskRecord,
+        project: ProjectRecord | None,
+        world_view: LocalWorldView,
+        memory_context: MemoryContext,
+        trace_id: str,
+        headers: dict[str, str],
+    ) -> tuple[AgentResult, list[ToolResult]]:
+        tool_results: list[ToolResult] = []
+        agent_result = self.runtime.run_task(
+            AgentTaskRequest(
+                task=task,
+                project=project,
+                world_view=world_view,
+                memory_context=memory_context,
+                tool_results=tool_results,
+                provider_id=self.provider_id,
+                model_id=self.model_id,
+            )
+        )
+        combined_usage = agent_result.model_usage
+        combined_actions = list(agent_result.actions_taken)
+
+        for _ in range(self.max_tool_rounds):
+            if self.tool_runner is None or not agent_result.tool_calls_requested:
+                break
+            for tool_call in agent_result.tool_calls_requested:
+                normalized_tool_call = tool_call_for_task(
+                    tool_call=tool_call,
+                    task=task,
+                    world_view=world_view,
+                    trace_id=trace_id,
+                )
+                tool_result = self.tool_runner.call_tool(
+                    normalized_tool_call,
+                    state_client=self.state,
+                    control_plane=self.control_plane,
+                    headers=headers,
+                    trace_id=trace_id,
+                )
+                tool_results.append(tool_result)
+                combined_actions.append(f"Tool gate executed {tool_result.tool_name}.")
+
+            agent_result = self.runtime.run_task(
+                AgentTaskRequest(
+                    task=task,
+                    project=project,
+                    world_view=world_view,
+                    memory_context=memory_context,
+                    tool_results=tool_results,
+                    provider_id=self.provider_id,
+                    model_id=self.model_id,
+                )
+            )
+            combined_usage = combine_model_usage(combined_usage, agent_result.model_usage)
+            combined_actions.extend(agent_result.actions_taken)
+
+        return agent_result.model_copy(
+            update={
+                "actions_taken": deduplicate(combined_actions),
+                "tool_results": tool_results,
+                "model_usage": combined_usage,
+            }
+        ), tool_results
 
     def persist_memory_candidates(
         self,
@@ -420,6 +505,41 @@ class TaskRunner:
                 )
             )
         return created_tasks, events
+
+
+def tool_call_for_task(
+    *,
+    tool_call: ToolCallRequest,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    trace_id: str,
+) -> ToolCallRequest:
+    return tool_call.model_copy(
+        update={
+            "agent_id": world_view.agent_id,
+            "project_id": tool_call.project_id or task.project_id,
+            "task_id": tool_call.task_id or task.id,
+            "trace_id": tool_call.trace_id or trace_id,
+        }
+    )
+
+
+def combine_model_usage(
+    first: ModelUsage | None,
+    second: ModelUsage | None,
+) -> ModelUsage | None:
+    if first is None:
+        return second
+    if second is None:
+        return first
+    return ModelUsage(
+        provider_id=second.provider_id,
+        model_id=second.model_id,
+        input_tokens=first.input_tokens + second.input_tokens,
+        output_tokens=first.output_tokens + second.output_tokens,
+        total_cost=round(first.total_cost + second.total_cost, 8),
+        currency=second.currency,
+    )
 
 
 def proposed_memory_candidates(

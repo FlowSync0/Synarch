@@ -18,6 +18,8 @@ from synarch_models import (
     TaskRecord,
     TaskRunResult,
     TaskStatus,
+    ToolCallRequest,
+    ToolResult,
 )
 
 
@@ -42,6 +44,14 @@ def test_agent_result_is_serializable() -> None:
         task_id=task.id,
         status=TaskStatus.completed,
         events_emitted=[event],
+        tool_calls_requested=[
+            ToolCallRequest(
+                agent_id="agent-dev",
+                tool_name="event.emit",
+                reason="Record completion.",
+                arguments={"type": "task.completed"},
+            )
+        ],
         model_usage=ModelUsage(
             provider_id="provider-openrouter",
             model_id="deepseek/deepseek-v4-flash",
@@ -56,6 +66,7 @@ def test_agent_result_is_serializable() -> None:
 
     assert payload["status"] == "completed"
     assert payload["events_emitted"][0]["type"] == "task.completed"
+    assert payload["tool_calls_requested"][0]["tool_name"] == "event.emit"
     assert payload["model_usage"]["model_id"] == "deepseek/deepseek-v4-flash"
 
 
@@ -86,6 +97,12 @@ def test_task_run_result_captures_execution_boundary() -> None:
         world_view=world_view,
         memory_context=memory_context,
         agent_result=agent_result,
+        tool_results=[
+            ToolResult(
+                tool_name="event.emit",
+                output={"authorized": True, "adapter": "event.emit"},
+            )
+        ],
         model_call_events=[
             EventRecord(
                 type=EventType.model_call_completed,
@@ -117,6 +134,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["tool_results"][0]["tool_name"] == "event.emit"
     assert payload["model_call_events"][0]["type"] == "model_call.completed"
     assert payload["cost_records"][0]["trace_id"] == "trace_123"
 

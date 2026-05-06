@@ -38,6 +38,7 @@ from synarch_models import (
     TaskReviewResult,
     TaskRunBatchResult,
     TaskRunResult,
+    TaskStatus,
     ToolCallRequest,
     ToolResult,
 )
@@ -129,6 +130,7 @@ def get_task_runner() -> TaskRunner:
         model_id=settings.task_runner_model_id,
         input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
+        tool_runner=GatewayToolRunner(),
     )
 
 
@@ -563,48 +565,124 @@ def call_tool(
     )
     headers = tool_gate_headers(trace_id)
     try:
-        world_view = control_plane.get_world_view(tool_call.agent_id)
-        error = tool_access_error(tool_call, world_view)
-        if error is not None:
-            state_client.create_event(
-                tool_call_event(tool_call, EventType.tool_failed, trace_id, error=error),
-                headers=headers,
-            )
-            state_client.create_audit_log(
-                tool_call_audit(tool_call, "tool.denied", trace_id, error=error),
-                headers=headers,
-            )
-            raise HTTPException(status_code=403, detail=error)
+        return execute_tool_call_through_gate(
+            tool_call,
+            state_client=state_client,
+            control_plane=control_plane,
+            headers=headers,
+            trace_id=trace_id,
+            raise_on_failure=True,
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
 
-        event = state_client.create_event(
-            tool_call_event(tool_call, EventType.tool_called, trace_id),
+
+class GatewayToolRunner:
+    def call_tool(
+        self,
+        tool_call: ToolCallRequest,
+        *,
+        state_client: StateClient,
+        control_plane: ControlPlaneClient,
+        headers: dict[str, str],
+        trace_id: str,
+    ) -> ToolResult:
+        return execute_tool_call_through_gate(
+            tool_call,
+            state_client=state_client,
+            control_plane=control_plane,
+            headers=headers,
+            trace_id=trace_id,
+            raise_on_failure=False,
+        )
+
+
+def execute_tool_call_through_gate(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    control_plane: ControlPlaneClient,
+    headers: dict[str, str],
+    trace_id: str,
+    raise_on_failure: bool,
+) -> ToolResult:
+    world_view = control_plane.get_world_view(tool_call.agent_id)
+    error = tool_access_error(tool_call, world_view)
+    if error is not None:
+        state_client.create_event(
+            tool_call_event(tool_call, EventType.tool_failed, trace_id, error=error),
             headers=headers,
         )
-        audit = state_client.create_audit_log(
-            tool_call_audit(tool_call, "tool.allowed", trace_id),
+        state_client.create_audit_log(
+            tool_call_audit(tool_call, "tool.denied", trace_id, error=error),
             headers=headers,
         )
+        if raise_on_failure:
+            raise HTTPException(status_code=403, detail=error)
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            status=TaskStatus.failed,
+            output={
+                "authorized": False,
+                "trace_id": trace_id,
+                "service_id": tool_call.service_id,
+            },
+            error=error,
+        )
+
+    event = state_client.create_event(
+        tool_call_event(tool_call, EventType.tool_called, trace_id),
+        headers=headers,
+    )
+    audit = state_client.create_audit_log(
+        tool_call_audit(tool_call, "tool.allowed", trace_id),
+        headers=headers,
+    )
+    try:
         execution_output = execute_authorized_tool(
             tool_call,
             state_client=state_client,
             headers=headers,
             trace_id=trace_id,
         )
+    except HTTPException as error:
+        detail = str(getattr(error, "detail", error))
+        state_client.create_event(
+            tool_call_event(tool_call, EventType.tool_failed, trace_id, error=detail),
+            headers=headers,
+        )
+        state_client.create_audit_log(
+            tool_call_audit(tool_call, "tool.failed", trace_id, error=detail),
+            headers=headers,
+        )
+        if raise_on_failure:
+            raise
         return ToolResult(
             tool_name=tool_call.tool_name,
+            status=TaskStatus.failed,
             output={
                 "authorized": True,
                 "trace_id": trace_id,
                 "event_id": event.id,
                 "audit_id": audit.id,
                 "service_id": tool_call.service_id,
-                **execution_output,
             },
+            error=detail,
         )
-    except (StateServiceRequestError, TaskRunnerRequestError) as error:
-        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
-    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
-        raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
+
+    return ToolResult(
+        tool_name=tool_call.tool_name,
+        output={
+            "authorized": True,
+            "trace_id": trace_id,
+            "event_id": event.id,
+            "audit_id": audit.id,
+            "service_id": tool_call.service_id,
+            **execution_output,
+        },
+    )
 
 
 def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) -> str | None:

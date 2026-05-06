@@ -179,11 +179,14 @@ export type TaskRunResult = {
     task_id: string;
     status: TaskStatus;
     summary: string;
+    tool_calls_requested?: ToolCallRequest[];
+    tool_results?: ToolResult[];
   };
   model_call_events: EventRecord[];
   created_sub_tasks: TaskRecord[];
   sub_task_events: EventRecord[];
   memory_events: EventRecord[];
+  tool_results: ToolResult[];
   cost_records: CostRecord[];
 };
 

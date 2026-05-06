@@ -1617,6 +1617,12 @@ def task_result_payload(result: AgentResult) -> dict[str, Any]:
         "memory_candidates": [
             memory_item.model_dump(mode="json") for memory_item in result.memory_candidates
         ],
+        "tool_calls_requested": [
+            tool_call.model_dump(mode="json") for tool_call in result.tool_calls_requested
+        ],
+        "tool_results": [
+            tool_result.model_dump(mode="json") for tool_result in result.tool_results
+        ],
         "model_usage": result.model_usage.model_dump(mode="json")
         if result.model_usage is not None
         else None,

@@ -18,6 +18,7 @@ from synarch_models import (
     ModelUsage,
     TaskDraft,
     TaskStatus,
+    ToolCallRequest,
 )
 
 app = FastAPI(title="Synarch Agent Runtime", version="0.1.0")
@@ -138,6 +139,7 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         status=status,
         actions_taken=parsed_actions(parsed),
         sub_tasks_created=parsed_sub_tasks(parsed, request),
+        tool_calls_requested=parsed_tool_calls(parsed, request),
         events_emitted=[event],
         memory_candidates=parsed_memory_candidates(parsed, request),
         model_usage=usage,
@@ -154,11 +156,17 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
                 "content": (
                     "You are a Synarch AI employee. Return only valid JSON with keys "
                     "status, summary, actions_taken, sub_tasks_created, and "
-                    "memory_candidates. "
+                    "memory_candidates, tool_calls_requested. "
                     "status must be one of completed, needs_review, blocked, failed. "
                     "sub_tasks_created must be a list of small debuggable task objects "
                     "with title, description, assigned_agent_id, depends_on, "
                     "acceptance_criteria, and sequence. "
+                    "tool_calls_requested must be a list of tool call objects with "
+                    "tool_name, service_id, reason, and arguments. Request a tool only "
+                    "when it is in world_view.permissions.allowed_tools and you need "
+                    "external evidence before finalizing. If tool_results are present, "
+                    "use them and return a final answer with no new tool calls. "
+                    "For web.fetch, arguments must include url and may include max_bytes. "
                     "Keep the answer operational and auditable."
                 ),
             },
@@ -174,6 +182,10 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
                         "memory_context": request.memory_context.model_dump(mode="json")
                         if request.memory_context is not None
                         else None,
+                        "tool_results": [
+                            tool_result.model_dump(mode="json")
+                            for tool_result in request.tool_results
+                        ],
                     },
                     ensure_ascii=False,
                 ),
@@ -257,6 +269,44 @@ def parsed_sub_tasks(
             )
         )
     return drafts
+
+
+def parsed_tool_calls(
+    parsed: dict[str, Any],
+    request: AgentTaskRequest,
+) -> list[ToolCallRequest]:
+    raw_tool_calls = parsed.get("tool_calls_requested", [])
+    if not isinstance(raw_tool_calls, list):
+        return []
+
+    tool_calls: list[ToolCallRequest] = []
+    for raw_tool_call in raw_tool_calls:
+        if not isinstance(raw_tool_call, dict):
+            continue
+        tool_name = raw_tool_call.get("tool_name")
+        reason = raw_tool_call.get("reason")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            continue
+        if not isinstance(reason, str) or not reason.strip():
+            continue
+        arguments = raw_tool_call.get("arguments", {})
+        if not isinstance(arguments, dict):
+            arguments = {}
+        service_id = raw_tool_call.get("service_id")
+        if service_id is not None and not isinstance(service_id, str):
+            service_id = None
+        tool_calls.append(
+            ToolCallRequest(
+                agent_id=request.world_view.agent_id,
+                tool_name=tool_name.strip(),
+                service_id=service_id,
+                project_id=request.task.project_id,
+                task_id=request.task.id,
+                reason=reason.strip(),
+                arguments=arguments,
+            )
+        )
+    return tool_calls
 
 
 def parsed_memory_candidates(

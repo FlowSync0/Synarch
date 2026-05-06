@@ -39,6 +39,7 @@ from synarch_models import (
     TaskReviewDecision,
     TaskReviewResult,
     TaskStatus,
+    ToolCallRequest,
 )
 
 
@@ -320,7 +321,17 @@ class FakeStateClient:
         recorded_task = task.model_copy(
             update={
                 "status": result.status,
-                "result": {"summary": result.summary},
+                "result": {
+                    "summary": result.summary,
+                    "tool_results": [
+                        tool_result.model_dump(mode="json")
+                        for tool_result in result.tool_results
+                    ],
+                    "tool_calls_requested": [
+                        tool_call.model_dump(mode="json")
+                        for tool_call in result.tool_calls_requested
+                    ],
+                },
             }
         )
         self.tasks[self.tasks.index(task)] = recorded_task
@@ -607,6 +618,57 @@ class SubTaskAgentRuntimeClient:
                 ),
             ],
             summary="Created the next supplier workflow slices.",
+        )
+
+
+class ToolLoopAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        if not request.tool_results:
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Requested source evidence before finalizing"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="web.fetch",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Fetch source evidence for the supplier research task.",
+                        arguments={"url": "https://example.com", "max_bytes": 2048},
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=20,
+                    output_tokens=10,
+                    total_cost=0.000002,
+                ),
+                summary="Need source evidence before final answer.",
+            )
+
+        assert request.tool_results[0].tool_name == "web.fetch"
+        assert request.tool_results[0].output["title"] == "Example Domain"
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Reviewed fetched source evidence"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=30,
+                output_tokens=12,
+                total_cost=0.000003,
+            ),
+            summary="Completed supplier source verification from Example Domain.",
         )
 
 
@@ -977,8 +1039,12 @@ def test_tool_gate_rejects_private_web_fetch_url() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "web.fetch cannot target private hosts"
-    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
     assert state_client.audit_logs[0].action == "tool.allowed"
+    assert state_client.audit_logs[1].action == "tool.failed"
 
 
 def test_run_next_task_executes_first_ready_task() -> None:
@@ -1147,6 +1213,96 @@ def test_run_next_task_persists_agent_created_sub_tasks() -> None:
         parent_task.id,
         parent_task.id,
     ]
+
+
+def test_run_next_task_executes_agent_requested_tool_call() -> None:
+    state_client = FakeStateClient()
+    task = TaskRecord(
+        id="task_tool_loop",
+        project_id="project_sourcing",
+        title="Verify supplier source",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=["Fetched source evidence is reviewed before completion."],
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_sourcing",
+            title="Supplier sourcing",
+            goal="Find reliable suppliers with source evidence.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(task)
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web", "service-event-log"],
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = ToolLoopAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=gateway_main.GatewayToolRunner(),
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        assert url == "https://example.com"
+        assert max_bytes == 2048
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": 512,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain This domain is for examples.",
+        }
+
+    original_fetch_http_url = gateway_main.fetch_http_url
+    gateway_main.fetch_http_url = fake_fetch_http_url
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_tool_loop"},
+        )
+    finally:
+        gateway_main.fetch_http_url = original_fetch_http_url
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert runtime_client.requests[0].tool_results == []
+    assert runtime_client.requests[1].tool_results[0].tool_name == "web.fetch"
+    assert payload["agent_result"]["status"] == "completed"
+    assert payload["tool_results"][0]["tool_name"] == "web.fetch"
+    assert payload["tool_results"][0]["output"]["title"] == "Example Domain"
+    assert payload["cost_records"][0]["input_tokens"] == 50
+    assert payload["cost_records"][0]["output_tokens"] == 22
+    assert payload["cost_records"][0]["total_cost"] == 0.000005
+    assert [event.type for event in state_client.events] == [
+        EventType.model_call_started,
+        EventType.tool_called,
+        EventType.model_call_completed,
+    ]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+    assert state_client.tasks[0].result is not None
+    assert state_client.tasks[0].result["tool_results"][0]["tool_name"] == "web.fetch"
 
 
 def test_run_task_by_id_executes_requested_task() -> None:

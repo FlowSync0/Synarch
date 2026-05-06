@@ -2272,6 +2272,12 @@ export default function DashboardPage() {
                         memory {run.memory_context.items.length} items /{" "}
                         {run.memory_context.tokens_used}/{run.memory_context.token_budget} tokens
                       </p>
+                      {run.tool_results.length > 0 ? (
+                        <p className="text-[11px] text-muted">
+                          tools {run.tool_results.length}:{" "}
+                          {run.tool_results.map((toolResult) => toolResult.tool_name).join(", ")}
+                        </p>
+                      ) : null}
                     </div>
                   ))}
                   <p className="text-xs text-muted">

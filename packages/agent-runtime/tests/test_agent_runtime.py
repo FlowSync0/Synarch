@@ -69,6 +69,11 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
         assert headers["Authorization"] == "Bearer test-key"
         assert json["model"] == "deepseek/deepseek-v4-flash"
         assert json["reasoning"] == {"effort": "none", "exclude": True}
+        messages = json["messages"]
+        assert isinstance(messages, list)
+        user_message = messages[1]
+        assert isinstance(user_message, dict)
+        assert '"tool_results": []' in str(user_message["content"])
         assert timeout == runtime_main.settings.openrouter_timeout_seconds
         return httpx.Response(
             200,
@@ -87,6 +92,11 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
                                 '"depends_on":[],'
                                 '"acceptance_criteria":["Source URL and blocker are recorded."],'
                                 '"sequence":1}],'
+                                '"tool_calls_requested":[{'
+                                '"tool_name":"web.fetch",'
+                                '"service_id":"connector-supplier-web",'
+                                '"reason":"Fetch source evidence.",'
+                                '"arguments":{"url":"https://example.com"}}],'
                                 '"memory_candidates":["Remember supplier MOQ constraint."]}'
                             )
                         }
@@ -115,6 +125,13 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
                 "agent_id": "agent-dev",
                 "role": "Code and infra",
                 "division": "dev",
+                "permissions": {
+                    "allowed_tools": ["web.fetch"],
+                    "denied_tools": [],
+                    "can_read_scopes": [],
+                    "can_write_scopes": [],
+                },
+                "available_services": ["connector-supplier-web"],
             },
         },
     )
@@ -128,6 +145,9 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
     assert payload["sub_tasks_created"][0]["acceptance_criteria"] == [
         "Source URL and blocker are recorded."
     ]
+    assert payload["tool_calls_requested"][0]["tool_name"] == "web.fetch"
+    assert payload["tool_calls_requested"][0]["service_id"] == "connector-supplier-web"
+    assert payload["tool_calls_requested"][0]["arguments"] == {"url": "https://example.com"}
     assert payload["memory_candidates"][0]["content"] == "Remember supplier MOQ constraint."
     assert payload["model_usage"] == {
         "provider_id": "provider-openrouter",

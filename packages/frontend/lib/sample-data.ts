@@ -31,7 +31,7 @@ export const overview = [
   },
   {
     label: "Tests backend",
-    value: "103",
+    value: "104",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,14 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Brancher un connecteur web en lecture seule",
+  title: "Boucle runtime outillee",
   body:
-    "Le dashboard peut declencher web.fetch via la porte permissions, le gateway valide l'URL publique, limite la lecture et retourne titre/extrait avec audit.",
+    "Un agent peut demander un tool call pendant une execution de tache, le gateway l'autorise via la porte permissions, puis le runtime recoit le resultat pour finaliser.",
   checks: [
-    "agent-ops-sourcing possede web.fetch dans ses outils autorises",
-    "connector-supplier-web expose web.search et web.fetch",
-    "POST /tools/call execute web.fetch seulement apres autorisation",
-    "Les URL locales ou privees sont bloquees avant appel HTTP"
+    "AgentResult expose tool_calls_requested",
+    "AgentTaskRequest renvoie tool_results au runtime",
+    "TaskRunResult expose les tool_results au dashboard",
+    "Le cout cumule les deux appels modele de la boucle"
   ]
 };
 
@@ -169,8 +169,8 @@ export const layers = [
     name: "Domain Agents",
     status: "partial" as Status,
     icon: BrainCircuit,
-    summary: "Runtime stub type et testable, pas encore de boucle agent persistante.",
-    next: "Finance stub pour intake facture avec resultats verifies."
+    summary: "Runtime type et testable avec boucle tool-call limitee a un round.",
+    next: "Generaliser les outils et conditions d'arret par service."
   },
   {
     id: "E",
@@ -304,6 +304,11 @@ export const backlog = [
   {
     label: "M4.1",
     title: "Tool-use runtime loop",
+    done: true
+  },
+  {
+    label: "M4.2",
+    title: "Scheduler worker live loop",
     done: false
   },
   {

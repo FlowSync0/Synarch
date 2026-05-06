@@ -500,6 +500,7 @@ class AgentTaskRequest(SynarchModel):
     project: ProjectRecord | None = None
     world_view: LocalWorldView
     memory_context: MemoryContext | None = None
+    tool_results: list[ToolResult] = Field(default_factory=list)
     provider_id: str | None = None
     model_id: str | None = None
     max_output_tokens: int | None = None
@@ -513,6 +514,8 @@ class AgentResult(SynarchModel):
     sub_tasks_created: list[TaskDraft] = Field(default_factory=list)
     events_emitted: list[EventRecord] = Field(default_factory=list)
     memory_candidates: list[MemoryItem] = Field(default_factory=list)
+    tool_calls_requested: list[ToolCallRequest] = Field(default_factory=list)
+    tool_results: list[ToolResult] = Field(default_factory=list)
     model_usage: ModelUsage | None = None
     summary: str
 
@@ -528,6 +531,7 @@ class TaskRunResult(SynarchModel):
     created_sub_tasks: list[TaskRecord] = Field(default_factory=list)
     sub_task_events: list[EventRecord] = Field(default_factory=list)
     memory_events: list[EventRecord] = Field(default_factory=list)
+    tool_results: list[ToolResult] = Field(default_factory=list)
     cost_records: list[CostRecord] = Field(default_factory=list)
 
 
