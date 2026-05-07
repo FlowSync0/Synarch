@@ -72,6 +72,7 @@ GoalEnvelope
   -> Durable connector jobs can be created, run-recorded, and stopped with event/audit traces
   -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Gateway connector-job execution uses the existing tool gate before recording runs
+  -> Gateway connector-job batch execution records bounded runs plus empty tick traces
   -> Event Service timeline
 ```
 

@@ -16,10 +16,13 @@ from synarch_models import (
     AgentProjectAssignment,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorJobKind,
     ConnectorJobRecord,
+    ConnectorJobRunBatchResult,
     ConnectorJobRunRequest,
     ConnectorJobRunResult,
     ConnectorJobRunStatus,
+    ConnectorJobStatus,
     CostBudgetEvaluation,
     CostRecord,
     CostSummary,
@@ -713,6 +716,77 @@ def execute_connector_job(
         ) from error
 
 
+@app.post("/connector-jobs/run-ready", response_model=ConnectorJobRunBatchResult)
+def run_ready_connector_jobs(
+    request: Request,
+    max_jobs: int = Query(default=3, ge=1, le=20),
+    kind: ConnectorJobKind = ConnectorJobKind.cron,
+    service_id: str | None = None,
+    project_id: str | None = None,
+    owner_agent_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> ConnectorJobRunBatchResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = connector_job_executor_headers(trace_id)
+    try:
+        jobs = state_client.list_connector_jobs(
+            service_id=service_id,
+            project_id=project_id,
+            owner_agent_id=owner_agent_id,
+            kind=kind,
+            status=ConnectorJobStatus.active,
+        )
+        selected_jobs = jobs[:max_jobs]
+        runs = [
+            state_client.record_connector_job_run(
+                job.id,
+                connector_job_execution_run_request(
+                    job,
+                    state_client=state_client,
+                    control_plane=control_plane,
+                    headers=headers,
+                    trace_id=trace_id,
+                ),
+                headers=headers,
+            )
+            for job in selected_jobs
+        ]
+        stop_reason = (
+            "max_jobs_reached"
+            if len(jobs) > len(selected_jobs)
+            else "no_ready_connector_job"
+        )
+        batch_result = ConnectorJobRunBatchResult(
+            trace_id=trace_id,
+            max_jobs=max_jobs,
+            kind=kind,
+            service_id=service_id,
+            project_id=project_id,
+            owner_agent_id=owner_agent_id,
+            stop_reason=stop_reason,
+            runs=runs,
+        )
+        tick_event = state_client.create_event(
+            connector_job_batch_tick_event(batch_result),
+            headers=headers,
+        )
+        tick_audit_log = state_client.create_audit_log(
+            connector_job_batch_tick_audit(batch_result),
+            headers=headers,
+        )
+        return batch_result.model_copy(
+            update={"tick_event": tick_event, "tick_audit_log": tick_audit_log}
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Connector job batch dependency unavailable",
+        ) from error
+
+
 @app.get("/tools/registry")
 def list_tool_registry() -> dict[str, object]:
     return {"tools": registered_tool_manifests()}
@@ -1125,6 +1199,63 @@ def connector_job_tool_call(
         trace_id=trace_id,
         reason=reason,
         arguments=arguments,
+    )
+
+
+def connector_job_batch_tick_payload(
+    batch_result: ConnectorJobRunBatchResult,
+) -> dict[str, object]:
+    return {
+        "max_jobs": batch_result.max_jobs,
+        "kind": batch_result.kind,
+        "service_id": batch_result.service_id,
+        "project_id": batch_result.project_id,
+        "owner_agent_id": batch_result.owner_agent_id,
+        "stop_reason": batch_result.stop_reason,
+        "run_count": len(batch_result.runs),
+        "connector_job_ids": [run_result.run.job_id for run_result in batch_result.runs],
+        "connector_job_run_ids": [run_result.run.id for run_result in batch_result.runs],
+        "run_statuses": [run_result.run.status for run_result in batch_result.runs],
+        "executor": "gateway-connector-job-executor",
+    }
+
+
+def connector_job_batch_tick_event(
+    batch_result: ConnectorJobRunBatchResult,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_job_tick,
+        target=(
+            batch_result.project_id
+            or batch_result.service_id
+            or "gateway-connector-job-executor"
+        ),
+        payload=connector_job_batch_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
+    )
+
+
+def connector_job_batch_tick_audit(
+    batch_result: ConnectorJobRunBatchResult,
+) -> AuditLogRecord:
+    if batch_result.project_id is not None:
+        target_type = "project"
+        target_id = batch_result.project_id
+    elif batch_result.service_id is not None:
+        target_type = "service"
+        target_id = batch_result.service_id
+    else:
+        target_type = "connector_job_executor"
+        target_id = "gateway-connector-job-executor"
+
+    return AuditLogRecord(
+        actor_type=ActorType.service,
+        actor_id="gateway-connector-job-executor",
+        action="connector_job.tick",
+        target_type=target_type,
+        target_id=target_id,
+        payload=connector_job_batch_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
     )
 
 

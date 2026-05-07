@@ -294,6 +294,8 @@ Progress:
   `skipped` runs and `connector_job.tick` audit/event traces until real connector adapters are wired.
 - Done: gateway can execute connector jobs through the existing tool gate, preserving permission,
   service capability, credential scope, tool event, connector run, and audit boundaries.
+- Done: gateway can execute active connector jobs in bounded batches and record a durable
+  `connector_job.tick` event/audit even when no connector job is ready.
 
 Definition of done:
 

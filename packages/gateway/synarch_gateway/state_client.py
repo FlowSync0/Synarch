@@ -218,6 +218,17 @@ class StateClient(Protocol):
 
     def get_connector_job(self, job_id: str) -> ConnectorJobRecord: ...
 
+    def list_connector_jobs(
+        self,
+        *,
+        service_id: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        owner_agent_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[ConnectorJobRecord]: ...
+
     def record_connector_job_run(
         self,
         job_id: str,
@@ -536,6 +547,29 @@ class HttpStateClient:
     def get_connector_job(self, job_id: str) -> ConnectorJobRecord:
         response = self._get(f"/connector-jobs/{job_id}")
         return ConnectorJobRecord.model_validate(response.json())
+
+    def list_connector_jobs(
+        self,
+        *,
+        service_id: str | None = None,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        owner_agent_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[ConnectorJobRecord]:
+        response = self._get(
+            "/connector-jobs",
+            params=compact_params(
+                service_id=service_id,
+                project_id=project_id,
+                task_id=task_id,
+                owner_agent_id=owner_agent_id,
+                kind=kind,
+                status=status,
+            ),
+        )
+        return [ConnectorJobRecord.model_validate(job) for job in response.json()]
 
     def record_connector_job_run(
         self,
