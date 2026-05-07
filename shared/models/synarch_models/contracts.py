@@ -604,6 +604,19 @@ class ConnectorJobRunResult(SynarchModel):
     audit_log: AuditLogRecord | None = None
 
 
+class ConnectorJobRunBatchResult(SynarchModel):
+    trace_id: str
+    max_jobs: int
+    kind: ConnectorJobKind = ConnectorJobKind.cron
+    service_id: str | None = None
+    project_id: str | None = None
+    owner_agent_id: str | None = None
+    stop_reason: str
+    runs: list[ConnectorJobRunResult] = Field(default_factory=list)
+    tick_event: EventRecord | None = None
+    tick_audit_log: AuditLogRecord | None = None
+
+
 class AgentLifecycleRequest(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("agent_lifecycle"))
     action: LifecycleAction

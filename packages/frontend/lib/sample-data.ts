@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.6",
-    detail: "Connector job lifecycle",
+    value: "M5.7",
+    detail: "Connector job tick",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "130",
+    value: "131",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,14 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector jobs",
+  title: "Connector job runner",
   body:
-    "Le state-service peut creer un job cron/webhook rattache a un service, enregistrer une execution, puis stopper le job avec event et audit.",
+    "Le state-service peut creer un job cron/webhook, enregistrer un tick borne, journaliser un run skipped explicite tant que l'adaptateur reel n'est pas branche, puis stopper le job avec event et audit.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRunRecord garde sortie, erreur, trigger et trace",
-    "Create, run et stop emettent connector_job.* et audit logs",
+    "Tick borne cree des runs skipped non fake quand aucun adaptateur n'est branche",
+    "Create, tick, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"
   ]
 };

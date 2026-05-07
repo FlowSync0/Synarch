@@ -290,6 +290,8 @@ Progress:
   recording `service_health.checked` and `services.health_checked` with the same trace ID.
 - Done: state-service can create active cron/webhook connector jobs, record bounded job runs, and
   stop jobs through traceable `connector_job.*` events and audit logs.
+- Done: state-service can tick active connector jobs with a bounded limit, recording explicit
+  `skipped` runs and `connector_job.tick` audit/event traces until real connector adapters are wired.
 
 Definition of done:
 

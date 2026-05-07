@@ -70,6 +70,7 @@ GoalEnvelope
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Gateway service health checks filtered by LocalWorldView with event and audit traces
   -> Durable connector jobs can be created, run-recorded, and stopped with event/audit traces
+  -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Event Service timeline
 ```
 

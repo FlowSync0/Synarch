@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -16,8 +17,10 @@ from synarch_models import (
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobRunBatchResult,
     ConnectorJobRunRecord,
     ConnectorJobRunRequest,
     ConnectorJobRunResult,
@@ -74,6 +77,9 @@ DEFAULT_TASK_LEASE_SECONDS = 300
 MAX_TASK_LEASE_SECONDS = 86_400
 DEFAULT_TASK_RETRY_BACKOFF_SECONDS = 60
 MAX_TASK_RETRY_BACKOFF_SECONDS = 86_400
+MAX_CONNECTOR_JOB_TICK_JOBS = 20
+CONNECTOR_JOB_RUNNER_ID = "connector-job-runner"
+CONNECTOR_JOB_ADAPTER_NOT_WIRED_REASON = "connector adapter execution is not wired yet"
 
 
 @dataclass(frozen=True)
@@ -207,6 +213,17 @@ def connector_job_stop_audit_context(
         actor_type=stop_request.stopped_by_type,
         actor_id=stop_request.stopped_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def connector_job_runner_audit_context(
+    request: Request,
+    trace_id: str | None = None,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=ActorType.service,
+        actor_id=CONNECTOR_JOB_RUNNER_ID,
+        trace_id=trace_id or request.headers.get("x-synarch-trace-id"),
     )
 
 
@@ -446,6 +463,11 @@ def validate_connector_job_run_request(run_request: ConnectorJobRunRequest) -> N
         raise HTTPException(
             status_code=400,
             detail="Completed connector job runs cannot include error",
+        )
+    if run_request.status == ConnectorJobRunStatus.skipped and run_request.error is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Skipped connector job runs cannot include error",
         )
     if run_request.completed_at < run_request.started_at:
         raise HTTPException(
@@ -1979,6 +2001,96 @@ def connector_job_run_event(
     )
 
 
+def connector_job_tick_payload(
+    batch_result: ConnectorJobRunBatchResult,
+) -> dict[str, object]:
+    return {
+        "max_jobs": batch_result.max_jobs,
+        "kind": batch_result.kind,
+        "service_id": batch_result.service_id,
+        "project_id": batch_result.project_id,
+        "owner_agent_id": batch_result.owner_agent_id,
+        "stop_reason": batch_result.stop_reason,
+        "run_count": len(batch_result.runs),
+        "connector_job_ids": [run_result.run.job_id for run_result in batch_result.runs],
+        "connector_job_run_ids": [run_result.run.id for run_result in batch_result.runs],
+        "run_statuses": [run_result.run.status for run_result in batch_result.runs],
+    }
+
+
+def connector_job_tick_event(batch_result: ConnectorJobRunBatchResult) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_job_tick,
+        target=(batch_result.project_id or batch_result.service_id or CONNECTOR_JOB_RUNNER_ID),
+        payload=connector_job_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
+    )
+
+
+def connector_job_tick_audit(
+    batch_result: ConnectorJobRunBatchResult,
+) -> AuditLogRecord:
+    if batch_result.project_id is not None:
+        target_type = "project"
+        target_id = batch_result.project_id
+    elif batch_result.service_id is not None:
+        target_type = "service"
+        target_id = batch_result.service_id
+    else:
+        target_type = "connector_job_runner"
+        target_id = CONNECTOR_JOB_RUNNER_ID
+
+    return AuditLogRecord(
+        actor_type=ActorType.service,
+        actor_id=CONNECTOR_JOB_RUNNER_ID,
+        action="connector_job.tick",
+        target_type=target_type,
+        target_id=target_id,
+        payload=connector_job_tick_payload(batch_result),
+        trace_id=batch_result.trace_id,
+    )
+
+
+def create_connector_job_run_result(
+    job: ConnectorJobRecord,
+    run_request: ConnectorJobRunRequest,
+    trace_id: str | None,
+    audit_context: AuditContext | None,
+) -> ConnectorJobRunResult:
+    validate_connector_job_run_request(run_request)
+    if job.status != ConnectorJobStatus.active:
+        raise HTTPException(status_code=409, detail="Connector job is stopped")
+    run = ConnectorJobRunRecord(
+        job_id=job.id,
+        service_id=job.service_id,
+        project_id=job.project_id,
+        task_id=job.task_id,
+        owner_agent_id=job.owner_agent_id,
+        status=run_request.status,
+        triggered_by_type=run_request.triggered_by_type,
+        triggered_by_id=run_request.triggered_by_id,
+        trace_id=trace_id,
+        output=run_request.output,
+        error=run_request.error,
+        started_at=run_request.started_at,
+        completed_at=run_request.completed_at,
+    )
+    record = create_record(REPOSITORIES.connector_job_runs, run.id, run)
+    event = create_domain_event(connector_job_run_event(job, record, trace_id))
+    audit = write_audit_log(
+        audit_context,
+        action="connector_job.run_recorded",
+        target_type="connector_job",
+        target_id=job.id,
+        payload={
+            **connector_job_payload(job),
+            "connector_job_run_id": record.id,
+            "run_status": record.status,
+        },
+    )
+    return ConnectorJobRunResult(run=record, event=event, audit_log=audit)
+
+
 @app.post("/connector-jobs", response_model=ConnectorJobMutationResult, status_code=201)
 def create_connector_job(
     job: ConnectorJobRecord,
@@ -2026,6 +2138,72 @@ def list_connector_jobs(
     return sorted(jobs, key=lambda job: job.created_at)
 
 
+@app.post("/connector-jobs/tick", response_model=ConnectorJobRunBatchResult)
+def tick_connector_jobs(
+    request: Request,
+    max_jobs: int = 1,
+    kind: ConnectorJobKind = ConnectorJobKind.cron,
+    service_id: str | None = None,
+    project_id: str | None = None,
+    owner_agent_id: str | None = None,
+) -> ConnectorJobRunBatchResult:
+    if max_jobs < 1 or max_jobs > MAX_CONNECTOR_JOB_TICK_JOBS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"max_jobs must be between 1 and {MAX_CONNECTOR_JOB_TICK_JOBS}",
+        )
+
+    trace_id = request.headers.get("x-synarch-trace-id") or (
+        f"trace_connector_job_tick_{uuid4().hex[:12]}"
+    )
+    jobs = list_connector_jobs(
+        service_id=service_id,
+        project_id=project_id,
+        owner_agent_id=owner_agent_id,
+        kind=kind,
+        status=ConnectorJobStatus.active,
+    )
+    selected_jobs = jobs[:max_jobs]
+    runs = [
+        create_connector_job_run_result(
+            job,
+            ConnectorJobRunRequest(
+                status=ConnectorJobRunStatus.skipped,
+                triggered_by_type=ActorType.service,
+                triggered_by_id=CONNECTOR_JOB_RUNNER_ID,
+                output={
+                    "executed": False,
+                    "reason": CONNECTOR_JOB_ADAPTER_NOT_WIRED_REASON,
+                    "adapter_required": True,
+                    "kind": job.kind,
+                    "schedule": job.schedule,
+                    "webhook_path": job.webhook_path,
+                },
+            ),
+            trace_id,
+            connector_job_runner_audit_context(request, trace_id),
+        )
+        for job in selected_jobs
+    ]
+    stop_reason = "max_jobs_reached" if len(jobs) > len(selected_jobs) else "no_ready_connector_job"
+    batch_result = ConnectorJobRunBatchResult(
+        trace_id=trace_id,
+        max_jobs=max_jobs,
+        kind=kind,
+        service_id=service_id,
+        project_id=project_id,
+        owner_agent_id=owner_agent_id,
+        stop_reason=stop_reason,
+        runs=runs,
+    )
+    tick_event = create_domain_event(connector_job_tick_event(batch_result))
+    tick_audit = connector_job_tick_audit(batch_result)
+    tick_audit_log = create_record(REPOSITORIES.audit_logs, tick_audit.id, tick_audit)
+    return batch_result.model_copy(
+        update={"tick_event": tick_event, "tick_audit_log": tick_audit_log}
+    )
+
+
 @app.get("/connector-jobs/{job_id}", response_model=ConnectorJobRecord)
 def read_connector_job(job_id: str) -> ConnectorJobRecord:
     return read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
@@ -2041,40 +2219,14 @@ def record_connector_job_run(
     run_request: ConnectorJobRunRequest,
     request: Request,
 ) -> ConnectorJobRunResult:
-    validate_connector_job_run_request(run_request)
     job = read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
-    if job.status != ConnectorJobStatus.active:
-        raise HTTPException(status_code=409, detail="Connector job is stopped")
     trace_id = request.headers.get("x-synarch-trace-id")
-    run = ConnectorJobRunRecord(
-        job_id=job.id,
-        service_id=job.service_id,
-        project_id=job.project_id,
-        task_id=job.task_id,
-        owner_agent_id=job.owner_agent_id,
-        status=run_request.status,
-        triggered_by_type=run_request.triggered_by_type,
-        triggered_by_id=run_request.triggered_by_id,
-        trace_id=trace_id,
-        output=run_request.output,
-        error=run_request.error,
-        started_at=run_request.started_at,
-        completed_at=run_request.completed_at,
-    )
-    record = create_record(REPOSITORIES.connector_job_runs, run.id, run)
-    event = create_domain_event(connector_job_run_event(job, record, trace_id))
-    audit = write_audit_log(
+    return create_connector_job_run_result(
+        job,
+        run_request,
+        trace_id,
         connector_job_run_audit_context(run_request, request),
-        action="connector_job.run_recorded",
-        target_type="connector_job",
-        target_id=job.id,
-        payload={
-            **connector_job_payload(job),
-            "connector_job_run_id": record.id,
-            "run_status": record.status,
-        },
     )
-    return ConnectorJobRunResult(run=record, event=event, audit_log=audit)
 
 
 @app.get("/connector-job-runs", response_model=list[ConnectorJobRunRecord])

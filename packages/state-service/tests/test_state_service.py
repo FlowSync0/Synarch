@@ -583,6 +583,136 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
     }.issubset({audit["action"] for audit in audits})
 
 
+def test_connector_job_tick_records_bounded_skipped_runs_and_audits() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_job_tick"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-ops-tick",
+            "name": "IA Ops Tick",
+            "role": "Connector job owner",
+            "division": "ops-sourcing",
+        },
+    )
+    assert agent_response.status_code == 201
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-tick",
+            "name": "Supplier Tick Connector",
+            "kind": "tool_provider",
+            "capabilities": ["web.fetch"],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier tick",
+            "goal": "Record bounded connector ticks without fake adapter execution.",
+            "owner_agent_id": "agent-ops-tick",
+        },
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+
+    task_ids = []
+    for title in ["Follow supplier A", "Follow supplier B", "Receive webhook"]:
+        task_response = client.post(
+            "/tasks",
+            json=task_payload(
+                project_id,
+                title,
+                assigned_agent_id="agent-ops-tick",
+                required_tools=["web.fetch"],
+            ),
+        )
+        assert task_response.status_code == 201
+        task_ids.append(task_response.json()["id"])
+
+    for job_payload in [
+        {
+            "id": "connector-job-cron-a",
+            "task_id": task_ids[0],
+            "kind": "cron",
+            "schedule": "*/15 * * * *",
+            "purpose": "Check supplier A replies.",
+        },
+        {
+            "id": "connector-job-cron-b",
+            "task_id": task_ids[1],
+            "kind": "cron",
+            "schedule": "*/30 * * * *",
+            "purpose": "Check supplier B replies.",
+        },
+        {
+            "id": "connector-job-webhook",
+            "task_id": task_ids[2],
+            "kind": "webhook",
+            "webhook_path": "/webhooks/supplier",
+            "purpose": "Receive supplier webhook replies.",
+        },
+    ]:
+        job_response = client.post(
+            "/connector-jobs",
+            headers={
+                "X-Synarch-Actor-Type": "agent",
+                "X-Synarch-Actor-Id": "agent-ops-tick",
+                "X-Synarch-Trace-Id": trace_id,
+            },
+            json={
+                "service_id": "connector-supplier-tick",
+                "project_id": project_id,
+                "owner_agent_id": "agent-ops-tick",
+                "created_by_type": "agent",
+                "created_by_id": "agent-ops-tick",
+                **job_payload,
+            },
+        )
+        assert job_response.status_code == 201
+
+    tick_response = client.post(
+        "/connector-jobs/tick",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        params={"max_jobs": 1, "kind": "cron"},
+    )
+
+    assert tick_response.status_code == 200
+    tick = tick_response.json()
+    assert tick["trace_id"] == trace_id
+    assert tick["max_jobs"] == 1
+    assert tick["kind"] == "cron"
+    assert tick["stop_reason"] == "max_jobs_reached"
+    assert len(tick["runs"]) == 1
+    run = tick["runs"][0]["run"]
+    assert run["job_id"] in {"connector-job-cron-a", "connector-job-cron-b"}
+    assert run["status"] == "skipped"
+    assert run["triggered_by_type"] == "service"
+    assert run["triggered_by_id"] == "connector-job-runner"
+    assert run["output"]["executed"] is False
+    assert run["output"]["adapter_required"] is True
+    assert run["output"]["reason"] == "connector adapter execution is not wired yet"
+    assert tick["tick_event"]["type"] == "connector_job.tick"
+    assert tick["tick_audit_log"]["action"] == "connector_job.tick"
+    assert tick["tick_event"]["payload"]["connector_job_ids"] == [run["job_id"]]
+    assert tick["tick_event"]["payload"]["run_statuses"] == ["skipped"]
+
+    runs = client.get("/connector-job-runs", params={"status": "skipped"}).json()
+    assert [record["id"] for record in runs] == [run["id"]]
+    assert runs[0]["job_id"] != "connector-job-webhook"
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    connector_event_types = [
+        event["type"] for event in events if event["type"].startswith("connector_job.")
+    ]
+    assert "connector_job.run_recorded" in connector_event_types
+    assert connector_event_types[-1] == "connector_job.tick"
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert "connector_job.tick" in {audit["action"] for audit in audits}
+
+
 def test_task_requires_acceptance_criteria() -> None:
     client = TestClient(app)
     project_response = client.post(

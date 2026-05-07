@@ -3,6 +3,7 @@ from synarch_models import (
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobRunBatchResult,
     ConnectorJobRunRecord,
     ConnectorJobRunResult,
     ConnectorJobRunStatus,
@@ -297,15 +298,30 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
         run=run,
         event=EventRecord(type=EventType.connector_job_run_recorded),
     )
+    batch_result = ConnectorJobRunBatchResult(
+        trace_id="trace_connector_job",
+        max_jobs=1,
+        stop_reason="max_jobs_reached",
+        runs=[
+            ConnectorJobRunResult(
+                run=run.model_copy(update={"status": ConnectorJobRunStatus.skipped}),
+                event=EventRecord(type=EventType.connector_job_run_recorded),
+            )
+        ],
+        tick_event=EventRecord(type=EventType.connector_job_tick),
+    )
 
     job_payload = mutation.model_dump(mode="json")["job"]
     run_payload = run_result.model_dump(mode="json")["run"]
+    batch_payload = batch_result.model_dump(mode="json")
 
     assert job_payload["kind"] == "cron"
     assert job_payload["status"] == "active"
     assert job_payload["metadata"] == {"stop_condition": "supplier replied"}
     assert run_payload["status"] == "completed"
     assert run_payload["output"] == {"message": "Follow-up sent."}
+    assert batch_payload["runs"][0]["run"]["status"] == "skipped"
+    assert batch_payload["tick_event"]["type"] == "connector_job.tick"
 
 
 def test_project_workspace_and_assignment_isolate_project_context() -> None:
