@@ -9,6 +9,8 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentSoul,
     AuditLogRecord,
+    ConnectorJobRecord,
+    ConnectorJobRunRecord,
     CostRecord,
     CredentialAccessRequest,
     CredentialGrant,
@@ -105,6 +107,8 @@ class StateRepositories:
     agent_lifecycle_requests: RecordRepository[AgentLifecycleRequest]
     credential_access_requests: RecordRepository[CredentialAccessRequest]
     credential_grants: RecordRepository[CredentialGrant]
+    connector_jobs: RecordRepository[ConnectorJobRecord]
+    connector_job_runs: RecordRepository[ConnectorJobRunRecord]
 
     @classmethod
     def in_memory(cls) -> StateRepositories:
@@ -129,6 +133,8 @@ class StateRepositories:
             agent_lifecycle_requests=InMemoryRecordRepository(),
             credential_access_requests=InMemoryRecordRepository(),
             credential_grants=InMemoryRecordRepository(),
+            connector_jobs=InMemoryRecordRepository(),
+            connector_job_runs=InMemoryRecordRepository(),
         )
 
     @classmethod

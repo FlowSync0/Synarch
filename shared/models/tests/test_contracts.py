@@ -1,5 +1,12 @@
 from synarch_models import (
     AgentResult,
+    ConnectorJobKind,
+    ConnectorJobMutationResult,
+    ConnectorJobRecord,
+    ConnectorJobRunRecord,
+    ConnectorJobRunResult,
+    ConnectorJobRunStatus,
+    ConnectorJobStatus,
     CostRecord,
     CredentialAccessRequest,
     EventRecord,
@@ -252,6 +259,53 @@ def test_service_health_report_captures_probe_result() -> None:
     assert payload["checks"][0]["status"] == "healthy"
     assert payload["checks"][0]["response_time_ms"] == 12
     assert payload["event"]["type"] == "service_health.checked"
+
+
+def test_connector_job_lifecycle_contracts_are_serializable() -> None:
+    job = ConnectorJobRecord(
+        id="connector-job-supplier-followup",
+        service_id="connector-supplier-web",
+        project_id="project_supplier_search",
+        task_id="task_supplier_followup",
+        owner_agent_id="agent-ops-sourcing",
+        kind=ConnectorJobKind.cron,
+        status=ConnectorJobStatus.active,
+        schedule="0 */6 * * *",
+        purpose="Relance fournisseur toutes les six heures jusqu'a reponse.",
+        created_by_type="agent",
+        created_by_id="agent-ops-sourcing",
+        metadata={"stop_condition": "supplier replied"},
+    )
+    run = ConnectorJobRunRecord(
+        id="connector-job-run-supplier-followup",
+        job_id=job.id,
+        service_id=job.service_id,
+        project_id=job.project_id,
+        task_id=job.task_id,
+        owner_agent_id=job.owner_agent_id,
+        status=ConnectorJobRunStatus.completed,
+        triggered_by_type="service",
+        triggered_by_id="connector-job-runner",
+        trace_id="trace_connector_job",
+        output={"message": "Follow-up sent."},
+    )
+    mutation = ConnectorJobMutationResult(
+        job=job,
+        event=EventRecord(type=EventType.connector_job_created),
+    )
+    run_result = ConnectorJobRunResult(
+        run=run,
+        event=EventRecord(type=EventType.connector_job_run_recorded),
+    )
+
+    job_payload = mutation.model_dump(mode="json")["job"]
+    run_payload = run_result.model_dump(mode="json")["run"]
+
+    assert job_payload["kind"] == "cron"
+    assert job_payload["status"] == "active"
+    assert job_payload["metadata"] == {"stop_condition": "supplier replied"}
+    assert run_payload["status"] == "completed"
+    assert run_payload["output"] == {"message": "Follow-up sent."}
 
 
 def test_project_workspace_and_assignment_isolate_project_context() -> None:

@@ -429,6 +429,160 @@ def test_credential_grant_application_updates_service_and_request() -> None:
     ]
 
 
+def test_connector_job_lifecycle_records_events_and_audits() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_job_lifecycle"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-ops-sourcing-live",
+            "name": "IA Ops Live",
+            "role": "Supplier follow-up",
+            "division": "ops-sourcing",
+        },
+    )
+    assert agent_response.status_code == 201
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-followup",
+            "name": "Supplier Follow-up",
+            "kind": "tool_provider",
+            "capabilities": ["web.fetch"],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier follow-up",
+            "goal": "Follow suppliers until a bounded stop condition.",
+            "owner_agent_id": "agent-ops-sourcing-live",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Follow supplier replies",
+            assigned_agent_id="agent-ops-sourcing-live",
+            required_tools=["web.fetch"],
+        ),
+    )
+    assert task_response.status_code == 201
+
+    job_response = client.post(
+        "/connector-jobs",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-sourcing-live",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "connector-job-supplier-followup",
+            "service_id": "connector-supplier-followup",
+            "project_id": project_response.json()["id"],
+            "task_id": task_response.json()["id"],
+            "owner_agent_id": "agent-ops-sourcing-live",
+            "kind": "cron",
+            "schedule": "0 */6 * * *",
+            "purpose": "Relance supplier every six hours until reply.",
+            "created_by_type": "agent",
+            "created_by_id": "agent-ops-sourcing-live",
+            "metadata": {"stop_condition": "supplier replied"},
+        },
+    )
+
+    assert job_response.status_code == 201
+    job_result = job_response.json()
+    assert job_result["job"]["status"] == "active"
+    assert job_result["event"]["type"] == "connector_job.created"
+    assert job_result["audit_log"]["action"] == "connector_job.created"
+
+    jobs = client.get(
+        "/connector-jobs",
+        params={"task_id": task_response.json()["id"], "status": "active"},
+    ).json()
+    assert [job["id"] for job in jobs] == ["connector-job-supplier-followup"]
+
+    run_response = client.post(
+        "/connector-jobs/connector-job-supplier-followup/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "completed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {"attempt": 1, "result": "no supplier reply yet"},
+        },
+    )
+
+    assert run_response.status_code == 201
+    run_result = run_response.json()
+    assert run_result["run"]["status"] == "completed"
+    assert run_result["run"]["service_id"] == "connector-supplier-followup"
+    assert run_result["event"]["type"] == "connector_job.run_recorded"
+    assert run_result["audit_log"]["action"] == "connector_job.run_recorded"
+
+    runs = client.get(
+        "/connector-job-runs",
+        params={"job_id": "connector-job-supplier-followup"},
+    ).json()
+    assert [run["id"] for run in runs] == [run_result["run"]["id"]]
+
+    stop_response = client.post(
+        "/connector-jobs/connector-job-supplier-followup/stop",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-sourcing-live",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "stopped_by_type": "agent",
+            "stopped_by_id": "agent-ops-sourcing-live",
+            "reason": "Supplier replied; stop follow-up loop.",
+        },
+    )
+
+    assert stop_response.status_code == 200
+    stopped = stop_response.json()
+    assert stopped["job"]["status"] == "stopped"
+    assert stopped["event"]["type"] == "connector_job.stopped"
+    assert stopped["audit_log"]["action"] == "connector_job.stopped"
+
+    repeat_run = client.post(
+        "/connector-jobs/connector-job-supplier-followup/runs",
+        json={
+            "status": "completed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+        },
+    )
+    assert repeat_run.status_code == 409
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [
+        event["type"]
+        for event in events
+        if event["type"].startswith("connector_job.")
+    ] == [
+        "connector_job.created",
+        "connector_job.run_recorded",
+        "connector_job.stopped",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert {
+        "connector_job.created",
+        "connector_job.run_recorded",
+        "connector_job.stopped",
+    }.issubset({audit["action"] for audit in audits})
+
+
 def test_task_requires_acceptance_criteria() -> None:
     client = TestClient(app)
     project_response = client.post(

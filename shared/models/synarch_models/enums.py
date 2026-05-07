@@ -60,6 +60,9 @@ class EventType(StrEnum):
     cost_recorded = "cost.recorded"
     scheduler_tick = "scheduler.tick"
     service_health_checked = "service_health.checked"
+    connector_job_created = "connector_job.created"
+    connector_job_run_recorded = "connector_job.run_recorded"
+    connector_job_stopped = "connector_job.stopped"
     tool_called = "tool.called"
     tool_failed = "tool.failed"
     approval_requested = "approval.requested"
@@ -114,3 +117,18 @@ class ServiceHealthStatus(StrEnum):
     healthy = "healthy"
     unhealthy = "unhealthy"
     unknown = "unknown"
+
+
+class ConnectorJobKind(StrEnum):
+    cron = "cron"
+    webhook = "webhook"
+
+
+class ConnectorJobStatus(StrEnum):
+    active = "active"
+    stopped = "stopped"
+
+
+class ConnectorJobRunStatus(StrEnum):
+    completed = "completed"
+    failed = "failed"

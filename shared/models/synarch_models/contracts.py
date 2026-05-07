@@ -9,6 +9,9 @@ from .enums import (
     AgentStatus,
     AiProviderType,
     ApprovalStatus,
+    ConnectorJobKind,
+    ConnectorJobRunStatus,
+    ConnectorJobStatus,
     EventType,
     LifecycleAction,
     MemoryStatus,
@@ -242,6 +245,59 @@ class CredentialGrant(SynarchModel):
     rationale: str
     active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorJobRecord(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("connector_job"))
+    service_id: str
+    project_id: str | None = None
+    task_id: str | None = None
+    owner_agent_id: str
+    kind: ConnectorJobKind
+    status: ConnectorJobStatus = ConnectorJobStatus.active
+    schedule: str | None = None
+    webhook_path: str | None = None
+    purpose: str = Field(min_length=1)
+    created_by_type: ActorType
+    created_by_id: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    stopped_at: datetime | None = None
+
+
+class ConnectorJobRunRequest(SynarchModel):
+    status: ConnectorJobRunStatus
+    triggered_by_type: ActorType
+    triggered_by_id: str
+    output: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorJobRunRecord(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("connector_job_run"))
+    job_id: str
+    service_id: str
+    project_id: str | None = None
+    task_id: str | None = None
+    owner_agent_id: str
+    status: ConnectorJobRunStatus
+    triggered_by_type: ActorType
+    triggered_by_id: str
+    trace_id: str | None = None
+    output: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorJobStopRequest(SynarchModel):
+    stopped_by_type: ActorType
+    stopped_by_id: str
+    reason: str = Field(min_length=1)
+    stopped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class TaskRecord(SynarchModel):
@@ -534,6 +590,18 @@ class ServiceHealthReport(SynarchModel):
     event: EventRecord | None = None
     audit_log: AuditLogRecord | None = None
     checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorJobMutationResult(SynarchModel):
+    job: ConnectorJobRecord
+    event: EventRecord
+    audit_log: AuditLogRecord | None = None
+
+
+class ConnectorJobRunResult(SynarchModel):
+    run: ConnectorJobRunRecord
+    event: EventRecord
+    audit_log: AuditLogRecord | None = None
 
 
 class AgentLifecycleRequest(SynarchModel):

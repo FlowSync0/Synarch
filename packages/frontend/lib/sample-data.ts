@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.5",
-    detail: "Service health checks",
+    value: "M5.6",
+    detail: "Connector job lifecycle",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "128",
+    value: "130",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Health services",
+  title: "Connector jobs",
   body:
-    "Le gateway peut verifier les services accessibles a un agent, retourner un rapport type, et ecrire event plus audit avec le meme trace_id.",
+    "Le state-service peut creer un job cron/webhook rattache a un service, enregistrer une execution, puis stopper le job avec event et audit.",
   checks: [
-    "ServiceHealthReport porte status, latence, code HTTP et erreur",
-    "Le health-check filtre les services par LocalWorldView",
-    "Chaque verification emet service_health.checked et services.health_checked",
+    "ConnectorJobRecord porte service, projet, tache, owner et kind",
+    "ConnectorJobRunRecord garde sortie, erreur, trigger et trace",
+    "Create, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"
   ]
 };
@@ -193,8 +193,8 @@ export const layers = [
     name: "Execution",
     status: "partial" as Status,
     icon: PlugZap,
-    summary: "Tool gate permissionne event.emit et web.fetch; health-checks de services sont traces et audites.",
-    next: "Ajouter cycle de vie cron/webhook pour connecteurs externes."
+    summary: "Tool gate, credential gates, health-checks et cycle de vie durable des jobs connecteurs existent.",
+    next: "Ajouter runner cron/webhook borne qui execute les jobs actifs."
   },
   {
     id: "H",
@@ -369,6 +369,11 @@ export const backlog = [
   {
     label: "M5.5",
     title: "Service health checks",
+    done: true
+  },
+  {
+    label: "M5.6",
+    title: "Connector job lifecycle",
     done: true
   },
   {

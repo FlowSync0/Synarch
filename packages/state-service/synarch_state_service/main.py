@@ -16,6 +16,14 @@ from synarch_models import (
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorJobMutationResult,
+    ConnectorJobRecord,
+    ConnectorJobRunRecord,
+    ConnectorJobRunRequest,
+    ConnectorJobRunResult,
+    ConnectorJobRunStatus,
+    ConnectorJobStatus,
+    ConnectorJobStopRequest,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -176,6 +184,28 @@ def credential_grant_application_audit_context(
     return AuditContext(
         actor_type=application.applied_by_type,
         actor_id=application.applied_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def connector_job_run_audit_context(
+    run_request: ConnectorJobRunRequest,
+    request: Request,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=run_request.triggered_by_type,
+        actor_id=run_request.triggered_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def connector_job_stop_audit_context(
+    stop_request: ConnectorJobStopRequest,
+    request: Request,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=stop_request.stopped_by_type,
+        actor_id=stop_request.stopped_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
     )
 
@@ -366,6 +396,61 @@ def validate_credential_access_request(access_request: CredentialAccessRequest) 
         raise HTTPException(
             status_code=400,
             detail="Credential access request tool must be required by task",
+        )
+
+
+def validate_connector_job(job: ConnectorJobRecord) -> None:
+    if not REPOSITORIES.services.exists(job.service_id):
+        raise HTTPException(status_code=400, detail=f"Unknown service: {job.service_id}")
+    owner_agent = REPOSITORIES.agents.get(job.owner_agent_id)
+    if owner_agent is None:
+        raise HTTPException(status_code=400, detail=f"Unknown owner agent: {job.owner_agent_id}")
+    if owner_agent.status != AgentStatus.active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Connector job owner is not active: {job.owner_agent_id}",
+        )
+    if job.project_id is not None and not REPOSITORIES.projects.exists(job.project_id):
+        raise HTTPException(status_code=400, detail=f"Unknown project: {job.project_id}")
+    if job.task_id is not None:
+        task = REPOSITORIES.tasks.get(job.task_id)
+        if task is None:
+            raise HTTPException(status_code=400, detail=f"Unknown task: {job.task_id}")
+        if job.project_id is not None and task.project_id != job.project_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Connector job task must belong to project",
+            )
+        if task.assigned_agent_id != job.owner_agent_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Connector job owner must match task assignment",
+            )
+    if job.kind == "cron" and not (job.schedule or "").strip():
+        raise HTTPException(status_code=400, detail="Cron connector jobs require schedule")
+    if job.kind == "webhook" and not (job.webhook_path or "").strip():
+        raise HTTPException(status_code=400, detail="Webhook connector jobs require webhook_path")
+    if job.status != ConnectorJobStatus.active:
+        raise HTTPException(status_code=400, detail="Connector jobs must be created active")
+    if job.stopped_at is not None:
+        raise HTTPException(status_code=400, detail="New connector jobs cannot be stopped")
+
+
+def validate_connector_job_run_request(run_request: ConnectorJobRunRequest) -> None:
+    if run_request.status == ConnectorJobRunStatus.failed and not run_request.error:
+        raise HTTPException(status_code=400, detail="Failed connector job runs require error")
+    if (
+        run_request.status == ConnectorJobRunStatus.completed
+        and run_request.error is not None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Completed connector job runs cannot include error",
+        )
+    if run_request.completed_at < run_request.started_at:
+        raise HTTPException(
+            status_code=400,
+            detail="Connector job run completed_at cannot be before started_at",
         )
 
 
@@ -1840,6 +1925,217 @@ def list_services(kind: str | None = None, enabled: bool | None = None) -> list[
 @app.get("/services/{service_id}", response_model=ServiceDefinition)
 def read_service(service_id: str) -> ServiceDefinition:
     return read_record(REPOSITORIES.services, service_id, "service")
+
+
+def connector_job_payload(job: ConnectorJobRecord) -> dict[str, object]:
+    return {
+        "connector_job_id": job.id,
+        "service_id": job.service_id,
+        "project_id": job.project_id,
+        "task_id": job.task_id,
+        "owner_agent_id": job.owner_agent_id,
+        "kind": job.kind,
+        "status": job.status,
+        "schedule": job.schedule,
+        "webhook_path": job.webhook_path,
+    }
+
+
+def connector_job_event(
+    job: ConnectorJobRecord,
+    event_type: EventType,
+    trace_id: str | None,
+    *,
+    extra_payload: dict[str, object] | None = None,
+) -> EventRecord:
+    payload = connector_job_payload(job)
+    if extra_payload is not None:
+        payload.update(extra_payload)
+    return EventRecord(
+        type=event_type,
+        source_agent_id=job.owner_agent_id,
+        target=job.project_id or job.service_id,
+        payload=payload,
+        trace_id=trace_id,
+    )
+
+
+def connector_job_run_event(
+    job: ConnectorJobRecord,
+    run: ConnectorJobRunRecord,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_job_run_recorded,
+        source_agent_id=job.owner_agent_id,
+        target=job.project_id or job.service_id,
+        payload={
+            **connector_job_payload(job),
+            "connector_job_run_id": run.id,
+            "run_status": run.status,
+            "error": run.error,
+        },
+        trace_id=trace_id,
+    )
+
+
+@app.post("/connector-jobs", response_model=ConnectorJobMutationResult, status_code=201)
+def create_connector_job(
+    job: ConnectorJobRecord,
+    request: Request,
+) -> ConnectorJobMutationResult:
+    validate_connector_job(job)
+    audit_context = audit_context_from_request(request)
+    trace_id = request.headers.get("x-synarch-trace-id")
+    record = create_record(REPOSITORIES.connector_jobs, job.id, job)
+    event = create_domain_event(
+        connector_job_event(record, EventType.connector_job_created, trace_id)
+    )
+    audit = write_audit_log(
+        audit_context,
+        action="connector_job.created",
+        target_type="connector_job",
+        target_id=record.id,
+        payload=connector_job_payload(record),
+    )
+    return ConnectorJobMutationResult(job=record, event=event, audit_log=audit)
+
+
+@app.get("/connector-jobs", response_model=list[ConnectorJobRecord])
+def list_connector_jobs(
+    service_id: str | None = None,
+    project_id: str | None = None,
+    task_id: str | None = None,
+    owner_agent_id: str | None = None,
+    kind: str | None = None,
+    status: str | None = None,
+) -> list[ConnectorJobRecord]:
+    jobs = REPOSITORIES.connector_jobs.list_records()
+    if service_id is not None:
+        jobs = [job for job in jobs if job.service_id == service_id]
+    if project_id is not None:
+        jobs = [job for job in jobs if job.project_id == project_id]
+    if task_id is not None:
+        jobs = [job for job in jobs if job.task_id == task_id]
+    if owner_agent_id is not None:
+        jobs = [job for job in jobs if job.owner_agent_id == owner_agent_id]
+    if kind is not None:
+        jobs = [job for job in jobs if job.kind == kind]
+    if status is not None:
+        jobs = [job for job in jobs if job.status == status]
+    return sorted(jobs, key=lambda job: job.created_at)
+
+
+@app.get("/connector-jobs/{job_id}", response_model=ConnectorJobRecord)
+def read_connector_job(job_id: str) -> ConnectorJobRecord:
+    return read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
+
+
+@app.post(
+    "/connector-jobs/{job_id}/runs",
+    response_model=ConnectorJobRunResult,
+    status_code=201,
+)
+def record_connector_job_run(
+    job_id: str,
+    run_request: ConnectorJobRunRequest,
+    request: Request,
+) -> ConnectorJobRunResult:
+    validate_connector_job_run_request(run_request)
+    job = read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
+    if job.status != ConnectorJobStatus.active:
+        raise HTTPException(status_code=409, detail="Connector job is stopped")
+    trace_id = request.headers.get("x-synarch-trace-id")
+    run = ConnectorJobRunRecord(
+        job_id=job.id,
+        service_id=job.service_id,
+        project_id=job.project_id,
+        task_id=job.task_id,
+        owner_agent_id=job.owner_agent_id,
+        status=run_request.status,
+        triggered_by_type=run_request.triggered_by_type,
+        triggered_by_id=run_request.triggered_by_id,
+        trace_id=trace_id,
+        output=run_request.output,
+        error=run_request.error,
+        started_at=run_request.started_at,
+        completed_at=run_request.completed_at,
+    )
+    record = create_record(REPOSITORIES.connector_job_runs, run.id, run)
+    event = create_domain_event(connector_job_run_event(job, record, trace_id))
+    audit = write_audit_log(
+        connector_job_run_audit_context(run_request, request),
+        action="connector_job.run_recorded",
+        target_type="connector_job",
+        target_id=job.id,
+        payload={
+            **connector_job_payload(job),
+            "connector_job_run_id": record.id,
+            "run_status": record.status,
+        },
+    )
+    return ConnectorJobRunResult(run=record, event=event, audit_log=audit)
+
+
+@app.get("/connector-job-runs", response_model=list[ConnectorJobRunRecord])
+def list_connector_job_runs(
+    job_id: str | None = None,
+    service_id: str | None = None,
+    project_id: str | None = None,
+    task_id: str | None = None,
+    owner_agent_id: str | None = None,
+    status: str | None = None,
+) -> list[ConnectorJobRunRecord]:
+    runs = REPOSITORIES.connector_job_runs.list_records()
+    if job_id is not None:
+        runs = [run for run in runs if run.job_id == job_id]
+    if service_id is not None:
+        runs = [run for run in runs if run.service_id == service_id]
+    if project_id is not None:
+        runs = [run for run in runs if run.project_id == project_id]
+    if task_id is not None:
+        runs = [run for run in runs if run.task_id == task_id]
+    if owner_agent_id is not None:
+        runs = [run for run in runs if run.owner_agent_id == owner_agent_id]
+    if status is not None:
+        runs = [run for run in runs if run.status == status]
+    return sorted(runs, key=lambda run: run.started_at)
+
+
+@app.post("/connector-jobs/{job_id}/stop", response_model=ConnectorJobMutationResult)
+def stop_connector_job(
+    job_id: str,
+    stop_request: ConnectorJobStopRequest,
+    request: Request,
+) -> ConnectorJobMutationResult:
+    job = read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
+    if job.status == ConnectorJobStatus.stopped:
+        raise HTTPException(status_code=409, detail="Connector job is already stopped")
+    stopped_job = job.model_copy(
+        update={
+            "status": ConnectorJobStatus.stopped,
+            "updated_at": stop_request.stopped_at,
+            "stopped_at": stop_request.stopped_at,
+        }
+    )
+    record = update_record(REPOSITORIES.connector_jobs, job_id, stopped_job, "connector job")
+    trace_id = request.headers.get("x-synarch-trace-id")
+    event = create_domain_event(
+        connector_job_event(
+            record,
+            EventType.connector_job_stopped,
+            trace_id,
+            extra_payload={"reason": stop_request.reason},
+        )
+    )
+    audit = write_audit_log(
+        connector_job_stop_audit_context(stop_request, request),
+        action="connector_job.stopped",
+        target_type="connector_job",
+        target_id=record.id,
+        payload={**connector_job_payload(record), "reason": stop_request.reason},
+    )
+    return ConnectorJobMutationResult(job=record, event=event, audit_log=audit)
 
 
 @app.post("/skills", response_model=SkillDefinition, status_code=201)

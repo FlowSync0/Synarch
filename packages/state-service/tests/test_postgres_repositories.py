@@ -26,6 +26,8 @@ def test_postgres_repository_factory_builds_all_state_stores() -> None:
     assert isinstance(repositories.agent_souls, PostgresRecordRepository)
     assert isinstance(repositories.audit_logs, PostgresRecordRepository)
     assert isinstance(repositories.skills, PostgresRecordRepository)
+    assert isinstance(repositories.connector_jobs, PostgresRecordRepository)
+    assert isinstance(repositories.connector_job_runs, PostgresRecordRepository)
     assert repositories.projects.table_name == "projects"
     assert repositories.project_workspaces.table_name == "project_workspaces"
     assert repositories.agent_project_assignments.table_name == "agent_project_assignments"
@@ -34,6 +36,8 @@ def test_postgres_repository_factory_builds_all_state_stores() -> None:
     assert repositories.agent_souls.table_name == "agent_souls"
     assert repositories.audit_logs.table_name == "audit_logs"
     assert repositories.skills.table_name == "skills"
+    assert repositories.connector_jobs.table_name == "connector_jobs"
+    assert repositories.connector_job_runs.table_name == "connector_job_runs"
 
 
 def test_postgres_repository_adapts_jsonb_with_json_serializable_values() -> None:
