@@ -18,6 +18,7 @@ from synarch_models import (
     ProjectRecord,
     ProjectSplitApplication,
     ProjectWorkspace,
+    ServiceDefinition,
     TaskLeaseRecoveryResult,
     TaskRecord,
     TaskReviewDecision,
@@ -78,6 +79,13 @@ class StateClient(Protocol):
         event_type: str | None = None,
         trace_id: str | None = None,
     ) -> list[EventRecord]: ...
+
+    def list_services(
+        self,
+        *,
+        kind: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[ServiceDefinition]: ...
 
     def assess_project_complexity(
         self,
@@ -271,6 +279,20 @@ class HttpStateClient:
             params=compact_params(event_type=event_type, trace_id=trace_id),
         )
         return [EventRecord.model_validate(event) for event in response.json()]
+
+    def list_services(
+        self,
+        *,
+        kind: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[ServiceDefinition]:
+        params: dict[str, str] = {}
+        if kind is not None:
+            params["kind"] = kind
+        if enabled is not None:
+            params["enabled"] = str(enabled).lower()
+        response = self._get("/services", params=params)
+        return [ServiceDefinition.model_validate(service) for service in response.json()]
 
     def assess_project_complexity(
         self,

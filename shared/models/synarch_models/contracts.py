@@ -13,6 +13,7 @@ from .enums import (
     LifecycleAction,
     MemoryStatus,
     Priority,
+    ServiceHealthStatus,
     ServiceKind,
     TaskReviewAction,
     TaskStatus,
@@ -364,6 +365,22 @@ class ServiceDefinition(SynarchModel):
     enabled: bool = True
 
 
+class ServiceHealthCheck(SynarchModel):
+    service_id: str
+    name: str
+    kind: ServiceKind
+    enabled: bool
+    status: ServiceHealthStatus = ServiceHealthStatus.unknown
+    base_url: str | None = None
+    health_endpoint: str | None = None
+    status_code: int | None = None
+    response_time_ms: int | None = None
+    error: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    credential_scopes: list[str] = Field(default_factory=list)
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class CredentialGrantApplicationRequest(SynarchModel):
     request_id: str
     service_id: str
@@ -508,6 +525,15 @@ class AuditLogRecord(SynarchModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     trace_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ServiceHealthReport(SynarchModel):
+    trace_id: str
+    agent_id: str | None = None
+    checks: list[ServiceHealthCheck] = Field(default_factory=list)
+    event: EventRecord | None = None
+    audit_log: AuditLogRecord | None = None
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class AgentLifecycleRequest(SynarchModel):

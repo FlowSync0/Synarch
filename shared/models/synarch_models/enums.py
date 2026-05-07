@@ -59,6 +59,7 @@ class EventType(StrEnum):
     model_call_failed = "model_call.failed"
     cost_recorded = "cost.recorded"
     scheduler_tick = "scheduler.tick"
+    service_health_checked = "service_health.checked"
     tool_called = "tool.called"
     tool_failed = "tool.failed"
     approval_requested = "approval.requested"
@@ -107,3 +108,9 @@ class ServiceKind(StrEnum):
     external = "external"
     ai_provider = "ai_provider"
     tool_provider = "tool_provider"
+
+
+class ServiceHealthStatus(StrEnum):
+    healthy = "healthy"
+    unhealthy = "unhealthy"
+    unknown = "unknown"

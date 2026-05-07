@@ -124,6 +124,31 @@ export type ToolCredentialStatus = {
   missing_scopes: string[];
 };
 
+export type ServiceHealthCheck = {
+  service_id: string;
+  name: string;
+  kind: "internal" | "external" | "ai_provider" | "tool_provider";
+  enabled: boolean;
+  status: "healthy" | "unhealthy" | "unknown";
+  base_url?: string | null;
+  health_endpoint?: string | null;
+  status_code?: number | null;
+  response_time_ms?: number | null;
+  error?: string | null;
+  capabilities: string[];
+  credential_scopes: string[];
+  checked_at: string;
+};
+
+export type ServiceHealthReport = {
+  trace_id: string;
+  agent_id?: string | null;
+  checks: ServiceHealthCheck[];
+  event?: unknown | null;
+  audit_log?: unknown | null;
+  checked_at: string;
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -393,6 +418,24 @@ export async function listToolCredentialStatuses(
     credential_statuses: ToolCredentialStatus[];
   }>(response);
   return payload.credential_statuses;
+}
+
+export async function checkServiceHealth(agentId?: string): Promise<ServiceHealthReport> {
+  const params = new URLSearchParams();
+  if (agentId) {
+    params.set("agent_id", agentId);
+  }
+  const query = params.toString();
+  const response = await fetch(
+    `/api/gateway/services/health-checks${query ? `?${query}` : ""}`,
+    {
+      method: "POST",
+      headers: {
+        "X-Synarch-Trace-Id": `trace_frontend_service_health_${Date.now()}`
+      }
+    }
+  );
+  return parseJsonResponse<ServiceHealthReport>(response);
 }
 
 export async function listCredentialAccessRequests(): Promise<CredentialAccessRequest[]> {

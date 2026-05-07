@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+import time
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Literal, Protocol
@@ -39,6 +40,10 @@ from synarch_models import (
     ProjectTimeline,
     ProjectWorkspace,
     RoutingDecision,
+    ServiceDefinition,
+    ServiceHealthCheck,
+    ServiceHealthReport,
+    ServiceHealthStatus,
     TaskDraft,
     TaskRecord,
     TaskReviewDecision,
@@ -153,6 +158,7 @@ class Settings(BaseSettings):
     web_fetch_timeout_seconds: float = 10.0
     web_fetch_max_bytes: int = 50_000
     web_fetch_max_redirects: int = 5
+    service_health_timeout_seconds: float = 3.0
 
 
 settings = Settings()
@@ -319,6 +325,14 @@ def tool_gate_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-tool-gate",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def service_health_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-service-health",
         "x-synarch-trace-id": trace_id,
     }
 
@@ -674,6 +688,53 @@ def list_tool_credential_status(
             for status in tool_credential_statuses_for_world_view(world_view)
         ],
     }
+
+
+@app.post("/services/health-checks", response_model=ServiceHealthReport)
+def check_service_health(
+    request: Request,
+    agent_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> ServiceHealthReport:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = service_health_headers(trace_id)
+    try:
+        services = state_client.list_services(enabled=True)
+        if agent_id is not None:
+            world_view = control_plane.get_world_view(agent_id)
+            available_service_ids = set(world_view.available_services)
+            services = [
+                service for service in services if service.id in available_service_ids
+            ]
+        checks = [
+            probe_service_health(
+                service,
+                timeout_seconds=settings.service_health_timeout_seconds,
+            )
+            for service in services
+        ]
+        report = ServiceHealthReport(
+            trace_id=trace_id,
+            agent_id=agent_id,
+            checks=checks,
+        )
+        event = state_client.create_event(
+            service_health_event(report),
+            headers=headers,
+        )
+        audit_log = state_client.create_audit_log(
+            service_health_audit(report),
+            headers=headers,
+        )
+        return report.model_copy(update={"event": event, "audit_log": audit_log})
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Service health dependency unavailable",
+        ) from error
 
 
 @app.get("/credential-access-requests", response_model=list[CredentialAccessRequest])
@@ -1073,6 +1134,128 @@ def candidate_service_ids_for_tool(
         if service_id in available_services
         and tool_name in world_view.available_service_capabilities[service_id]
     ]
+
+
+def probe_service_health(
+    service: ServiceDefinition,
+    *,
+    timeout_seconds: float,
+) -> ServiceHealthCheck:
+    if not service.enabled:
+        return service_health_check(
+            service,
+            status=ServiceHealthStatus.unknown,
+            error="Service is disabled.",
+        )
+    if service.base_url is None or service.health_endpoint is None:
+        return service_health_check(
+            service,
+            status=ServiceHealthStatus.unknown,
+            error="No health endpoint configured.",
+        )
+
+    url = service_health_url(service)
+    started_at = time.monotonic()
+    try:
+        response = httpx.get(url, timeout=timeout_seconds)
+    except httpx.HTTPError:
+        response_time_ms = elapsed_ms(started_at)
+        return service_health_check(
+            service,
+            status=ServiceHealthStatus.unhealthy,
+            response_time_ms=response_time_ms,
+            error="Health request failed.",
+        )
+
+    response_time_ms = elapsed_ms(started_at)
+    if 200 <= response.status_code < 300:
+        return service_health_check(
+            service,
+            status=ServiceHealthStatus.healthy,
+            status_code=response.status_code,
+            response_time_ms=response_time_ms,
+        )
+    return service_health_check(
+        service,
+        status=ServiceHealthStatus.unhealthy,
+        status_code=response.status_code,
+        response_time_ms=response_time_ms,
+        error=f"Health endpoint returned HTTP {response.status_code}.",
+    )
+
+
+def service_health_url(service: ServiceDefinition) -> str:
+    base_url = (service.base_url or "").rstrip("/")
+    endpoint = (service.health_endpoint or "").lstrip("/")
+    return urljoin(f"{base_url}/", endpoint)
+
+
+def elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def service_health_check(
+    service: ServiceDefinition,
+    *,
+    status: ServiceHealthStatus,
+    status_code: int | None = None,
+    response_time_ms: int | None = None,
+    error: str | None = None,
+) -> ServiceHealthCheck:
+    return ServiceHealthCheck(
+        service_id=service.id,
+        name=service.name,
+        kind=service.kind,
+        enabled=service.enabled,
+        status=status,
+        base_url=service.base_url,
+        health_endpoint=service.health_endpoint,
+        status_code=status_code,
+        response_time_ms=response_time_ms,
+        error=error,
+        capabilities=service.capabilities,
+        credential_scopes=service.credential_scopes,
+    )
+
+
+def service_health_counts(checks: list[ServiceHealthCheck]) -> dict[str, int]:
+    return {
+        status.value: sum(1 for check in checks if check.status == status)
+        for status in ServiceHealthStatus
+    }
+
+
+def service_health_payload(report: ServiceHealthReport) -> dict[str, object]:
+    return {
+        "agent_id": report.agent_id,
+        "service_count": len(report.checks),
+        "service_ids": [check.service_id for check in report.checks],
+        "status_counts": service_health_counts(report.checks),
+        "statuses": {
+            check.service_id: check.status for check in report.checks
+        },
+    }
+
+
+def service_health_event(report: ServiceHealthReport) -> EventRecord:
+    return EventRecord(
+        type=EventType.service_health_checked,
+        target=report.agent_id or "services",
+        payload=service_health_payload(report),
+        trace_id=report.trace_id,
+    )
+
+
+def service_health_audit(report: ServiceHealthReport) -> AuditLogRecord:
+    return AuditLogRecord(
+        actor_type=ActorType.service,
+        actor_id="gateway-service-health",
+        action="services.health_checked",
+        target_type="agent" if report.agent_id is not None else "services",
+        target_id=report.agent_id or "services",
+        payload=service_health_payload(report),
+        trace_id=report.trace_id,
+    )
 
 
 def execute_authorized_tool(

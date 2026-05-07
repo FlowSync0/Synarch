@@ -68,6 +68,7 @@ GoalEnvelope
   -> Human task review can retry, cancel, or update dead-lettered work
   -> Optional scheduler worker loop for cron/server execution
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
+  -> Gateway service health checks filtered by LocalWorldView with event and audit traces
   -> Event Service timeline
 ```
 

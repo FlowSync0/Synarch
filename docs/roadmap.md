@@ -46,7 +46,7 @@ through the dashboard.
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry recovery, retry backoff, dead-letter review metadata, task review decisions, task result recording, bounded ready-batch execution, scheduler tick event/audit records, opt-in scheduler worker, and timeline events exist. | No durable worker queue or human review UI for dead-lettered tasks yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
 | F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and proposed memory candidates exist. | No human review UI, compaction, vector search, graph retrieval, or hierarchical context database. | Approve a proposed memory candidate and verify it appears in the next task context. |
-| G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, and `event.emit` adapter exist. | No external tool adapters, sandbox execution, cron, or webhook runner yet. | Denied tool call fails before execution and records audit/event. |
+| G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, `event.emit`/`web.fetch` adapters, task-scoped credential gates, and service health checks exist. | No sandbox execution, cron, or webhook runner yet. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
 
@@ -286,6 +286,8 @@ Progress:
   `/tasks/run-ready` batch.
 - Done: humans can list `needs_review` tasks and retry, cancel, or update them through traceable
   task review decisions.
+- Done: gateway can run agent-filtered service health checks, returning a typed status report while
+  recording `service_health.checked` and `services.health_checked` with the same trace ID.
 
 Definition of done:
 

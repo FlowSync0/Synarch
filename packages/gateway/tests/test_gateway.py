@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -56,6 +57,7 @@ class FakeStateClient:
         self.workspaces: list[ProjectWorkspace] = []
         self.assignments: list[AgentProjectAssignment] = []
         self.tasks: list[TaskRecord] = []
+        self.services: list[ServiceDefinition] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
@@ -127,6 +129,19 @@ class FakeStateClient:
         if trace_id is not None:
             events = [event for event in events if event.trace_id == trace_id]
         return events
+
+    def list_services(
+        self,
+        *,
+        kind: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[ServiceDefinition]:
+        services = self.services
+        if kind is not None:
+            services = [service for service in services if service.kind == kind]
+        if enabled is not None:
+            services = [service for service in services if service.enabled is enabled]
+        return services
 
     def assess_project_complexity(
         self,
@@ -1107,6 +1122,81 @@ def test_tool_credential_status_endpoint_reports_ready_scope(
     assert response.status_code == 200
     assert response.json()["credential_statuses"][0]["status"] == "ready"
     assert response.json()["credential_statuses"][0]["missing_scopes"] == []
+
+
+def test_service_health_check_filters_agent_services_and_records_trace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.extend(
+        [
+            ServiceDefinition(
+                id="connector-supplier-web",
+                name="Supplier Web",
+                kind="tool_provider",
+                base_url="https://supplier.example",
+                health_endpoint="/healthz",
+                capabilities=["web.fetch"],
+                credential_scopes=["browser:authenticated_fetch"],
+                allowed_divisions=["ops-sourcing"],
+            ),
+            ServiceDefinition(
+                id="connector-hidden-dev",
+                name="Hidden Dev",
+                kind="tool_provider",
+                base_url="https://dev.example",
+                health_endpoint="/healthz",
+                capabilities=["git.read"],
+                allowed_divisions=["dev"],
+            ),
+        ]
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                available_services=["connector-supplier-web"],
+            )
+        }
+    )
+    called_urls: list[str] = []
+
+    def fake_get(url: str, *, timeout: float) -> httpx.Response:
+        called_urls.append(url)
+        assert timeout == gateway_main.settings.service_health_timeout_seconds
+        return httpx.Response(204)
+
+    monkeypatch.setattr("synarch_gateway.main.httpx.get", fake_get)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/services/health-checks",
+            params={"agent_id": "agent-ops-sourcing"},
+            headers={"X-Synarch-Trace-Id": "trace_service_health"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert called_urls == ["https://supplier.example/healthz"]
+    assert payload["agent_id"] == "agent-ops-sourcing"
+    assert [check["service_id"] for check in payload["checks"]] == [
+        "connector-supplier-web"
+    ]
+    assert payload["checks"][0]["status"] == "healthy"
+    assert payload["event"]["type"] == "service_health.checked"
+    assert payload["event"]["trace_id"] == "trace_service_health"
+    assert payload["event"]["payload"]["status_counts"]["healthy"] == 1
+    assert payload["audit_log"]["action"] == "services.health_checked"
+    assert payload["audit_log"]["trace_id"] == "trace_service_health"
+    assert state_client.events[0].type == EventType.service_health_checked
+    assert state_client.audit_logs[0].actor_id == "gateway-service-health"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_service_health"
 
 
 def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:

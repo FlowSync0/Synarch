@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.4",
-    detail: "Credential-gated task resume",
+    value: "M5.5",
+    detail: "Service health checks",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "126",
+    value: "128",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Resume credentials",
+  title: "Health services",
   body:
-    "Les taches peuvent declarer des scopes credentials requis par outil; le scheduler bloque puis reprend apres grant applique.",
+    "Le gateway peut verifier les services accessibles a un agent, retourner un rapport type, et ecrire event plus audit avec le meme trace_id.",
   checks: [
-    "TaskRecord porte required_tool_scopes",
-    "Tool gate refuse les scopes manquants au niveau tache",
-    "Scheduler expose credential_resumed_task_ids apres reprise",
+    "ServiceHealthReport porte status, latence, code HTTP et erreur",
+    "Le health-check filtre les services par LocalWorldView",
+    "Chaque verification emet service_health.checked et services.health_checked",
     "Tests backend complets passent"
   ]
 };
@@ -193,8 +193,8 @@ export const layers = [
     name: "Execution",
     status: "partial" as Status,
     icon: PlugZap,
-    summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes par tache, manifests et readiness scheduler.",
-    next: "Brancher les premiers vrais connecteurs externes."
+    summary: "Tool gate permissionne event.emit et web.fetch; health-checks de services sont traces et audites.",
+    next: "Ajouter cycle de vie cron/webhook pour connecteurs externes."
   },
   {
     id: "H",
@@ -364,6 +364,11 @@ export const backlog = [
   {
     label: "M5.4",
     title: "Credential-gated task resume",
+    done: true
+  },
+  {
+    label: "M5.5",
+    title: "Service health checks",
     done: true
   },
   {

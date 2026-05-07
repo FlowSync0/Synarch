@@ -16,6 +16,10 @@ from synarch_models import (
     ProjectSplitApplication,
     ProjectSplitDecision,
     ProjectSplitRequest,
+    ServiceHealthCheck,
+    ServiceHealthReport,
+    ServiceHealthStatus,
+    ServiceKind,
     TaskRecord,
     TaskRunBatchResult,
     TaskRunResult,
@@ -215,6 +219,39 @@ def test_memory_item_defaults_to_approved_status() -> None:
 
     assert item.status == MemoryStatus.approved
     assert item.model_dump(mode="json")["status"] == "approved"
+
+
+def test_service_health_report_captures_probe_result() -> None:
+    report = ServiceHealthReport(
+        trace_id="trace_service_health",
+        agent_id="agent-ops-sourcing",
+        checks=[
+            ServiceHealthCheck(
+                service_id="connector-supplier-web",
+                name="Supplier Web",
+                kind=ServiceKind.tool_provider,
+                enabled=True,
+                status=ServiceHealthStatus.healthy,
+                base_url="https://example.com",
+                health_endpoint="/healthz",
+                status_code=200,
+                response_time_ms=12,
+                capabilities=["web.fetch"],
+                credential_scopes=["browser:authenticated_fetch"],
+            )
+        ],
+        event=EventRecord(
+            type=EventType.service_health_checked,
+            trace_id="trace_service_health",
+        ),
+    )
+
+    payload = report.model_dump(mode="json")
+
+    assert payload["agent_id"] == "agent-ops-sourcing"
+    assert payload["checks"][0]["status"] == "healthy"
+    assert payload["checks"][0]["response_time_ms"] == 12
+    assert payload["event"]["type"] == "service_health.checked"
 
 
 def test_project_workspace_and_assignment_isolate_project_context() -> None:
