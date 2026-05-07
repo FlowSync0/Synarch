@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.2",
-    detail: "Credential request decisions",
+    value: "M5.3",
+    detail: "Credential grant application",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "120",
+    value: "123",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Decisions credentials",
+  title: "Grants credentials",
   body:
-    "Les demandes credentials peuvent maintenant etre approuvees ou rejetees avec event, audit et statut persistant.",
+    "Les demandes credentials approuvees peuvent maintenant etre appliquees en grant auditable sur un service cible.",
   checks: [
-    "CredentialAccessDecision trace l'acteur et la rationale",
-    "State-service refuse les decisions dupliquees",
-    "L'interface route approve/reject vers le bon endpoint",
+    "CredentialGrant conserve request, service, agent, outil et scopes",
+    "State-service marque la demande applied et met a jour le service",
+    "L'interface route approve/reject/apply vers le bon endpoint",
     "Tests backend complets passent"
   ]
 };
@@ -359,7 +359,7 @@ export const backlog = [
   {
     label: "M5.3",
     title: "Credential grant application",
-    done: false
+    done: true
   },
   {
     label: "M2",

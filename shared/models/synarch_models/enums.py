@@ -63,6 +63,7 @@ class EventType(StrEnum):
     tool_failed = "tool.failed"
     approval_requested = "approval.requested"
     approval_decided = "approval.decided"
+    credential_grant_applied = "credential_grant.applied"
 
 
 class AiProviderType(StrEnum):

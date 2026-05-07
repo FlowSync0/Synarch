@@ -225,6 +225,22 @@ class CredentialAccessRequest(SynarchModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class CredentialGrant(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("credential_grant"))
+    request_id: str
+    service_id: str
+    agent_id: str
+    project_id: str
+    task_id: str
+    tool_name: str
+    scopes: list[str] = Field(default_factory=list)
+    granted_by_type: ActorType
+    granted_by_id: str
+    rationale: str
+    active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str
@@ -343,6 +359,24 @@ class ServiceDefinition(SynarchModel):
     audit_required: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
+
+
+class CredentialGrantApplicationRequest(SynarchModel):
+    request_id: str
+    service_id: str
+    applied_by_type: ActorType
+    applied_by_id: str
+    rationale: str
+
+
+class CredentialGrantApplication(SynarchModel):
+    request_id: str
+    service_id: str
+    access_request: CredentialAccessRequest
+    grant: CredentialGrant
+    service: ServiceDefinition
+    events_emitted: list[EventRecord] = Field(default_factory=list)
+    applied_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SkillDefinition(SynarchModel):

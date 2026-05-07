@@ -21,6 +21,9 @@ from synarch_models import (
     CostSummaryGroup,
     CredentialAccessDecision,
     CredentialAccessRequest,
+    CredentialGrant,
+    CredentialGrantApplication,
+    CredentialGrantApplicationRequest,
     EventRecord,
     EventType,
     GoalEnvelope,
@@ -707,6 +710,53 @@ def decide_credential_access_request(
             request_id,
             decision,
             headers=headers,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post(
+    "/credential-access-requests/{request_id}/grant-applications",
+    response_model=CredentialGrantApplication,
+)
+def apply_credential_access_grant(
+    request_id: str,
+    application: CredentialGrantApplicationRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> CredentialGrantApplication:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = task_reviewer_headers(request, trace_id)
+    try:
+        return state_client.apply_credential_access_grant(
+            request_id,
+            application,
+            headers=headers,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/credential-grants", response_model=list[CredentialGrant])
+def list_credential_grants(
+    request_id: str | None = None,
+    service_id: str | None = None,
+    agent_id: str | None = None,
+    project_id: str | None = None,
+    active: bool | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[CredentialGrant]:
+    try:
+        return state_client.list_credential_grants(
+            request_id=request_id,
+            service_id=service_id,
+            agent_id=agent_id,
+            project_id=project_id,
+            active=active,
         )
     except StateServiceRequestError as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error

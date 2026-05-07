@@ -277,6 +277,130 @@ def test_credential_access_decision_updates_request_and_records_event() -> None:
     ]
 
 
+def test_credential_grant_application_updates_service_and_request() -> None:
+    client = TestClient(app)
+    trace_id = "trace_credential_grant_application"
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-web-test",
+            "name": "Supplier Web",
+            "kind": "tool_provider",
+            "capabilities": ["web.fetch"],
+            "credential_scopes": [],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Credential grant",
+            "goal": "Apply approved connector credentials",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Fetch authenticated supplier page",
+            assigned_agent_id="agent-ops-sourcing",
+            required_tools=["web.fetch"],
+        ),
+    )
+    assert task_response.status_code == 201
+    access_response = client.post(
+        "/credential-access-requests",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "gateway-scheduler",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "credential-access-grant-test",
+            "task_id": task_response.json()["id"],
+            "project_id": project_response.json()["id"],
+            "agent_id": "agent-ops-sourcing",
+            "tool_name": "web.fetch",
+            "requested_scopes": ["browser:authenticated_fetch"],
+            "candidate_service_ids": ["connector-supplier-web-test"],
+            "reason": "Credential scopes missing for required tool: web.fetch",
+        },
+    )
+    assert access_response.status_code == 201
+    decision_response = client.post(
+        "/credential-access-requests/credential-access-grant-test/decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "request_id": "credential-access-grant-test",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Approved for supplier sourcing.",
+        },
+    )
+    assert decision_response.status_code == 201
+
+    apply_response = client.post(
+        "/credential-access-requests/credential-access-grant-test/grant-applications",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "request_id": "credential-access-grant-test",
+            "service_id": "connector-supplier-web-test",
+            "applied_by_type": "user",
+            "applied_by_id": "local-user",
+            "rationale": "Apply the approved credential grant.",
+        },
+    )
+
+    assert apply_response.status_code == 201
+    application = apply_response.json()
+    assert application["access_request"]["status"] == "applied"
+    assert application["grant"]["scopes"] == ["browser:authenticated_fetch"]
+    assert application["service"]["credential_scopes"] == [
+        "browser:authenticated_fetch"
+    ]
+    assert [event["type"] for event in application["events_emitted"]] == [
+        "credential_grant.applied"
+    ]
+    assert client.get("/credential-access-requests/credential-access-grant-test").json()[
+        "status"
+    ] == "applied"
+    assert client.get("/services/connector-supplier-web-test").json()[
+        "credential_scopes"
+    ] == ["browser:authenticated_fetch"]
+    grants = client.get(
+        "/credential-grants",
+        params={"request_id": "credential-access-grant-test"},
+    ).json()
+    assert grants[0]["service_id"] == "connector-supplier-web-test"
+
+    duplicate_response = client.post(
+        "/credential-access-requests/credential-access-grant-test/grant-applications",
+        json={
+            "request_id": "credential-access-grant-test",
+            "service_id": "connector-supplier-web-test",
+            "applied_by_type": "user",
+            "applied_by_id": "local-user",
+            "rationale": "Duplicate application.",
+        },
+    )
+    assert duplicate_response.status_code == 409
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert "credential_grant.applied" in [event["type"] for event in events]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert "credential_access_request.applied" in [
+        audit["action"] for audit in audits
+    ]
+
+
 def test_task_requires_acceptance_criteria() -> None:
     client = TestClient(app)
     project_response = client.post(

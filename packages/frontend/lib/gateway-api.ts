@@ -210,6 +210,32 @@ export type CredentialAccessDecision = {
   decided_at: string;
 };
 
+export type CredentialGrant = {
+  id: string;
+  request_id: string;
+  service_id: string;
+  agent_id: string;
+  project_id: string;
+  task_id: string;
+  tool_name: string;
+  scopes: string[];
+  granted_by_type: "user" | "agent" | "system" | "service";
+  granted_by_id: string;
+  rationale: string;
+  active: boolean;
+  created_at: string;
+};
+
+export type CredentialGrantApplication = {
+  request_id: string;
+  service_id: string;
+  access_request: CredentialAccessRequest;
+  grant: CredentialGrant;
+  service: unknown;
+  events_emitted: unknown[];
+  applied_at: string;
+};
+
 export type TaskRunBatchResult = {
   trace_id: string;
   max_tasks: number;
@@ -368,7 +394,7 @@ export async function listToolCredentialStatuses(
 }
 
 export async function listCredentialAccessRequests(): Promise<CredentialAccessRequest[]> {
-  const response = await fetch("/api/gateway/credential-access-requests?status=requested", {
+  const response = await fetch("/api/gateway/credential-access-requests", {
     cache: "no-store"
   });
   return parseJsonResponse<CredentialAccessRequest[]>(response);
@@ -404,6 +430,35 @@ export async function decideCredentialAccessRequest({
     }
   );
   return parseJsonResponse<CredentialAccessDecision>(response);
+}
+
+export async function applyCredentialAccessGrant({
+  requestId,
+  serviceId
+}: {
+  requestId: string;
+  serviceId: string;
+}): Promise<CredentialGrantApplication> {
+  const response = await fetch(
+    `/api/gateway/credential-access-requests/${encodeURIComponent(requestId)}/grant-applications`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_credential_grant_${Date.now()}`
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        service_id: serviceId,
+        applied_by_type: "user",
+        applied_by_id: "local-user",
+        rationale: "Credential grant applied from Synarch dashboard."
+      })
+    }
+  );
+  return parseJsonResponse<CredentialGrantApplication>(response);
 }
 
 export async function updateMemoryStatus({

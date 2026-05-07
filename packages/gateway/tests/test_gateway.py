@@ -21,6 +21,9 @@ from synarch_models import (
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
+    CredentialGrant,
+    CredentialGrantApplication,
+    CredentialGrantApplicationRequest,
     EventRecord,
     EventType,
     LocalWorldView,
@@ -36,6 +39,7 @@ from synarch_models import (
     ProjectSplitApplication,
     ProjectSplitRequest,
     ProjectWorkspace,
+    ServiceDefinition,
     TaskDraft,
     TaskLeaseRecoveryResult,
     TaskRecord,
@@ -56,6 +60,7 @@ class FakeStateClient:
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
         self.credential_access_requests: list[CredentialAccessRequest] = []
+        self.credential_grants: list[CredentialGrant] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.split_applications: list[ProjectSplitApplication] = []
         self.headers: list[dict[str, str]] = []
@@ -490,6 +495,93 @@ class FakeStateClient:
         )
         self.events.append(event)
         return decision.model_copy(update={"events_emitted": [event]})
+
+    def apply_credential_access_grant(
+        self,
+        request_id: str,
+        application: CredentialGrantApplicationRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialGrantApplication:
+        self.headers.append(headers)
+        access_request = next(
+            request
+            for request in self.credential_access_requests
+            if request.id == request_id
+        )
+        if access_request.status != "approved":
+            raise StateServiceRequestError(
+                409,
+                "Credential access request must be approved before grants can be applied",
+            )
+        updated_request = access_request.model_copy(update={"status": "applied"})
+        self.credential_access_requests[
+            self.credential_access_requests.index(access_request)
+        ] = updated_request
+        grant = CredentialGrant(
+            id=f"credential_grant_{request_id}_{application.service_id}",
+            request_id=request_id,
+            service_id=application.service_id,
+            agent_id=access_request.agent_id,
+            project_id=access_request.project_id,
+            task_id=access_request.task_id,
+            tool_name=access_request.tool_name,
+            scopes=list(access_request.requested_scopes),
+            granted_by_type=application.applied_by_type,
+            granted_by_id=application.applied_by_id,
+            rationale=application.rationale,
+        )
+        self.credential_grants.append(grant)
+        event = EventRecord(
+            type=EventType.credential_grant_applied,
+            target=access_request.project_id,
+            payload={
+                "request_type": "credential_access",
+                "credential_access_request_id": access_request.id,
+                "credential_grant_id": grant.id,
+                "service_id": application.service_id,
+                "status": "applied",
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        service = ServiceDefinition(
+            id=application.service_id,
+            name=application.service_id,
+            kind="tool_provider",
+            capabilities=[access_request.tool_name],
+            credential_scopes=list(access_request.requested_scopes),
+        )
+        return CredentialGrantApplication(
+            request_id=request_id,
+            service_id=application.service_id,
+            access_request=updated_request,
+            grant=grant,
+            service=service,
+            events_emitted=[event],
+        )
+
+    def list_credential_grants(
+        self,
+        *,
+        request_id: str | None = None,
+        service_id: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[CredentialGrant]:
+        grants = self.credential_grants
+        if request_id is not None:
+            grants = [grant for grant in grants if grant.request_id == request_id]
+        if service_id is not None:
+            grants = [grant for grant in grants if grant.service_id == service_id]
+        if agent_id is not None:
+            grants = [grant for grant in grants if grant.agent_id == agent_id]
+        if project_id is not None:
+            grants = [grant for grant in grants if grant.project_id == project_id]
+        if active is not None:
+            grants = [grant for grant in grants if grant.active == active]
+        return grants
 
 
 class FailingStateClient(FakeStateClient):
@@ -2007,6 +2099,53 @@ def test_decide_credential_access_request_forwards_decision() -> None:
     assert state_client.credential_access_requests[0].status == "approved"
     assert state_client.headers[-1]["x-synarch-trace-id"] == (
         "trace_credential_gateway_decision"
+    )
+
+
+def test_apply_credential_access_grant_forwards_application() -> None:
+    state_client = FakeStateClient()
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential-access-grant-visible",
+            task_id="task_fetch_supplier",
+            project_id="project_supplier",
+            agent_id="agent-ops-sourcing",
+            tool_name="web.fetch",
+            requested_scopes=["browser:authenticated_fetch"],
+            candidate_service_ids=["connector-supplier-web"],
+            reason="Credential scopes missing for required tool: web.fetch",
+            status="approved",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/credential-access-requests/credential-access-grant-visible/grant-applications",
+            headers={"X-Synarch-Trace-Id": "trace_credential_gateway_grant"},
+            json={
+                "request_id": "credential-access-grant-visible",
+                "service_id": "connector-supplier-web",
+                "applied_by_type": "user",
+                "applied_by_id": "local-user",
+                "rationale": "Apply approved credential scopes.",
+            },
+        )
+        grants_response = TestClient(app).get(
+            "/credential-grants",
+            params={"request_id": "credential-access-grant-visible"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()["access_request"]["status"] == "applied"
+    assert response.json()["grant"]["scopes"] == ["browser:authenticated_fetch"]
+    assert response.json()["events_emitted"][0]["type"] == "credential_grant.applied"
+    assert grants_response.status_code == 200
+    assert grants_response.json()[0]["service_id"] == "connector-supplier-web"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == (
+        "trace_credential_gateway_grant"
     )
 
 

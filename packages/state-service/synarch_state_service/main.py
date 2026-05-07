@@ -19,6 +19,9 @@ from synarch_models import (
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
+    CredentialGrant,
+    CredentialGrantApplication,
+    CredentialGrantApplicationRequest,
     DivisionRecord,
     EventRecord,
     EventType,
@@ -162,6 +165,17 @@ def credential_decision_audit_context(
     return AuditContext(
         actor_type=decision.decided_by_type,
         actor_id=decision.decided_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def credential_grant_application_audit_context(
+    application: CredentialGrantApplicationRequest,
+    request: Request,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=application.applied_by_type,
+        actor_id=application.applied_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
     )
 
@@ -2205,6 +2219,176 @@ def decide_credential_access_request(
         },
     )
     return decision.model_copy(update={"events_emitted": [event]})
+
+
+def credential_grant_id(request_id: str, service_id: str) -> str:
+    safe_request_id = "".join(
+        character if character.isalnum() else "_"
+        for character in request_id
+    ).strip("_")
+    safe_service_id = "".join(
+        character if character.isalnum() else "_"
+        for character in service_id
+    ).strip("_")
+    return f"credential_grant_{safe_request_id}_{safe_service_id}"
+
+
+def merged_scopes(existing_scopes: list[str], granted_scopes: list[str]) -> list[str]:
+    merged: list[str] = []
+    for scope in [*existing_scopes, *granted_scopes]:
+        if scope not in merged:
+            merged.append(scope)
+    return merged
+
+
+def credential_grant_applied_event(
+    access_request: CredentialAccessRequest,
+    grant: CredentialGrant,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.credential_grant_applied,
+        source_agent_id=agent_event_source(grant.granted_by_type, grant.granted_by_id),
+        target=access_request.project_id,
+        payload={
+            "request_type": "credential_access",
+            "credential_access_request_id": access_request.id,
+            "credential_grant_id": grant.id,
+            "service_id": grant.service_id,
+            "task_id": access_request.task_id,
+            "agent_id": access_request.agent_id,
+            "tool_name": access_request.tool_name,
+            "granted_scopes": grant.scopes,
+            "status": ApprovalStatus.applied,
+        },
+        trace_id=trace_id,
+    )
+
+
+@app.post(
+    "/credential-access-requests/{request_id}/grant-applications",
+    response_model=CredentialGrantApplication,
+    status_code=201,
+)
+def apply_credential_access_grant(
+    request_id: str,
+    application: CredentialGrantApplicationRequest,
+    request: Request,
+) -> CredentialGrantApplication:
+    if application.request_id != request_id:
+        raise HTTPException(status_code=400, detail="Application request_id must match path")
+
+    access_request = read_record(
+        REPOSITORIES.credential_access_requests,
+        request_id,
+        "credential access request",
+    )
+    if access_request.status == ApprovalStatus.applied:
+        raise HTTPException(
+            status_code=409,
+            detail="Credential access request is already applied",
+        )
+    if access_request.status != ApprovalStatus.approved:
+        raise HTTPException(
+            status_code=409,
+            detail="Credential access request must be approved before grants can be applied",
+        )
+    if application.service_id not in access_request.candidate_service_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Grant service_id must be one of the candidate services",
+        )
+
+    service = read_record(REPOSITORIES.services, application.service_id, "service")
+    if access_request.tool_name not in service.capabilities:
+        raise HTTPException(
+            status_code=400,
+            detail="Grant service must expose the requested tool",
+        )
+
+    context = credential_grant_application_audit_context(application, request)
+    grant = CredentialGrant(
+        id=credential_grant_id(request_id, application.service_id),
+        request_id=request_id,
+        service_id=application.service_id,
+        agent_id=access_request.agent_id,
+        project_id=access_request.project_id,
+        task_id=access_request.task_id,
+        tool_name=access_request.tool_name,
+        scopes=list(access_request.requested_scopes),
+        granted_by_type=application.applied_by_type,
+        granted_by_id=application.applied_by_id,
+        rationale=application.rationale,
+    )
+    created_grant = create_record(REPOSITORIES.credential_grants, grant.id, grant)
+    updated_service = update_record(
+        REPOSITORIES.services,
+        service.id,
+        service.model_copy(
+            update={
+                "credential_scopes": merged_scopes(
+                    service.credential_scopes,
+                    access_request.requested_scopes,
+                )
+            }
+        ),
+        "service",
+    )
+    updated_request = update_record(
+        REPOSITORIES.credential_access_requests,
+        request_id,
+        access_request.model_copy(update={"status": ApprovalStatus.applied}),
+        "credential access request",
+    )
+    event = create_domain_event(
+        credential_grant_applied_event(updated_request, created_grant, context.trace_id)
+    )
+    write_audit_log(
+        context,
+        action="credential_access_request.applied",
+        target_type="credential_access_request",
+        target_id=request_id,
+        payload={
+            "project_id": access_request.project_id,
+            "task_id": access_request.task_id,
+            "agent_id": access_request.agent_id,
+            "tool_name": access_request.tool_name,
+            "service_id": application.service_id,
+            "credential_grant_id": created_grant.id,
+            "granted_scopes": created_grant.scopes,
+            "rationale": application.rationale,
+        },
+    )
+    return CredentialGrantApplication(
+        request_id=request_id,
+        service_id=application.service_id,
+        access_request=updated_request,
+        grant=created_grant,
+        service=updated_service,
+        events_emitted=[event],
+    )
+
+
+@app.get("/credential-grants", response_model=list[CredentialGrant])
+def list_credential_grants(
+    request_id: str | None = None,
+    service_id: str | None = None,
+    agent_id: str | None = None,
+    project_id: str | None = None,
+    active: bool | None = None,
+) -> list[CredentialGrant]:
+    grants = REPOSITORIES.credential_grants.list_records()
+    if request_id is not None:
+        grants = [grant for grant in grants if grant.request_id == request_id]
+    if service_id is not None:
+        grants = [grant for grant in grants if grant.service_id == service_id]
+    if agent_id is not None:
+        grants = [grant for grant in grants if grant.agent_id == agent_id]
+    if project_id is not None:
+        grants = [grant for grant in grants if grant.project_id == project_id]
+    if active is not None:
+        grants = [grant for grant in grants if grant.active == active]
+    return sorted(grants, key=lambda grant: grant.created_at)
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)

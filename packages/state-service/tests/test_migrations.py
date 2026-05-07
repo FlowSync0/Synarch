@@ -21,6 +21,7 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0012_service_credential_scopes.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0013_task_required_tools.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0014_credential_access_requests.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0015_credential_grants.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

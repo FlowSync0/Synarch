@@ -47,6 +47,7 @@ import {
   type LocalWorldView
 } from "../lib/control-plane-api";
 import {
+  applyCredentialAccessGrant,
   callTool,
   decideCredentialAccessRequest,
   decideTaskReview,
@@ -288,6 +289,7 @@ type ApprovalViewModel = {
   icon: typeof UserRoundPlus;
   impact: string;
   source: "api" | "credential" | "sample";
+  candidateServiceIds?: string[];
 };
 
 type AgentViewModel = {
@@ -472,7 +474,8 @@ function credentialApprovalRow(request: CredentialAccessRequest): ApprovalViewMo
     tone: "warn",
     icon: KeyRound,
     impact: `${request.reason} / ${scopes}`,
-    source: "credential"
+    source: "credential",
+    candidateServiceIds: request.candidate_service_ids
   };
 }
 
@@ -937,6 +940,14 @@ export default function DashboardPage() {
   });
   const credentialDecisionMutation = useMutation({
     mutationFn: decideCredentialAccessRequest,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const credentialGrantMutation = useMutation({
+    mutationFn: applyCredentialAccessGrant,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
@@ -2799,14 +2810,22 @@ export default function DashboardPage() {
                 const Icon = approval.icon;
                 const isCredentialApproval = approval.source === "credential";
                 const isPending = approval.status === "requested" && approval.source !== "sample";
+                const candidateServiceId = approval.candidateServiceIds?.[0];
+                const canApplyGrant =
+                  isCredentialApproval && approval.status === "approved" && !!candidateServiceId;
                 const isDecisionPending =
-                  decisionMutation.isPending || credentialDecisionMutation.isPending;
+                  decisionMutation.isPending ||
+                  credentialDecisionMutation.isPending ||
+                  credentialGrantMutation.isPending;
                 const isMutatingThisApproval =
                   isCredentialApproval
                     ? credentialDecisionMutation.isPending &&
                       credentialDecisionMutation.variables?.requestId === approval.id
                     : decisionMutation.isPending &&
                       decisionMutation.variables?.requestId === approval.id;
+                const isApplyingGrant =
+                  credentialGrantMutation.isPending &&
+                  credentialGrantMutation.variables?.requestId === approval.id;
                 const decideApproval = (status: "approved" | "rejected") => {
                   const payload = { requestId: approval.id, status };
                   if (isCredentialApproval) {
@@ -2814,6 +2833,15 @@ export default function DashboardPage() {
                     return;
                   }
                   decisionMutation.mutate(payload);
+                };
+                const applyGrant = () => {
+                  if (!candidateServiceId) {
+                    return;
+                  }
+                  credentialGrantMutation.mutate({
+                    requestId: approval.id,
+                    serviceId: candidateServiceId
+                  });
                 };
                 return (
                   <article key={approval.id} className="px-4 py-3">
@@ -2843,6 +2871,21 @@ export default function DashboardPage() {
                             {approval.requester} / {approval.age}
                           </p>
                           <div className="flex items-center gap-2">
+                            {isCredentialApproval ? (
+                              <button
+                                className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-accent transition enabled:hover:border-accent/40 enabled:hover:bg-accent-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                aria-label={`Apply grant ${approval.title}`}
+                                title={
+                                  candidateServiceId
+                                    ? `Apply grant to ${candidateServiceId}`
+                                    : `No candidate service for ${approval.title}`
+                                }
+                                disabled={!canApplyGrant || isDecisionPending}
+                                onClick={applyGrant}
+                              >
+                                <KeyRound size={15} />
+                              </button>
+                            ) : null}
                             <button
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
                               aria-label={`Approve ${approval.title}`}
@@ -2865,6 +2908,9 @@ export default function DashboardPage() {
                         </div>
                         {isMutatingThisApproval ? (
                           <p className="mt-2 text-xs font-medium text-accent">Decision pending...</p>
+                        ) : null}
+                        {isApplyingGrant ? (
+                          <p className="mt-2 text-xs font-medium text-accent">Grant applying...</p>
                         ) : null}
                       </div>
                     </div>

@@ -10,6 +10,9 @@ from synarch_models import (
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
+    CredentialGrant,
+    CredentialGrantApplication,
+    CredentialGrantApplicationRequest,
     EventRecord,
     ProjectComplexityAssessment,
     ProjectRecord,
@@ -183,6 +186,24 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> CredentialAccessDecision: ...
+
+    def apply_credential_access_grant(
+        self,
+        request_id: str,
+        application: CredentialGrantApplicationRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialGrantApplication: ...
+
+    def list_credential_grants(
+        self,
+        *,
+        request_id: str | None = None,
+        service_id: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[CredentialGrant]: ...
 
 
 @dataclass(frozen=True)
@@ -439,6 +460,43 @@ class HttpStateClient:
             headers,
         )
         return CredentialAccessDecision.model_validate(response.json())
+
+    def apply_credential_access_grant(
+        self,
+        request_id: str,
+        application: CredentialGrantApplicationRequest,
+        *,
+        headers: dict[str, str],
+    ) -> CredentialGrantApplication:
+        response = self._post(
+            f"/credential-access-requests/{request_id}/grant-applications",
+            application.model_dump(mode="json"),
+            headers,
+        )
+        return CredentialGrantApplication.model_validate(response.json())
+
+    def list_credential_grants(
+        self,
+        *,
+        request_id: str | None = None,
+        service_id: str | None = None,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[CredentialGrant]:
+        params: dict[str, str] = {}
+        if request_id is not None:
+            params["request_id"] = request_id
+        if service_id is not None:
+            params["service_id"] = service_id
+        if agent_id is not None:
+            params["agent_id"] = agent_id
+        if project_id is not None:
+            params["project_id"] = project_id
+        if active is not None:
+            params["active"] = str(active).lower()
+        response = self._get("/credential-grants", params=params)
+        return [CredentialGrant.model_validate(grant) for grant in response.json()]
 
     def _get(
         self,

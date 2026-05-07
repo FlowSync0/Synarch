@@ -8,6 +8,8 @@ from synarch_models import (
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
+    CredentialGrant,
+    CredentialGrantApplicationRequest,
     DivisionRecord,
     LifecycleAction,
     LocalWorldView,
@@ -129,6 +131,32 @@ def test_credential_access_decision_is_auditable() -> None:
     assert payload["status"] == "approved"
     assert payload["decided_by_type"] == "user"
     assert payload["events_emitted"] == []
+
+
+def test_credential_grant_application_captures_scope_grant() -> None:
+    grant = CredentialGrant(
+        id="credential-grant-test",
+        request_id="credential-access-task-fetch-web",
+        service_id="connector-supplier-web",
+        agent_id="agent-ops-sourcing",
+        project_id="project_supplier",
+        task_id="task_fetch",
+        tool_name="web.fetch",
+        scopes=["browser:authenticated_fetch"],
+        granted_by_type=ActorType.user,
+        granted_by_id="local-user",
+        rationale="Allow authenticated supplier pages for this sourcing task.",
+    )
+    application = CredentialGrantApplicationRequest(
+        request_id="credential-access-task-fetch-web",
+        service_id="connector-supplier-web",
+        applied_by_type=ActorType.user,
+        applied_by_id="local-user",
+        rationale="Approved by owner.",
+    )
+
+    assert grant.model_dump(mode="json")["scopes"] == ["browser:authenticated_fetch"]
+    assert application.model_dump(mode="json")["service_id"] == "connector-supplier-web"
 
 
 def test_agent_soul_captures_persistent_identity() -> None:
