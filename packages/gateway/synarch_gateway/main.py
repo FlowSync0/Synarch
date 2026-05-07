@@ -16,6 +16,10 @@ from synarch_models import (
     AgentProjectAssignment,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorJobRecord,
+    ConnectorJobRunRequest,
+    ConnectorJobRunResult,
+    ConnectorJobRunStatus,
     CostBudgetEvaluation,
     CostRecord,
     CostSummary,
@@ -325,6 +329,14 @@ def tool_gate_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-tool-gate",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def connector_job_executor_headers(trace_id: str) -> dict[str, str]:
+    return {
+        "x-synarch-actor-type": ActorType.service.value,
+        "x-synarch-actor-id": "gateway-connector-job-executor",
         "x-synarch-trace-id": trace_id,
     }
 
@@ -665,6 +677,42 @@ def call_tool(
         raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
 
 
+@app.post(
+    "/connector-jobs/{job_id}/execute",
+    response_model=ConnectorJobRunResult,
+    status_code=201,
+)
+def execute_connector_job(
+    job_id: str,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> ConnectorJobRunResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = connector_job_executor_headers(trace_id)
+    try:
+        job = state_client.get_connector_job(job_id)
+        run_request = connector_job_execution_run_request(
+            job,
+            state_client=state_client,
+            control_plane=control_plane,
+            headers=headers,
+            trace_id=trace_id,
+        )
+        return state_client.record_connector_job_run(
+            job_id,
+            run_request,
+            headers=headers,
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Connector job execution dependency unavailable",
+        ) from error
+
+
 @app.get("/tools/registry")
 def list_tool_registry() -> dict[str, object]:
     return {"tools": registered_tool_manifests()}
@@ -992,6 +1040,91 @@ def execute_tool_call_through_gate(
             "service_id": tool_call.service_id,
             **execution_output,
         },
+    )
+
+
+def connector_job_execution_run_request(
+    job: ConnectorJobRecord,
+    *,
+    state_client: StateClient,
+    control_plane: ControlPlaneClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> ConnectorJobRunRequest:
+    tool_call_result = connector_job_tool_call(job, trace_id)
+    if isinstance(tool_call_result, ConnectorJobRunRequest):
+        return tool_call_result
+
+    tool_result = execute_tool_call_through_gate(
+        tool_call_result,
+        state_client=state_client,
+        control_plane=control_plane,
+        headers=headers,
+        trace_id=trace_id,
+        raise_on_failure=False,
+    )
+    run_status = (
+        ConnectorJobRunStatus.completed
+        if tool_result.status == TaskStatus.completed
+        else ConnectorJobRunStatus.failed
+    )
+    return ConnectorJobRunRequest(
+        status=run_status,
+        triggered_by_type=ActorType.service,
+        triggered_by_id="gateway-connector-job-executor",
+        output={
+            "execution_mode": "tool_gate",
+            "tool_name": tool_result.tool_name,
+            "service_id": job.service_id,
+            "tool_result": tool_result.model_dump(mode="json"),
+        },
+        error=tool_result.error if run_status == ConnectorJobRunStatus.failed else None,
+    )
+
+
+def connector_job_tool_call(
+    job: ConnectorJobRecord,
+    trace_id: str,
+) -> ToolCallRequest | ConnectorJobRunRequest:
+    raw_tool_name = job.metadata.get("tool_name")
+    if not isinstance(raw_tool_name, str) or not raw_tool_name.strip():
+        return ConnectorJobRunRequest(
+            status=ConnectorJobRunStatus.skipped,
+            triggered_by_type=ActorType.service,
+            triggered_by_id="gateway-connector-job-executor",
+            output={
+                "executed": False,
+                "reason": "connector job metadata missing tool_name",
+                "metadata_keys": sorted(job.metadata),
+            },
+        )
+
+    raw_arguments = job.metadata.get("arguments", {})
+    if not isinstance(raw_arguments, dict):
+        return ConnectorJobRunRequest(
+            status=ConnectorJobRunStatus.failed,
+            triggered_by_type=ActorType.service,
+            triggered_by_id="gateway-connector-job-executor",
+            output={
+                "executed": False,
+                "tool_name": raw_tool_name,
+                "reason": "connector job metadata arguments must be an object",
+            },
+            error="Connector job metadata arguments must be an object",
+        )
+
+    raw_reason = job.metadata.get("reason")
+    reason = raw_reason if isinstance(raw_reason, str) and raw_reason.strip() else job.purpose
+    arguments = {str(key): value for key, value in raw_arguments.items()}
+    return ToolCallRequest(
+        agent_id=job.owner_agent_id,
+        tool_name=raw_tool_name.strip(),
+        service_id=job.service_id,
+        project_id=job.project_id,
+        task_id=job.task_id,
+        trace_id=trace_id,
+        reason=reason,
+        arguments=arguments,
     )
 
 

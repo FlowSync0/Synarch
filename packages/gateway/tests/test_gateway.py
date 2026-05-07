@@ -19,6 +19,10 @@ from synarch_models import (
     AgentResult,
     AgentTaskRequest,
     AuditLogRecord,
+    ConnectorJobRecord,
+    ConnectorJobRunRecord,
+    ConnectorJobRunRequest,
+    ConnectorJobRunResult,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -58,6 +62,8 @@ class FakeStateClient:
         self.assignments: list[AgentProjectAssignment] = []
         self.tasks: list[TaskRecord] = []
         self.services: list[ServiceDefinition] = []
+        self.connector_jobs: list[ConnectorJobRecord] = []
+        self.connector_job_runs: list[ConnectorJobRunRecord] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
@@ -597,6 +603,68 @@ class FakeStateClient:
         if active is not None:
             grants = [grant for grant in grants if grant.active == active]
         return grants
+
+    def get_connector_job(self, job_id: str) -> ConnectorJobRecord:
+        for job in self.connector_jobs:
+            if job.id == job_id:
+                return job
+        raise StateServiceRequestError(404, f"Unknown connector job: {job_id}")
+
+    def record_connector_job_run(
+        self,
+        job_id: str,
+        run_request: ConnectorJobRunRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobRunResult:
+        self.headers.append(headers)
+        job = self.get_connector_job(job_id)
+        run = ConnectorJobRunRecord(
+            job_id=job.id,
+            service_id=job.service_id,
+            project_id=job.project_id,
+            task_id=job.task_id,
+            owner_agent_id=job.owner_agent_id,
+            status=run_request.status,
+            triggered_by_type=run_request.triggered_by_type,
+            triggered_by_id=run_request.triggered_by_id,
+            trace_id=headers.get("x-synarch-trace-id"),
+            output=run_request.output,
+            error=run_request.error,
+            started_at=run_request.started_at,
+            completed_at=run_request.completed_at,
+        )
+        self.connector_job_runs.append(run)
+        event = EventRecord(
+            type=EventType.connector_job_run_recorded,
+            source_agent_id=job.owner_agent_id,
+            target=job.project_id or job.service_id,
+            payload={
+                "connector_job_id": job.id,
+                "connector_job_run_id": run.id,
+                "run_status": run.status,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        audit = AuditLogRecord(
+            actor_type=headers.get("x-synarch-actor-type", "service"),
+            actor_id=headers.get(
+                "x-synarch-actor-id",
+                "gateway-connector-job-executor",
+            ),
+            action="connector_job.run_recorded",
+            target_type="connector_job",
+            target_id=job.id,
+            payload={
+                "connector_job_id": job.id,
+                "connector_job_run_id": run.id,
+                "run_status": run.status,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        self.audit_logs.append(audit)
+        return ConnectorJobRunResult(run=run, event=event, audit_log=audit)
 
 
 class FailingStateClient(FakeStateClient):
@@ -1592,6 +1660,195 @@ def test_tool_gate_executes_web_fetch_adapter() -> None:
     assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert state_client.events[0].payload["argument_keys"] == ["max_bytes", "url"]
     assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_connector_job_execute_runs_tool_gate_and_records_completed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-gateway-exec",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            task_id="task_supplier_followup",
+            owner_agent_id="agent-ops-sourcing",
+            kind="cron",
+            schedule="*/15 * * * *",
+            purpose="Fetch supplier evidence before follow-up.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={
+                "tool_name": "web.fetch",
+                "arguments": {"url": "https://example.com", "max_bytes": 1024},
+            },
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+            )
+        }
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        assert url == "https://example.com"
+        assert max_bytes == 1024
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": 256,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain supplier source.",
+        }
+
+    monkeypatch.setattr(gateway_main, "fetch_http_url", fake_fetch_http_url)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/connector-jobs/connector-job-gateway-exec/execute",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_gateway_exec"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["run"]["status"] == "completed"
+    assert payload["run"]["triggered_by_id"] == "gateway-connector-job-executor"
+    assert payload["run"]["output"]["execution_mode"] == "tool_gate"
+    assert payload["run"]["output"]["tool_result"]["status"] == "completed"
+    assert payload["run"]["output"]["tool_result"]["output"]["adapter"] == "web.fetch"
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.connector_job_run_recorded,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "connector_job.run_recorded",
+    ]
+    assert state_client.headers[-1]["x-synarch-actor-id"] == (
+        "gateway-connector-job-executor"
+    )
+
+
+def test_connector_job_execute_records_failed_run_when_tool_gate_denies() -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-denied",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            task_id="task_supplier_followup",
+            owner_agent_id="agent-ops-sourcing",
+            kind="cron",
+            schedule="*/15 * * * *",
+            purpose="Fetch supplier evidence before follow-up.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={
+                "tool_name": "web.fetch",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=[], denied_tools=[]),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/connector-jobs/connector-job-denied/execute",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_denied"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["run"]["status"] == "failed"
+    assert payload["run"]["error"] == "Tool not allowed for agent: web.fetch"
+    assert payload["run"]["output"]["tool_result"]["status"] == "failed"
+    assert payload["run"]["output"]["tool_result"]["output"]["authorized"] is False
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_failed,
+        EventType.connector_job_run_recorded,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.denied",
+        "connector_job.run_recorded",
+    ]
+
+
+def test_connector_job_execute_records_skipped_run_without_tool_mapping() -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-unmapped",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            owner_agent_id="agent-ops-sourcing",
+            kind="cron",
+            schedule="*/15 * * * *",
+            purpose="No executable adapter has been selected yet.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={"stop_condition": "supplier replied"},
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/connector-jobs/connector-job-unmapped/execute",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_skipped"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["run"]["status"] == "skipped"
+    assert payload["run"]["output"] == {
+        "executed": False,
+        "reason": "connector job metadata missing tool_name",
+        "metadata_keys": ["stop_condition"],
+    }
+    assert [event.type for event in state_client.events] == [
+        EventType.connector_job_run_recorded
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "connector_job.run_recorded"
+    ]
 
 
 def test_tool_gate_rejects_private_web_fetch_url() -> None:

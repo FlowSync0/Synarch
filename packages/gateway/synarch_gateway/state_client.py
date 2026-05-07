@@ -7,6 +7,9 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AuditLogRecord,
+    ConnectorJobRecord,
+    ConnectorJobRunRequest,
+    ConnectorJobRunResult,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -212,6 +215,16 @@ class StateClient(Protocol):
         project_id: str | None = None,
         active: bool | None = None,
     ) -> list[CredentialGrant]: ...
+
+    def get_connector_job(self, job_id: str) -> ConnectorJobRecord: ...
+
+    def record_connector_job_run(
+        self,
+        job_id: str,
+        run_request: ConnectorJobRunRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobRunResult: ...
 
 
 @dataclass(frozen=True)
@@ -519,6 +532,24 @@ class HttpStateClient:
             params["active"] = str(active).lower()
         response = self._get("/credential-grants", params=params)
         return [CredentialGrant.model_validate(grant) for grant in response.json()]
+
+    def get_connector_job(self, job_id: str) -> ConnectorJobRecord:
+        response = self._get(f"/connector-jobs/{job_id}")
+        return ConnectorJobRecord.model_validate(response.json())
+
+    def record_connector_job_run(
+        self,
+        job_id: str,
+        run_request: ConnectorJobRunRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobRunResult:
+        response = self._post(
+            f"/connector-jobs/{job_id}/runs",
+            run_request.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorJobRunResult.model_validate(response.json())
 
     def _get(
         self,

@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.7",
-    detail: "Connector job tick",
+    value: "M5.8",
+    detail: "Connector job execution",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "131",
+    value: "134",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,14 +50,15 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job runner",
+  title: "Connector job execution",
   body:
-    "Le state-service peut creer un job cron/webhook, enregistrer un tick borne, journaliser un run skipped explicite tant que l'adaptateur reel n'est pas branche, puis stopper le job avec event et audit.",
+    "Le gateway peut executer un job connecteur via le tool gate existant, puis enregistrer un run completed, failed ou skipped dans le state-service sans contourner les permissions.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRunRecord garde sortie, erreur, trigger et trace",
     "Tick borne cree des runs skipped non fake quand aucun adaptateur n'est branche",
-    "Create, tick, run et stop emettent connector_job.* et audit logs",
+    "Execution gateway passe par permissions, service capabilities et credential scopes",
+    "Create, tick, execute, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"
   ]
 };

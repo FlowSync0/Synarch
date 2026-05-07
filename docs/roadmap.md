@@ -292,6 +292,8 @@ Progress:
   stop jobs through traceable `connector_job.*` events and audit logs.
 - Done: state-service can tick active connector jobs with a bounded limit, recording explicit
   `skipped` runs and `connector_job.tick` audit/event traces until real connector adapters are wired.
+- Done: gateway can execute connector jobs through the existing tool gate, preserving permission,
+  service capability, credential scope, tool event, connector run, and audit boundaries.
 
 Definition of done:
 
