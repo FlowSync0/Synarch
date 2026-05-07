@@ -296,6 +296,8 @@ Progress:
   service capability, credential scope, tool event, connector run, and audit boundaries.
 - Done: gateway can execute active connector jobs in bounded batches and record a durable
   `connector_job.tick` event/audit even when no connector job is ready.
+- Done: the opt-in connector-job worker can run bounded gateway batches in a loop and emit
+  structured JSON logs without starting by default.
 
 Definition of done:
 

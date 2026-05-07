@@ -60,6 +60,7 @@
       "Task started/completed/blocked/needs_review transitions",
       "Project complexity reports and split requests",
       "Opt-in scheduler worker for bounded autonomous ticks",
+      "Opt-in connector-job worker for bounded connector batches",
       "Task review queue and retry/cancel/update decisions"
     ],
     "main_gap": "No durable worker queue or frontend review UI for dead-lettered tasks.",

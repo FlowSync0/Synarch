@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -6,6 +6,8 @@ MYPY_CACHE_DIR ?= .mypy_cache
 GATEWAY_URL ?= http://localhost:8000
 SYNARCH_SCHEDULER_MAX_TASKS ?= 3
 SYNARCH_SCHEDULER_INTERVAL_SECONDS ?= 30
+SYNARCH_CONNECTOR_JOB_MAX_JOBS ?= 3
+SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS ?= 30
 
 install-backend:
 	$(PYTHON) -m pip install --upgrade pip
@@ -41,6 +43,15 @@ scheduler-loop:
 
 scheduler-worker:
 	docker compose up --build scheduler-worker
+
+connector-job-tick:
+	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)"
+
+connector-job-loop:
+	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)" --loop --interval-seconds "$(SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS)"
+
+connector-job-worker:
+	docker compose up --build connector-job-worker
 
 lint:
 	$(PYTHON) -m ruff check .

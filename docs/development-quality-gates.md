@@ -119,6 +119,22 @@ elapsed, so a crash loop is visible instead of burning repeated model calls.
 Reviewers can inspect `/tasks/review-queue` and apply `/tasks/{task_id}/review-decisions`; every
 decision emits `task.reviewed` and writes an audit log.
 
+Run one connector-job batch with:
+
+```bash
+make connector-job-tick
+```
+
+For a local connector-job loop, use `make connector-job-loop`. For the Docker worker service, use:
+
+```bash
+make connector-job-worker
+```
+
+This worker is not started by default. Each tick calls Gateway `/connector-jobs/run-ready` with an
+explicit `max_jobs` limit and writes structured JSON stdout with run counts, completed/failed/skipped
+counts, timestamps, duration, and transient errors.
+
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
 

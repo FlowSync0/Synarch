@@ -71,6 +71,27 @@ services:
     depends_on:
       - gateway
 
+  connector-job-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/gateway
+    command: python -m synarch_gateway.connector_job_worker --loop
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      SYNARCH_CONNECTOR_JOB_WORKER_ID: ${SYNARCH_CONNECTOR_JOB_WORKER_ID:-connector-job-worker-1}
+      SYNARCH_CONNECTOR_JOB_MAX_JOBS: ${SYNARCH_CONNECTOR_JOB_MAX_JOBS:-3}
+      SYNARCH_CONNECTOR_JOB_KIND: ${SYNARCH_CONNECTOR_JOB_KIND:-cron}
+      SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS: ${SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS:-30}
+      SYNARCH_CONNECTOR_JOB_TIMEOUT_SECONDS: ${SYNARCH_CONNECTOR_JOB_TIMEOUT_SECONDS:-180}
+      SYNARCH_CONNECTOR_JOB_PROJECT_ID: ${SYNARCH_CONNECTOR_JOB_PROJECT_ID:-}
+      SYNARCH_CONNECTOR_JOB_SERVICE_ID: ${SYNARCH_CONNECTOR_JOB_SERVICE_ID:-}
+      SYNARCH_CONNECTOR_JOB_OWNER_AGENT_ID: ${SYNARCH_CONNECTOR_JOB_OWNER_AGENT_ID:-}
+    depends_on:
+      - gateway
+
   control-plane:
     build:
       context: .
