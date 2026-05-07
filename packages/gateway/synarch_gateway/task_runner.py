@@ -8,6 +8,7 @@ from synarch_models import (
     ActorType,
     AgentResult,
     AgentTaskRequest,
+    ApprovalStatus,
     AuditLogRecord,
     CostRecord,
     CredentialAccessRequest,
@@ -220,6 +221,7 @@ class TaskRunner:
         skipped_task_ids: list[str] = []
         skipped_tasks: list[TaskSkipRecord] = []
         credential_access_requests: list[CredentialAccessRequest] = []
+        credential_resumed_task_ids: list[str] = []
         stop_reason = "max_tasks_reached"
         while len(runs) < max_tasks:
             task = next_ready_task(
@@ -247,8 +249,12 @@ class TaskRunner:
                     )
                 )
                 continue
+            was_credential_resumed = self.task_has_applied_credential_request(task)
             try:
-                runs.append(self.run_task(task.id, trace_id=trace_id, headers=headers))
+                run = self.run_task(task.id, trace_id=trace_id, headers=headers)
+                runs.append(run)
+                if was_credential_resumed:
+                    credential_resumed_task_ids.append(task.id)
             except StateServiceRequestError as error:
                 if not is_task_claim_conflict(error):
                     raise
@@ -270,6 +276,7 @@ class TaskRunner:
             skipped_task_ids=skipped_task_ids,
             skipped_tasks=skipped_tasks,
             credential_access_requests=credential_access_requests,
+            credential_resumed_task_ids=credential_resumed_task_ids,
             lease_recovery=lease_recovery,
         )
         scheduler_event = self.state.create_event(
@@ -292,6 +299,14 @@ class TaskRunner:
             return []
         world_view = self.control_plane.get_world_view(task.assigned_agent_id)
         return self.tool_readiness.credential_blockers(task, world_view)
+
+    def task_has_applied_credential_request(self, task: TaskRecord) -> bool:
+        return bool(
+            self.state.list_credential_access_requests(
+                task_id=task.id,
+                status=ApprovalStatus.applied.value,
+            )
+        )
 
     def create_credential_access_requests(
         self,
@@ -659,6 +674,8 @@ def child_task_record(
         description=draft.description,
         assigned_agent_id=draft.assigned_agent_id,
         depends_on=child_task_dependencies(parent_task, draft, task_ids_by_title),
+        required_tools=draft.required_tools,
+        required_tool_scopes=draft.required_tool_scopes,
         acceptance_criteria=draft.acceptance_criteria,
         parent_task_id=parent_task.id,
         sequence=sequence,
@@ -939,6 +956,8 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
             for access_request in batch_result.credential_access_requests
         ],
         "credential_access_request_count": len(batch_result.credential_access_requests),
+        "credential_resumed_task_ids": batch_result.credential_resumed_task_ids,
+        "credential_resumed_task_count": len(batch_result.credential_resumed_task_ids),
         "lease_recovered_task_ids": lease_recovered_task_ids(batch_result.lease_recovery),
         "lease_failed_task_ids": lease_failed_task_ids(batch_result.lease_recovery),
         "created_sub_task_count": sum(

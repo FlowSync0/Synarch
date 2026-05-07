@@ -118,6 +118,34 @@ def test_project_then_task_flow() -> None:
     ]
 
 
+def test_task_credential_scopes_must_reference_required_tools() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Scoped credential task",
+            "goal": "Reject inconsistent credential scope declarations.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Fetch private page",
+            required_tools=["web.fetch"],
+            required_tool_scopes={"git.read": ["github:contents:read"]},
+        ),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Credential scopes reference non-required tools: ['git.read']"
+    )
+
+
 def test_credential_access_request_records_event_and_audit() -> None:
     client = TestClient(app)
     trace_id = "trace_credential_access_request"

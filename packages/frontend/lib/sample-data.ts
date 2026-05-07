@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.3",
-    detail: "Credential grant application",
+    value: "M5.4",
+    detail: "Credential-gated task resume",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "123",
+    value: "126",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,13 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Grants credentials",
+  title: "Resume credentials",
   body:
-    "Les demandes credentials approuvees peuvent maintenant etre appliquees en grant auditable sur un service cible.",
+    "Les taches peuvent declarer des scopes credentials requis par outil; le scheduler bloque puis reprend apres grant applique.",
   checks: [
-    "CredentialGrant conserve request, service, agent, outil et scopes",
-    "State-service marque la demande applied et met a jour le service",
-    "L'interface route approve/reject/apply vers le bon endpoint",
+    "TaskRecord porte required_tool_scopes",
+    "Tool gate refuse les scopes manquants au niveau tache",
+    "Scheduler expose credential_resumed_task_ids apres reprise",
     "Tests backend complets passent"
   ]
 };
@@ -193,8 +193,8 @@ export const layers = [
     name: "Execution",
     status: "partial" as Status,
     icon: PlugZap,
-    summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes, manifests et readiness scheduler.",
-    next: "Ajouter decisions approve/reject pour les demandes credentials."
+    summary: "Tool gate permissionne event.emit et web.fetch avec audit, scopes par tache, manifests et readiness scheduler.",
+    next: "Brancher les premiers vrais connecteurs externes."
   },
   {
     id: "H",
@@ -359,6 +359,11 @@ export const backlog = [
   {
     label: "M5.3",
     title: "Credential grant application",
+    done: true
+  },
+  {
+    label: "M5.4",
+    title: "Credential-gated task resume",
     done: true
   },
   {

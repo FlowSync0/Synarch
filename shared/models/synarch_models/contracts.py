@@ -53,6 +53,8 @@ class TaskDraft(SynarchModel):
     description: str = ""
     assigned_agent_id: str
     depends_on: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    required_tool_scopes: dict[str, list[str]] = Field(default_factory=dict)
     priority: Priority = Priority.medium
     acceptance_criteria: list[str] = Field(default_factory=list)
     sequence: int = 0
@@ -250,6 +252,7 @@ class TaskRecord(SynarchModel):
     assigned_agent_id: str
     depends_on: list[str] = Field(default_factory=list)
     required_tools: list[str] = Field(default_factory=list)
+    required_tool_scopes: dict[str, list[str]] = Field(default_factory=dict)
     acceptance_criteria: list[str] = Field(default_factory=list)
     parent_task_id: str | None = None
     sequence: int = 0
@@ -622,6 +625,7 @@ class TaskRunBatchResult(SynarchModel):
     skipped_task_ids: list[str] = Field(default_factory=list)
     skipped_tasks: list[TaskSkipRecord] = Field(default_factory=list)
     credential_access_requests: list[CredentialAccessRequest] = Field(default_factory=list)
+    credential_resumed_task_ids: list[str] = Field(default_factory=list)
     lease_recovery: TaskLeaseRecoveryResult | None = None
     scheduler_event: EventRecord | None = None
     scheduler_audit_log: AuditLogRecord | None = None

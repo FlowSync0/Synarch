@@ -39,6 +39,7 @@ def test_agent_result_is_serializable() -> None:
         title="Draft plan",
         assigned_agent_id="agent-dev",
         required_tools=["git.read"],
+        required_tool_scopes={"git.read": ["github:contents:read"]},
         acceptance_criteria=["Plan has a verifiable next action."],
         sequence=1,
     )
@@ -80,6 +81,7 @@ def test_task_run_result_captures_execution_boundary() -> None:
         title="Draft plan",
         assigned_agent_id="agent-dev",
         required_tools=["git.read"],
+        required_tool_scopes={"git.read": ["github:contents:read"]},
         acceptance_criteria=["Plan has a verifiable next action."],
         sequence=1,
     )
@@ -146,6 +148,9 @@ def test_task_run_result_captures_execution_boundary() -> None:
     assert payload["task"]["id"] == task.id
     assert payload["task"]["acceptance_criteria"] == ["Plan has a verifiable next action."]
     assert payload["task"]["required_tools"] == ["git.read"]
+    assert payload["task"]["required_tool_scopes"] == {
+        "git.read": ["github:contents:read"]
+    }
     assert payload["memory_context"]["tokens_used"] == 42
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["world_view"]["available_service_capabilities"] == {
@@ -186,6 +191,7 @@ def test_task_run_batch_result_captures_skip_reasons() -> None:
                 reason="Credential scopes missing for required tool: web.fetch",
             )
         ],
+        credential_resumed_task_ids=["task_blocked"],
     )
 
     payload = result.model_dump(mode="json")
@@ -201,6 +207,7 @@ def test_task_run_batch_result_captures_skip_reasons() -> None:
     assert payload["credential_access_requests"][0]["id"] == (
         "credential-access-task-blocked-web-fetch"
     )
+    assert payload["credential_resumed_task_ids"] == ["task_blocked"]
 
 
 def test_memory_item_defaults_to_approved_status() -> None:

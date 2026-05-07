@@ -28,6 +28,7 @@ export type TaskRecord = {
   assigned_agent_id: string;
   depends_on: string[];
   required_tools: string[];
+  required_tool_scopes: Record<string, string[]>;
   acceptance_criteria: string[];
   parent_task_id?: string | null;
   sequence: number;
@@ -245,6 +246,7 @@ export type TaskRunBatchResult = {
   skipped_task_ids: string[];
   skipped_tasks: TaskSkipRecord[];
   credential_access_requests: CredentialAccessRequest[];
+  credential_resumed_task_ids: string[];
   lease_recovery?: unknown | null;
   scheduler_event?: unknown | null;
   scheduler_audit_log?: unknown | null;

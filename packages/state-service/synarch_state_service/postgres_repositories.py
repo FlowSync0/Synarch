@@ -328,6 +328,7 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "assigned_agent_id",
                 "depends_on",
                 "required_tools",
+                "required_tool_scopes",
                 "acceptance_criteria",
                 "parent_task_id",
                 "sequence",
@@ -342,7 +343,7 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "dead_lettered_at",
                 "created_at",
             ),
-            frozenset({"result"}),
+            frozenset({"required_tool_scopes", "result"}),
         ),
         events=PostgresRecordRepository(
             database_url,

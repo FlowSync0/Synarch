@@ -395,6 +395,8 @@ def persist_goal_submission(
                     task_ids_by_draft_title.get(dependency, dependency)
                     for dependency in draft.depends_on
                 ],
+                required_tools=draft.required_tools,
+                required_tool_scopes=draft.required_tool_scopes,
                 acceptance_criteria=draft.acceptance_criteria,
                 sequence=draft.sequence,
             ),
@@ -790,9 +792,13 @@ class GatewayToolReadinessChecker:
         task: TaskRecord,
         world_view: LocalWorldView,
     ) -> list[CredentialReadinessBlocker]:
-        statuses = tool_credential_statuses_for_world_view(world_view)
+        statuses = tool_credential_statuses_for_world_view(
+            world_view,
+            required_scopes_by_tool=task.required_tool_scopes,
+        )
         blockers: list[CredentialReadinessBlocker] = []
         for required_tool in task.required_tools:
+            task_required_scopes = tuple(task.required_tool_scopes.get(required_tool, []))
             matching_statuses = [
                 status for status in statuses if status.tool_name == required_tool
             ]
@@ -806,9 +812,8 @@ class GatewayToolReadinessChecker:
                             "No credential-ready service for required tool: "
                             f"{required_tool}"
                         ),
-                        requested_scopes=manifest.credential_scopes
-                        if manifest is not None
-                        else (),
+                        requested_scopes=task_required_scopes
+                        or (manifest.credential_scopes if manifest is not None else ()),
                         candidate_service_ids=tuple(candidate_service_ids),
                     )
                 )
@@ -848,6 +853,12 @@ def execute_tool_call_through_gate(
 ) -> ToolResult:
     world_view = control_plane.get_world_view(tool_call.agent_id)
     error = tool_access_error(tool_call, world_view)
+    if error is None:
+        error = task_tool_credential_scope_error(
+            tool_call,
+            world_view,
+            state_client,
+        )
     if error is not None:
         state_client.create_event(
             tool_call_event(tool_call, EventType.tool_failed, trace_id, error=error),
@@ -973,10 +984,43 @@ def tool_credential_scope_error(
     )
 
 
+def task_tool_credential_scope_error(
+    tool_call: ToolCallRequest,
+    world_view: LocalWorldView,
+    state_client: StateClient,
+) -> str | None:
+    if tool_call.task_id is None:
+        return None
+    try:
+        task = state_client.get_task(tool_call.task_id)
+    except (StateServiceRequestError, ValueError, KeyError):
+        return None
+
+    required_scopes = task.required_tool_scopes.get(tool_call.tool_name, [])
+    if not required_scopes:
+        return None
+    if tool_call.service_id is None:
+        return f"Missing service for credential-scoped tool: {tool_call.tool_name}"
+
+    service_scopes = world_view.available_service_credential_scopes.get(
+        tool_call.service_id, []
+    )
+    missing_scopes = [scope for scope in required_scopes if scope not in service_scopes]
+    if not missing_scopes:
+        return None
+    return (
+        f"Missing task credential scopes for service {tool_call.service_id}: "
+        f"{', '.join(missing_scopes)}"
+    )
+
+
 def tool_credential_statuses_for_world_view(
     world_view: LocalWorldView,
+    *,
+    required_scopes_by_tool: dict[str, list[str]] | None = None,
 ) -> list[ToolCredentialStatus]:
     statuses: list[ToolCredentialStatus] = []
+    task_required_scopes = required_scopes_by_tool or {}
     available_services = set(world_view.available_services)
     for service_id in sorted(world_view.available_service_capabilities):
         if service_id not in available_services:
@@ -987,9 +1031,14 @@ def tool_credential_statuses_for_world_view(
         )
         for tool_name in sorted(service_tools):
             manifest = TOOL_ADAPTER_MANIFESTS.get(tool_name)
-            if manifest is None:
+            if manifest is None and tool_name not in task_required_scopes:
                 continue
-            required_scopes = manifest.credential_scopes
+            required_scopes = tuple(
+                task_required_scopes.get(
+                    tool_name,
+                    list(manifest.credential_scopes) if manifest is not None else [],
+                )
+            )
             missing_scopes = tuple(
                 scope for scope in required_scopes if scope not in available_scopes
             )

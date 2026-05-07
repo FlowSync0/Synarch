@@ -160,7 +160,7 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
                     "status must be one of completed, needs_review, blocked, failed. "
                     "sub_tasks_created must be a list of small debuggable task objects "
                     "with title, description, assigned_agent_id, depends_on, "
-                    "acceptance_criteria, and sequence. "
+                    "required_tools, required_tool_scopes, acceptance_criteria, and sequence. "
                     "tool_calls_requested must be a list of tool call objects with "
                     "tool_name, service_id, reason, and arguments. Request a tool only "
                     "when it is in world_view.permissions.allowed_tools and you need "
@@ -264,6 +264,10 @@ def parsed_sub_tasks(
                 description=string_value(raw_sub_task.get("description")),
                 assigned_agent_id=assigned_agent_id,
                 depends_on=string_list(raw_sub_task.get("depends_on")),
+                required_tools=string_list(raw_sub_task.get("required_tools")),
+                required_tool_scopes=string_list_map(
+                    raw_sub_task.get("required_tool_scopes")
+                ),
                 acceptance_criteria=acceptance_criteria,
                 sequence=integer_value(raw_sub_task.get("sequence"), index),
             )
@@ -347,6 +351,16 @@ def string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if str(item).strip()]
+
+
+def string_list_map(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): string_list(raw_scopes)
+        for key, raw_scopes in value.items()
+        if str(key).strip() and string_list(raw_scopes)
+    }
 
 
 def integer_value(value: Any, default: int) -> int:

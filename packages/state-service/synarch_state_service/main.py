@@ -320,6 +320,12 @@ def validate_task_breakdown(task: TaskRecord) -> None:
             status_code=400,
             detail="Task requires at least one acceptance criterion",
         )
+    unknown_scope_tools = sorted(set(task.required_tool_scopes) - set(task.required_tools))
+    if unknown_scope_tools:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Credential scopes reference non-required tools: {unknown_scope_tools}",
+        )
     missing_dependencies = [
         dependency_id
         for dependency_id in task.depends_on

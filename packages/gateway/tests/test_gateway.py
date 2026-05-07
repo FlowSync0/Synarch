@@ -1274,6 +1274,66 @@ def test_tool_gate_denies_missing_required_credential_scope(
     assert state_client.audit_logs[0].action == "tool.denied"
 
 
+def test_tool_gate_denies_missing_task_credential_scope() -> None:
+    state_client = FakeStateClient()
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_task_scoped_credentials",
+            project_id="project_sourcing",
+            title="Fetch authenticated supplier page",
+            assigned_agent_id="agent-ops-sourcing",
+            required_tools=["web.fetch"],
+            required_tool_scopes={"web.fetch": ["browser:authenticated_fetch"]},
+            acceptance_criteria=["Authenticated fetch has evidence."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+                available_service_credential_scopes={"connector-supplier-web": []},
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_tool_missing_task_credential_scope"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.fetch",
+                "service_id": "connector-supplier-web",
+                "project_id": "project_sourcing",
+                "task_id": "task_task_scoped_credentials",
+                "reason": "Try to fetch through a connector without task credentials.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == (
+        "Missing task credential scopes for service connector-supplier-web: "
+        "browser:authenticated_fetch"
+    )
+    assert state_client.events[0].type == EventType.tool_failed
+    assert state_client.audit_logs[0].action == "tool.denied"
+
+
 def test_tool_gate_denies_forbidden_tool_and_records_logs() -> None:
     state_client = FakeStateClient()
     control_plane = FakeControlPlaneClient(
@@ -1902,22 +1962,7 @@ def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
     assert state_client.audit_logs[-1].payload["stop_reason"] == "no_ready_task"
 
 
-def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setitem(
-        gateway_main.TOOL_ADAPTER_MANIFESTS,
-        "web.fetch",
-        gateway_main.ToolAdapterManifest(
-            tool_name="web.fetch",
-            adapter="web.fetch",
-            required_arguments=("url",),
-            credential_scopes=("browser:authenticated_fetch",),
-            requires_credentials=True,
-            network_access=True,
-            risk_level="medium",
-        ),
-    )
+def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials() -> None:
     state_client = FakeStateClient()
     state_client.projects.append(
         ProjectRecord(
@@ -1935,6 +1980,9 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
                 title="Fetch authenticated page",
                 assigned_agent_id="agent-ops-sourcing",
                 required_tools=["web.fetch"],
+                required_tool_scopes={
+                    "web.fetch": ["browser:authenticated_fetch"]
+                },
                 acceptance_criteria=["Authenticated fetch has evidence."],
                 sequence=1,
             ),
@@ -2032,6 +2080,91 @@ def test_run_ready_tasks_skips_task_with_missing_required_tool_credentials(
     assert state_client.credential_access_requests[0].requested_scopes == [
         "browser:authenticated_fetch"
     ]
+
+
+def test_run_ready_tasks_resumes_after_credential_grant() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_readiness_resume",
+            title="Credential readiness resume",
+            goal="Resume credential-blocked work after a grant is applied.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_credentials_applied",
+            project_id="project_readiness_resume",
+            title="Fetch authenticated page",
+            assigned_agent_id="agent-ops-sourcing",
+            required_tools=["web.fetch"],
+            required_tool_scopes={"web.fetch": ["browser:authenticated_fetch"]},
+            acceptance_criteria=["Authenticated fetch has evidence."],
+            sequence=1,
+        )
+    )
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential_access_task_credentials_applied_web_fetch",
+            task_id="task_credentials_applied",
+            project_id="project_readiness_resume",
+            agent_id="agent-ops-sourcing",
+            tool_name="web.fetch",
+            requested_scopes=["browser:authenticated_fetch"],
+            candidate_service_ids=["connector-supplier-web"],
+            reason="Credential scopes missing for required tool: web.fetch",
+            status="applied",
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"]
+                },
+                available_service_credential_scopes={
+                    "connector-supplier-web": ["browser:authenticated_fetch"]
+                },
+            )
+        }
+    )
+    runtime_client = CompletingAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_readiness=gateway_main.GatewayToolReadinessChecker(),
+    )
+
+    result = runner.run_ready(
+        max_tasks=1,
+        trace_id="trace_readiness_resume",
+        headers=gateway_main.service_headers("trace_readiness_resume"),
+        project_id="project_readiness_resume",
+    )
+
+    assert result.skipped_task_ids == []
+    assert result.credential_access_requests == []
+    assert result.credential_resumed_task_ids == ["task_credentials_applied"]
+    assert [run.task.id for run in result.runs] == ["task_credentials_applied"]
+    assert [request.task.id for request in runtime_client.requests] == [
+        "task_credentials_applied"
+    ]
+    assert state_client.tasks[0].status == TaskStatus.completed
+    assert state_client.events[-1].payload["credential_resumed_task_ids"] == [
+        "task_credentials_applied"
+    ]
+    assert state_client.events[-1].payload["credential_resumed_task_count"] == 1
 
 
 def test_list_credential_access_requests_forwards_state_filters() -> None:
@@ -2479,6 +2612,8 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "skipped_task_count": 0,
         "credential_access_request_ids": [],
         "credential_access_request_count": 0,
+        "credential_resumed_task_ids": [],
+        "credential_resumed_task_count": 0,
         "lease_recovered_task_ids": [],
         "lease_failed_task_ids": [],
         "created_sub_task_count": 0,
