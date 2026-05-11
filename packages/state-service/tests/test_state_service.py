@@ -589,6 +589,28 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
     )
     assert repeat_run.status_code == 409
 
+    resume_response = client.post(
+        "/connector-jobs/connector-job-supplier-followup/resume",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "resumed_by_type": "user",
+            "resumed_by_id": "local-user",
+            "reason": "Manual resume for another controlled follow-up.",
+        },
+    )
+
+    assert resume_response.status_code == 200
+    resumed = resume_response.json()
+    assert resumed["job"]["status"] == "active"
+    assert resumed["job"]["stopped_at"] is None
+    assert resumed["job"]["next_run_at"] is not None
+    assert resumed["event"]["type"] == "connector_job.resumed"
+    assert resumed["audit_log"]["action"] == "connector_job.resumed"
+
     events = client.get("/events", params={"trace_id": trace_id}).json()
     assert [
         event["type"]
@@ -598,12 +620,14 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
         "connector_job.created",
         "connector_job.run_recorded",
         "connector_job.stopped",
+        "connector_job.resumed",
     ]
     audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
     assert {
         "connector_job.created",
         "connector_job.run_recorded",
         "connector_job.stopped",
+        "connector_job.resumed",
     }.issubset({audit["action"] for audit in audits})
 
 

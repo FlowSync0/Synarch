@@ -1,4 +1,9 @@
-import type { EventRecord, ProjectRecord } from "./state-service-api";
+import type {
+  ConnectorJobRecord,
+  ConnectorJobRunRecord,
+  EventRecord,
+  ProjectRecord
+} from "./state-service-api";
 
 export type TaskStatus =
   | "draft"
@@ -299,6 +304,22 @@ export type TaskRunResult = {
   cost_records: CostRecord[];
 };
 
+export type ConnectorJobAction = "run" | "stop" | "resume";
+
+export type ConnectorJobMutationResult = {
+  job: ConnectorJobRecord;
+  event: unknown;
+  audit_log?: unknown | null;
+};
+
+export type ConnectorJobRunResult = {
+  run: ConnectorJobRunRecord;
+  event: unknown;
+  audit_log?: unknown | null;
+};
+
+export type ConnectorJobActionResult = ConnectorJobMutationResult | ConnectorJobRunResult;
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -383,6 +404,75 @@ export async function runTask(taskId: string): Promise<TaskRunResult> {
     }
   });
   return parseJsonResponse<TaskRunResult>(response);
+}
+
+export async function runConnectorJobNow({
+  jobId
+}: {
+  jobId: string;
+}): Promise<ConnectorJobRunResult> {
+  const response = await fetch(
+    `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/execute`,
+    {
+      method: "POST",
+      headers: {
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_connector_job_run_${Date.now()}`
+      }
+    }
+  );
+  return parseJsonResponse<ConnectorJobRunResult>(response);
+}
+
+export async function stopConnectorJob({
+  jobId
+}: {
+  jobId: string;
+}): Promise<ConnectorJobMutationResult> {
+  const response = await fetch(
+    `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/stop`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_connector_job_stop_${Date.now()}`
+      },
+      body: JSON.stringify({
+        stopped_by_type: "user",
+        stopped_by_id: "local-user",
+        reason: "Stopped from Synarch dashboard."
+      })
+    }
+  );
+  return parseJsonResponse<ConnectorJobMutationResult>(response);
+}
+
+export async function resumeConnectorJob({
+  jobId
+}: {
+  jobId: string;
+}): Promise<ConnectorJobMutationResult> {
+  const response = await fetch(
+    `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/resume`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_connector_job_resume_${Date.now()}`
+      },
+      body: JSON.stringify({
+        resumed_by_type: "user",
+        resumed_by_id: "local-user",
+        reason: "Resumed from Synarch dashboard."
+      })
+    }
+  );
+  return parseJsonResponse<ConnectorJobMutationResult>(response);
 }
 
 export async function callTool(toolCall: ToolCallRequest): Promise<ToolResult> {

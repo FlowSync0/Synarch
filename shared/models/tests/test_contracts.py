@@ -3,6 +3,7 @@ from synarch_models import (
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobResumeRequest,
     ConnectorJobRunBatchResult,
     ConnectorJobRunRecord,
     ConnectorJobRunResult,
@@ -294,6 +295,11 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
         job=job,
         event=EventRecord(type=EventType.connector_job_created),
     )
+    resume = ConnectorJobResumeRequest(
+        resumed_by_type="user",
+        resumed_by_id="local-user",
+        reason="Manual resume from dashboard.",
+    )
     run_result = ConnectorJobRunResult(
         run=run,
         event=EventRecord(type=EventType.connector_job_run_recorded),
@@ -319,6 +325,7 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
     assert job_payload["status"] == "active"
     assert job_payload["next_run_at"] is None
     assert job_payload["metadata"] == {"stop_condition": "supplier replied"}
+    assert resume.model_dump(mode="json")["resumed_by_id"] == "local-user"
     assert run_payload["status"] == "completed"
     assert run_payload["output"] == {"message": "Follow-up sent."}
     assert batch_payload["runs"][0]["run"]["status"] == "skipped"

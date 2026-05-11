@@ -40,7 +40,7 @@ through the dashboard.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, and connector jobs, plus sample metrics. | No cost/health live reads and no connector-job control actions yet. | Dashboard reads real state-service connector jobs/runs and creates a goal through gateway. |
+| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, and connector job read/control actions, plus sample metrics. | No cost/health live reads and no detailed connector job history view yet. | Dashboard reads and controls real connector jobs through Gateway/state-service. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, and exposes an opt-in scheduler worker. | Routing is keyword-based only and there is no durable worker queue yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | Seeded agents, capabilities, permissions, and deterministic `LocalWorldView`. | Agents are static Python seed data; org changes and service registry are not state-backed. | Create/update agent in state -> control-plane reads it -> world view is deterministic. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
@@ -306,6 +306,8 @@ Progress:
   and `metadata.max_failures` stops jobs after a bounded number of failed runs.
 - Done: frontend reads connector jobs and connector job runs through state-service proxy routes,
   showing status, next run, policies, latest run/error, and stop detail in the dashboard.
+- Done: connector jobs can be resumed with a durable `connector_job.resumed` event/audit, and
+  the dashboard can run, stop, or resume jobs through Gateway proxy routes.
 
 Definition of done:
 

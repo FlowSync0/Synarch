@@ -25,8 +25,8 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.14",
-    detail: "Connector job live panel",
+    value: "M5.15",
+    detail: "Connector job controls",
     tone: "accent" as Tone
   },
   {
@@ -50,9 +50,9 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job live panel",
+  title: "Connector job controls",
   body:
-    "Les jobs connecteurs et leurs derniers runs sont maintenant lisibles depuis l'interface via le state-service, avec statut, prochaine execution, policy et raison d'arret visible.",
+    "Les jobs connecteurs peuvent maintenant etre executes, stoppes et repris depuis l'interface via le Gateway, tout en gardant les events/audits durables.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
@@ -67,8 +67,10 @@ export const currentFocus = {
     "metadata.max_failures stoppe le job apres un nombre borne d'echecs",
     "Frontend proxy lit /connector-jobs et /connector-job-runs depuis state-service",
     "Dashboard affiche jobs actifs/stoppes, next_run_at, policies et dernier run",
+    "Gateway expose stop/resume comme surface controlee au-dessus du state-service",
+    "Dashboard peut run now, stop ou resume un connector job live",
     "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
-    "Create, tick, execute, run et stop emettent connector_job.* et audit logs",
+    "Create, tick, execute, run, stop et resume emettent connector_job.* et audit logs",
     "Tests backend complets passent"
   ]
 };
@@ -106,9 +108,9 @@ export const projects = [
     owner: "Frontend",
     status: "partial",
     priority: "medium",
-    progress: 34,
+    progress: 38,
     summary:
-      "Afficher projets, agents, timeline, reviews, permissions et jobs connecteurs depuis les APIs live."
+      "Afficher projets, agents, timeline, reviews, permissions et actions jobs connecteurs depuis les APIs live."
   }
 ];
 
@@ -157,8 +159,8 @@ export const layers = [
     name: "Interface",
     status: "partial" as Status,
     icon: Sparkles,
-    summary: "Dashboard Next.js lit projets, agents, timeline, approvals, review queue et connector jobs en live.",
-    next: "Ajouter actions controlees sur connector jobs et vues detaillees projet/taches."
+    summary: "Dashboard Next.js lit et controle les connector jobs en live via Gateway/state-service.",
+    next: "Ajouter vues detaillees projet/taches et confirmations pour actions risquées."
   },
   {
     id: "B",

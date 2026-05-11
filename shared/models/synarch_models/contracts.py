@@ -301,6 +301,14 @@ class ConnectorJobStopRequest(SynarchModel):
     stopped_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class ConnectorJobResumeRequest(SynarchModel):
+    resumed_by_type: ActorType
+    resumed_by_id: str
+    reason: str = Field(min_length=1)
+    next_run_at: datetime | None = None
+    resumed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class TaskRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("task"))
     project_id: str

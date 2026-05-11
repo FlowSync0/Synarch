@@ -5,11 +5,11 @@
     "status": "partial",
     "exists_now": [
       "Next.js control surface",
-      "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, and connector jobs",
+      "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, and connector job controls",
       "Sample metrics still present"
     ],
-    "main_gap": "No live cost/health dashboard and no connector-job control actions.",
-    "next_validation": "Dashboard reads state-service connector jobs/runs and shows latest run status for a live project.",
+    "main_gap": "No live cost/health dashboard and no detailed connector job history view.",
+    "next_validation": "Dashboard runs, stops, and resumes a live connector job through Gateway with event/audit traces.",
     "source": "docs/roadmap.md"
   },
   {

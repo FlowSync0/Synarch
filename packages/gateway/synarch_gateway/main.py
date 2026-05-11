@@ -18,12 +18,15 @@ from synarch_models import (
     ApprovalStatus,
     AuditLogRecord,
     ConnectorJobKind,
+    ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobResumeRequest,
     ConnectorJobRunBatchResult,
     ConnectorJobRunRequest,
     ConnectorJobRunResult,
     ConnectorJobRunStatus,
     ConnectorJobStatus,
+    ConnectorJobStopRequest,
     CostBudgetEvaluation,
     CostRecord,
     CostSummary,
@@ -341,6 +344,19 @@ def connector_job_executor_headers(trace_id: str) -> dict[str, str]:
     return {
         "x-synarch-actor-type": ActorType.service.value,
         "x-synarch-actor-id": "gateway-connector-job-executor",
+        "x-synarch-trace-id": trace_id,
+    }
+
+
+def connector_job_operator_headers(
+    actor_type: ActorType | str,
+    actor_id: str,
+    trace_id: str,
+) -> dict[str, str]:
+    actor_type_value = actor_type.value if isinstance(actor_type, ActorType) else actor_type
+    return {
+        "x-synarch-actor-type": actor_type_value,
+        "x-synarch-actor-id": actor_id,
         "x-synarch-trace-id": trace_id,
     }
 
@@ -714,6 +730,54 @@ def execute_connector_job(
         raise HTTPException(
             status_code=502,
             detail="Connector job execution dependency unavailable",
+        ) from error
+
+
+@app.post("/connector-jobs/{job_id}/stop", response_model=ConnectorJobMutationResult)
+def stop_connector_job(
+    job_id: str,
+    stop_request: ConnectorJobStopRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> ConnectorJobMutationResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = connector_job_operator_headers(
+        stop_request.stopped_by_type,
+        stop_request.stopped_by_id,
+        trace_id,
+    )
+    try:
+        return state_client.stop_connector_job(job_id, stop_request, headers=headers)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Connector job stop dependency unavailable",
+        ) from error
+
+
+@app.post("/connector-jobs/{job_id}/resume", response_model=ConnectorJobMutationResult)
+def resume_connector_job(
+    job_id: str,
+    resume_request: ConnectorJobResumeRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> ConnectorJobMutationResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = connector_job_operator_headers(
+        resume_request.resumed_by_type,
+        resume_request.resumed_by_id,
+        trace_id,
+    )
+    try:
+        return state_client.resume_connector_job(job_id, resume_request, headers=headers)
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Connector job resume dependency unavailable",
         ) from error
 
 

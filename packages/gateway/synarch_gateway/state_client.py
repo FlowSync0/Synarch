@@ -8,9 +8,12 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AuditLogRecord,
+    ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobResumeRequest,
     ConnectorJobRunRequest,
     ConnectorJobRunResult,
+    ConnectorJobStopRequest,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -238,6 +241,22 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> ConnectorJobRunResult: ...
+
+    def stop_connector_job(
+        self,
+        job_id: str,
+        stop_request: ConnectorJobStopRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult: ...
+
+    def resume_connector_job(
+        self,
+        job_id: str,
+        resume_request: ConnectorJobResumeRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult: ...
 
 
 @dataclass(frozen=True)
@@ -588,6 +607,34 @@ class HttpStateClient:
             headers,
         )
         return ConnectorJobRunResult.model_validate(response.json())
+
+    def stop_connector_job(
+        self,
+        job_id: str,
+        stop_request: ConnectorJobStopRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult:
+        response = self._post(
+            f"/connector-jobs/{job_id}/stop",
+            stop_request.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorJobMutationResult.model_validate(response.json())
+
+    def resume_connector_job(
+        self,
+        job_id: str,
+        resume_request: ConnectorJobResumeRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult:
+        response = self._post(
+            f"/connector-jobs/{job_id}/resume",
+            resume_request.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorJobMutationResult.model_validate(response.json())
 
     def _get(
         self,

@@ -20,6 +20,7 @@ from synarch_models import (
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobResumeRequest,
     ConnectorJobRunBatchResult,
     ConnectorJobRunRecord,
     ConnectorJobRunRequest,
@@ -215,6 +216,17 @@ def connector_job_stop_audit_context(
     return AuditContext(
         actor_type=stop_request.stopped_by_type,
         actor_id=stop_request.stopped_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def connector_job_resume_audit_context(
+    resume_request: ConnectorJobResumeRequest,
+    request: Request,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=resume_request.resumed_by_type,
+        actor_id=resume_request.resumed_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
     )
 
@@ -2470,6 +2482,47 @@ def stop_connector_job(
         target_type="connector_job",
         target_id=record.id,
         payload={**connector_job_payload(record), "reason": stop_request.reason},
+    )
+    return ConnectorJobMutationResult(job=record, event=event, audit_log=audit)
+
+
+@app.post("/connector-jobs/{job_id}/resume", response_model=ConnectorJobMutationResult)
+def resume_connector_job(
+    job_id: str,
+    resume_request: ConnectorJobResumeRequest,
+    request: Request,
+) -> ConnectorJobMutationResult:
+    job = read_record(REPOSITORIES.connector_jobs, job_id, "connector job")
+    if job.status == ConnectorJobStatus.active:
+        raise HTTPException(status_code=409, detail="Connector job is already active")
+    resumed_at = utc_datetime(resume_request.resumed_at)
+    resumed_job = job.model_copy(
+        update={
+            "status": ConnectorJobStatus.active,
+            "updated_at": resumed_at,
+            "next_run_at": utc_datetime(resume_request.next_run_at)
+            if resume_request.next_run_at is not None
+            else resumed_at,
+            "stopped_at": None,
+        }
+    )
+    validate_connector_job(resumed_job)
+    record = update_record(REPOSITORIES.connector_jobs, job_id, resumed_job, "connector job")
+    trace_id = request.headers.get("x-synarch-trace-id")
+    event = create_domain_event(
+        connector_job_event(
+            record,
+            EventType.connector_job_resumed,
+            trace_id,
+            extra_payload={"reason": resume_request.reason},
+        )
+    )
+    audit = write_audit_log(
+        connector_job_resume_audit_context(resume_request, request),
+        action="connector_job.resumed",
+        target_type="connector_job",
+        target_id=record.id,
+        payload={**connector_job_payload(record), "reason": resume_request.reason},
     )
     return ConnectorJobMutationResult(job=record, event=event, audit_log=audit)
 

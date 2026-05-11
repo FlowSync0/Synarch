@@ -19,10 +19,14 @@ from synarch_models import (
     AgentResult,
     AgentTaskRequest,
     AuditLogRecord,
+    ConnectorJobMutationResult,
     ConnectorJobRecord,
+    ConnectorJobResumeRequest,
     ConnectorJobRunRecord,
     ConnectorJobRunRequest,
     ConnectorJobRunResult,
+    ConnectorJobStatus,
+    ConnectorJobStopRequest,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -697,6 +701,86 @@ class FakeStateClient:
         self.events.append(event)
         self.audit_logs.append(audit)
         return ConnectorJobRunResult(run=run, event=event, audit_log=audit)
+
+    def stop_connector_job(
+        self,
+        job_id: str,
+        stop_request: ConnectorJobStopRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult:
+        self.headers.append(headers)
+        job = self.get_connector_job(job_id)
+        if job.status == ConnectorJobStatus.stopped:
+            raise StateServiceRequestError(409, "Connector job is already stopped")
+        stopped_job = job.model_copy(
+            update={
+                "status": ConnectorJobStatus.stopped,
+                "updated_at": stop_request.stopped_at,
+                "next_run_at": None,
+                "stopped_at": stop_request.stopped_at,
+            }
+        )
+        self.connector_jobs[self.connector_jobs.index(job)] = stopped_job
+        event = EventRecord(
+            type=EventType.connector_job_stopped,
+            source_agent_id=job.owner_agent_id,
+            target=job.project_id or job.service_id,
+            payload={"connector_job_id": job.id, "reason": stop_request.reason},
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        audit = AuditLogRecord(
+            actor_type=stop_request.stopped_by_type,
+            actor_id=stop_request.stopped_by_id,
+            action="connector_job.stopped",
+            target_type="connector_job",
+            target_id=job.id,
+            payload={"connector_job_id": job.id, "reason": stop_request.reason},
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        self.audit_logs.append(audit)
+        return ConnectorJobMutationResult(job=stopped_job, event=event, audit_log=audit)
+
+    def resume_connector_job(
+        self,
+        job_id: str,
+        resume_request: ConnectorJobResumeRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult:
+        self.headers.append(headers)
+        job = self.get_connector_job(job_id)
+        if job.status == ConnectorJobStatus.active:
+            raise StateServiceRequestError(409, "Connector job is already active")
+        resumed_job = job.model_copy(
+            update={
+                "status": ConnectorJobStatus.active,
+                "updated_at": resume_request.resumed_at,
+                "next_run_at": resume_request.next_run_at or resume_request.resumed_at,
+                "stopped_at": None,
+            }
+        )
+        self.connector_jobs[self.connector_jobs.index(job)] = resumed_job
+        event = EventRecord(
+            type=EventType.connector_job_resumed,
+            source_agent_id=job.owner_agent_id,
+            target=job.project_id or job.service_id,
+            payload={"connector_job_id": job.id, "reason": resume_request.reason},
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        audit = AuditLogRecord(
+            actor_type=resume_request.resumed_by_type,
+            actor_id=resume_request.resumed_by_id,
+            action="connector_job.resumed",
+            target_type="connector_job",
+            target_id=job.id,
+            payload={"connector_job_id": job.id, "reason": resume_request.reason},
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        self.audit_logs.append(audit)
+        return ConnectorJobMutationResult(job=resumed_job, event=event, audit_log=audit)
 
 
 class FailingStateClient(FakeStateClient):
@@ -1881,6 +1965,64 @@ def test_connector_job_execute_records_skipped_run_without_tool_mapping() -> Non
     assert [audit.action for audit in state_client.audit_logs] == [
         "connector_job.run_recorded"
     ]
+
+
+def test_connector_job_stop_and_resume_proxy_state_with_user_headers() -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-control",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            task_id="task_supplier_followup",
+            owner_agent_id="agent-ops-sourcing",
+            kind="cron",
+            schedule="*/15 * * * *",
+            purpose="Controlled connector job action smoke.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={"tool_name": "web.fetch"},
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        stop_response = TestClient(app).post(
+            "/connector-jobs/connector-job-control/stop",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_control"},
+            json={
+                "stopped_by_type": "user",
+                "stopped_by_id": "local-user",
+                "reason": "Pause from dashboard.",
+            },
+        )
+        resume_response = TestClient(app).post(
+            "/connector-jobs/connector-job-control/resume",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_control"},
+            json={
+                "resumed_by_type": "user",
+                "resumed_by_id": "local-user",
+                "reason": "Resume from dashboard.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert stop_response.status_code == 200
+    assert stop_response.json()["job"]["status"] == "stopped"
+    assert resume_response.status_code == 200
+    assert resume_response.json()["job"]["status"] == "active"
+    assert resume_response.json()["job"]["next_run_at"] is not None
+    assert [event.type for event in state_client.events] == [
+        EventType.connector_job_stopped,
+        EventType.connector_job_resumed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "connector_job.stopped",
+        "connector_job.resumed",
+    ]
+    assert state_client.headers[0]["x-synarch-actor-id"] == "local-user"
+    assert state_client.headers[1]["x-synarch-actor-id"] == "local-user"
 
 
 def test_connector_job_run_ready_executes_bounded_jobs_and_records_tick(

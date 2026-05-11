@@ -54,10 +54,15 @@ import {
   getProjectTimeline,
   listCredentialAccessRequests,
   listTaskReviewQueue,
+  resumeConnectorJob,
   runReadyTasks,
+  runConnectorJobNow,
   runTask,
   submitGoal,
+  stopConnectorJob,
   updateMemoryStatus,
+  type ConnectorJobAction,
+  type ConnectorJobActionResult,
   type GoalEnvelope,
   type GoalPriority,
   type GoalSubmissionResult,
@@ -1077,6 +1082,27 @@ export default function DashboardPage() {
     mutationFn: callTool,
     onSuccess: (result) => {
       setLastToolResult(result);
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const connectorJobActionMutation = useMutation<
+    ConnectorJobActionResult,
+    Error,
+    { jobId: string; action: ConnectorJobAction }
+  >({
+    mutationFn: ({ jobId, action }: { jobId: string; action: ConnectorJobAction }) => {
+      if (action === "run") {
+        return runConnectorJobNow({ jobId });
+      }
+      if (action === "stop") {
+        return stopConnectorJob({ jobId });
+      }
+      return resumeConnectorJob({ jobId });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
@@ -2562,6 +2588,9 @@ export default function DashboardPage() {
                     : job.stopped_at
                       ? formatRelativeTimestamp(job.stopped_at)
                       : "stopped";
+                const pendingConnectorJobAction =
+                  connectorJobActionMutation.isPending &&
+                  connectorJobActionMutation.variables?.jobId === job.id;
                 return (
                   <article
                     key={job.id}
@@ -2656,11 +2685,80 @@ export default function DashboardPage() {
                       ) : (
                         <p className="text-xs text-muted">No run recorded yet.</p>
                       )}
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {job.status === "active" ? (
+                          <>
+                            <button
+                              className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition enabled:hover:border-info/40 enabled:hover:bg-info-soft enabled:hover:text-info disabled:cursor-not-allowed disabled:opacity-40"
+                              disabled={pendingConnectorJobAction}
+                              title="Run connector job now"
+                              type="button"
+                              onClick={() =>
+                                connectorJobActionMutation.mutate({
+                                  jobId: job.id,
+                                  action: "run"
+                                })
+                              }
+                            >
+                              <Play size={13} />
+                              <span>
+                                {pendingConnectorJobAction &&
+                                connectorJobActionMutation.variables?.action === "run"
+                                  ? "Running"
+                                  : "Run"}
+                              </span>
+                            </button>
+                            <button
+                              className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                              disabled={pendingConnectorJobAction}
+                              title="Stop connector job"
+                              type="button"
+                              onClick={() =>
+                                connectorJobActionMutation.mutate({
+                                  jobId: job.id,
+                                  action: "stop"
+                                })
+                              }
+                            >
+                              <Ban size={13} />
+                              <span>
+                                {pendingConnectorJobAction &&
+                                connectorJobActionMutation.variables?.action === "stop"
+                                  ? "Stopping"
+                                  : "Stop"}
+                              </span>
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
+                            disabled={pendingConnectorJobAction}
+                            title="Resume connector job"
+                            type="button"
+                            onClick={() =>
+                              connectorJobActionMutation.mutate({
+                                jobId: job.id,
+                                action: "resume"
+                              })
+                            }
+                          >
+                            <RotateCcw size={13} />
+                            <span>{pendingConnectorJobAction ? "Resuming" : "Resume"}</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </article>
                 );
               })}
             </div>
+            {connectorJobActionMutation.isError ? (
+              <p className="border-t border-border px-4 py-2 text-xs font-medium text-risk">
+                {connectorJobActionMutation.error instanceof Error
+                  ? connectorJobActionMutation.error.message
+                  : "Connector job action failed."}
+              </p>
+            ) : null}
             {connectorJobMode === "sample" ? (
               <p className="border-t border-border px-4 py-2 text-xs font-medium text-risk">
                 {connectorJobsQuery.error instanceof Error
