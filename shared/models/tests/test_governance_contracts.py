@@ -80,12 +80,20 @@ def test_agent_lifecycle_request_requires_auditable_actor() -> None:
         allowed_model_ids=["openrouter/deepseek/deepseek-chat"],
         created_by="agent-direction",
     )
+    proposed_soul = AgentSoul(
+        id="soul-agent-finance-analyst-v1",
+        agent_id="agent-finance-analyst",
+        identity="IA Finance Analyst is a scoped invoice analysis employee.",
+        mission="Analyze invoice facts and escalate uncertain accounting cases.",
+        created_by="agent-direction",
+    )
     request = AgentLifecycleRequest(
         action=LifecycleAction.create_agent,
         requested_by_type=ActorType.agent,
         requested_by_id="agent-direction",
         reason="Finance backlog needs a dedicated invoice analyst.",
         proposed_agent=proposed_agent,
+        proposed_soul=proposed_soul,
     )
 
     payload = request.model_dump(mode="json")
@@ -93,6 +101,7 @@ def test_agent_lifecycle_request_requires_auditable_actor() -> None:
     assert payload["action"] == "create_agent"
     assert payload["requires_human_approval"] is True
     assert payload["proposed_agent"]["created_by"] == "agent-direction"
+    assert payload["proposed_soul"]["agent_id"] == "agent-finance-analyst"
 
 
 def test_credential_access_request_captures_blocking_tool_scope() -> None:

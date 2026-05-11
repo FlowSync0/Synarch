@@ -58,6 +58,7 @@ GoalEnvelope
   -> State ProjectRecord + ProjectWorkspace + AgentProjectAssignment + TaskRecord
   -> Gateway-triggered ProjectComplexityReport + optional gateway-applied ProjectSplitApplication
   -> Control Plane LocalWorldView + active AgentSoul
+  -> Lifecycle approval can create an agent with active AgentSoul in one auditable trace
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
   -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created

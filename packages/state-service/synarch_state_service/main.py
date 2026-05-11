@@ -737,6 +737,30 @@ def validate_agent_soul(soul: AgentSoul) -> None:
             )
 
 
+def validate_lifecycle_proposed_soul(
+    lifecycle_request: AgentLifecycleRequest,
+    proposed_agent: AgentDefinition,
+) -> None:
+    proposed_soul = lifecycle_request.proposed_soul
+    if proposed_soul is None:
+        return
+    if proposed_soul.agent_id != proposed_agent.id:
+        raise HTTPException(
+            status_code=400,
+            detail="proposed_soul.agent_id must match proposed_agent.id",
+        )
+    if not proposed_soul.active:
+        raise HTTPException(
+            status_code=400,
+            detail="create_agent proposed_soul must be active",
+        )
+    if REPOSITORIES.agent_souls.exists(proposed_soul.id):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Record already exists: {proposed_soul.id}",
+        )
+
+
 def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None:
     if lifecycle_request.action == LifecycleAction.create_agent:
         if lifecycle_request.proposed_agent is None:
@@ -745,6 +769,7 @@ def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None
                 detail="create_agent requires proposed_agent",
             )
         validate_agent_model_policy(lifecycle_request.proposed_agent)
+        validate_lifecycle_proposed_soul(lifecycle_request, lifecycle_request.proposed_agent)
         if REPOSITORIES.agents.exists(lifecycle_request.proposed_agent.id):
             raise HTTPException(
                 status_code=409,
@@ -753,6 +778,11 @@ def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None
         return
 
     if lifecycle_request.action == LifecycleAction.deactivate_agent:
+        if lifecycle_request.proposed_soul is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="deactivate_agent does not accept proposed_soul",
+            )
         if lifecycle_request.target_agent_id is None:
             raise HTTPException(
                 status_code=400,
@@ -803,6 +833,35 @@ def create_agent(agent: AgentDefinition, request: Request) -> AgentDefinition:
     return record
 
 
+def agent_soul_created_event(soul: AgentSoul, trace_id: str | None) -> EventRecord:
+    return EventRecord(
+        type=EventType.agent_soul_created,
+        source_agent_id=soul.created_by if REPOSITORIES.agents.exists(soul.created_by) else None,
+        target=soul.agent_id,
+        payload={"soul_id": soul.id, "version": soul.version, "active": soul.active},
+        trace_id=trace_id,
+    )
+
+
+def create_agent_soul_record(
+    soul: AgentSoul,
+    audit_context: AuditContext | None,
+    trace_id: str | None = None,
+) -> tuple[AgentSoul, EventRecord]:
+    validate_agent_soul(soul)
+    record = create_record(REPOSITORIES.agent_souls, soul.id, soul)
+    event_trace_id = audit_context.trace_id if audit_context is not None else trace_id
+    event = create_domain_event(agent_soul_created_event(record, event_trace_id))
+    write_audit_log(
+        audit_context,
+        action="agent_soul.created",
+        target_type="agent_soul",
+        target_id=record.id,
+        payload={"agent_id": record.agent_id, "version": record.version, "active": record.active},
+    )
+    return record, event
+
+
 @app.get("/agents", response_model=list[AgentDefinition])
 def list_agents(division: str | None = None) -> list[AgentDefinition]:
     agents = REPOSITORIES.agents.list_records()
@@ -819,25 +878,10 @@ def read_agent(agent_id: str) -> AgentDefinition:
 @app.post("/agent-souls", response_model=AgentSoul, status_code=201)
 def create_agent_soul(soul: AgentSoul, request: Request) -> AgentSoul:
     audit_context = audit_context_from_request(request)
-    validate_agent_soul(soul)
-    record = create_record(REPOSITORIES.agent_souls, soul.id, soul)
-    create_domain_event(
-        EventRecord(
-            type=EventType.agent_soul_created,
-            source_agent_id=record.created_by
-            if REPOSITORIES.agents.exists(record.created_by)
-            else None,
-            target=record.agent_id,
-            payload={"soul_id": record.id, "version": record.version, "active": record.active},
-            trace_id=request.headers.get("x-synarch-trace-id"),
-        )
-    )
-    write_audit_log(
+    record, _event = create_agent_soul_record(
+        soul,
         audit_context,
-        action="agent_soul.created",
-        target_type="agent_soul",
-        target_id=record.id,
-        payload={"agent_id": record.agent_id, "version": record.version, "active": record.active},
+        trace_id=request.headers.get("x-synarch-trace-id"),
     )
     return record
 
@@ -3161,7 +3205,7 @@ def approval_decided_event(
 def apply_agent_lifecycle_request(
     lifecycle_request: AgentLifecycleRequest,
     decision_context: AuditContext,
-) -> EventRecord:
+) -> list[EventRecord]:
     if lifecycle_request.action == LifecycleAction.create_agent:
         proposed_agent = lifecycle_request.proposed_agent
         if proposed_agent is None:
@@ -3175,16 +3219,27 @@ def apply_agent_lifecycle_request(
             target_id=created_agent.id,
             payload={"lifecycle_request_id": lifecycle_request.id},
         )
-        return EventRecord(
-            type=EventType.agent_created,
-            source_agent_id=agent_event_source(
-                decision_context.actor_type,
-                decision_context.actor_id,
+        events = [
+            create_domain_event(
+                EventRecord(
+                    type=EventType.agent_created,
+                    source_agent_id=agent_event_source(
+                        decision_context.actor_type,
+                        decision_context.actor_id,
+                    ),
+                    target=created_agent.id,
+                    payload={"lifecycle_request_id": lifecycle_request.id},
+                    trace_id=decision_context.trace_id,
+                )
             ),
-            target=created_agent.id,
-            payload={"lifecycle_request_id": lifecycle_request.id},
-            trace_id=decision_context.trace_id,
-        )
+        ]
+        if lifecycle_request.proposed_soul is not None:
+            _created_soul, soul_event = create_agent_soul_record(
+                lifecycle_request.proposed_soul,
+                decision_context,
+            )
+            events.append(soul_event)
+        return events
 
     if lifecycle_request.action == LifecycleAction.deactivate_agent:
         target_agent_id = lifecycle_request.target_agent_id
@@ -3205,16 +3260,20 @@ def apply_agent_lifecycle_request(
             target_id=target_agent_id,
             payload={"lifecycle_request_id": lifecycle_request.id},
         )
-        return EventRecord(
-            type=EventType.agent_deactivated,
-            source_agent_id=agent_event_source(
-                decision_context.actor_type,
-                decision_context.actor_id,
+        return [
+            create_domain_event(
+                EventRecord(
+                    type=EventType.agent_deactivated,
+                    source_agent_id=agent_event_source(
+                        decision_context.actor_type,
+                        decision_context.actor_id,
+                    ),
+                    target=target_agent_id,
+                    payload={"lifecycle_request_id": lifecycle_request.id},
+                    trace_id=decision_context.trace_id,
+                )
             ),
-            target=target_agent_id,
-            payload={"lifecycle_request_id": lifecycle_request.id},
-            trace_id=decision_context.trace_id,
-        )
+        ]
 
     raise HTTPException(
         status_code=400,
@@ -3257,9 +3316,7 @@ def decide_agent_lifecycle_request(
     ]
     final_status = decision.status
     if decision.status == ApprovalStatus.approved:
-        events.append(
-            create_domain_event(apply_agent_lifecycle_request(lifecycle_request, context))
-        )
+        events.extend(apply_agent_lifecycle_request(lifecycle_request, context))
         final_status = ApprovalStatus.applied
 
     updated_request = lifecycle_request.model_copy(update={"status": final_status})

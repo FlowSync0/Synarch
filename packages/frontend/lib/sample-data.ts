@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.16",
-    detail: "Connector job history",
+    value: "M5.17",
+    detail: "Lifecycle soul creation",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "144",
+    value: "145",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,29 +50,17 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job history",
+  title: "Lifecycle soul creation",
   body:
-    "Les jobs connecteurs exposent maintenant leur historique live dans le dashboard: runs, traces, events, audits et payloads peuvent etre inspectes sans appeler l'API a la main.",
+    "Une demande lifecycle approuvee peut maintenant creer un employe IA avec sa soul active dans le meme changement auditable; sa world view expose ensuite cette identite persistante.",
   checks: [
-    "ConnectorJobRecord porte service, projet, tache, owner et kind",
-    "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
-    "ConnectorJobRunRecord garde sortie, erreur, trigger et trace",
-    "Tick borne cree des runs skipped non fake quand aucun adaptateur n'est branche",
-    "Execution gateway passe par permissions, service capabilities et credential scopes",
-    "Batch gateway limite max_jobs et journalise connector_job.tick meme a vide",
-    "Un run cron recale next_run_at via un cooldown borne",
-    "output.stop_condition_met ou output.stop_job stoppe durablement le job",
-    "metadata.max_runs stoppe le job apres un nombre borne de runs",
-    "metadata.failure_cooldown_seconds espace les retries apres echec",
-    "metadata.max_failures stoppe le job apres un nombre borne d'echecs",
-    "Frontend proxy lit /connector-jobs et /connector-job-runs depuis state-service",
-    "Dashboard affiche jobs actifs/stoppes, next_run_at, policies et dernier run",
-    "Gateway expose stop/resume comme surface controlee au-dessus du state-service",
-    "Dashboard peut run now, stop ou resume un connector job live",
-    "Dashboard lit /audit-logs et relie runs, events et audits par connector_job_id ou trace_id",
-    "Vue historique affiche les payloads de runs, events et audits par job selectionne",
-    "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
-    "Create, tick, execute, run, stop et resume emettent connector_job.* et audit logs",
+    "AgentLifecycleRequest accepte proposed_soul pour create_agent",
+    "Validation refuse une soul rattachee a un autre agent",
+    "Decision approved applique agent.created puis agent_soul.created",
+    "State-service conserve proposed_soul en PostgreSQL via migration 0019",
+    "Control-plane world view retourne la soul active du nouvel agent",
+    "Dashboard affiche Active soul, identity et mission pour l'agent selectionne",
+    "Events et audit logs partagent le trace_id lifecycle",
     "Tests backend complets passent"
   ]
 };
@@ -177,8 +165,8 @@ export const layers = [
     name: "Control Plane",
     status: "partial" as Status,
     icon: ShieldCheck,
-    summary: "LocalWorldView, services, policies et lifecycle queue passent par state-service.",
-    next: "Afficher historique decisions et demandes de split."
+    summary: "LocalWorldView, services, policies, lifecycle queue et soul creation passent par state-service.",
+    next: "Ajouter update_agent controle et historique detaille des decisions."
   },
   {
     id: "D",
@@ -395,6 +383,11 @@ export const backlog = [
   {
     label: "M5.16",
     title: "Connector job history",
+    done: true
+  },
+  {
+    label: "M5.17",
+    title: "Lifecycle soul creation",
     done: true
   },
   {

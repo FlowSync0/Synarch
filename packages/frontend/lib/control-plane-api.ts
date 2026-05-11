@@ -28,6 +28,23 @@ export type AgentDefinition = {
   updated_at: string;
 };
 
+export type AgentSoul = {
+  id: string;
+  agent_id: string;
+  version: number;
+  identity: string;
+  mission: string;
+  responsibilities: string[];
+  operating_principles: string[];
+  boundaries: string[];
+  escalation_rules: string[];
+  communication_style: string;
+  created_by: string;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type LocalWorldView = {
   agent_id: string;
   name?: string | null;
@@ -38,6 +55,7 @@ export type LocalWorldView = {
   manager_agent_id?: string | null;
   peer_agent_ids: string[];
   direct_report_agent_ids: string[];
+  soul?: AgentSoul | null;
   active_projects: string[];
   permissions: AgentDefinition["permissions"];
   capabilities: AgentDefinition["capabilities"];
@@ -56,6 +74,7 @@ export type AgentLifecycleRequest = {
   requested_by_id: string;
   reason: string;
   proposed_agent?: AgentDefinition | null;
+  proposed_soul?: AgentSoul | null;
   target_agent_id?: string | null;
   status: ApprovalStatus;
   requires_human_approval: boolean;

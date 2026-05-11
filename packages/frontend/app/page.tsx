@@ -3322,6 +3322,19 @@ export default function DashboardPage() {
             <div className="grid gap-3 border-t border-border px-4 py-3">
               {worldViewQuery.data ? (
                 <>
+                  {worldViewQuery.data.soul ? (
+                    <div className="grid gap-1.5">
+                      <p className="text-[11px] font-semibold uppercase text-muted">
+                        Active soul
+                      </p>
+                      <p className="text-xs font-medium text-ink">
+                        {worldViewQuery.data.soul.identity}
+                      </p>
+                      <BalancedText className="text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                        {worldViewQuery.data.soul.mission}
+                      </BalancedText>
+                    </div>
+                  ) : null}
                   <div className="grid gap-1.5">
                     <p className="text-[11px] font-semibold uppercase text-muted">
                       Allowed tools

@@ -30,12 +30,13 @@
     "name": "Control Plane",
     "status": "partial",
     "exists_now": [
-      "Seeded agents, capabilities, permissions, and policies",
+      "State-backed agents, capabilities, permissions, and policies",
       "Deterministic LocalWorldView",
-      "Active AgentSoul injection"
+      "Active AgentSoul injection",
+      "Lifecycle create_agent can apply a proposed active AgentSoul"
     ],
-    "main_gap": "Organization changes are still limited and no LLM belongs inside this layer.",
-    "next_validation": "Create or update an agent in state, then verify control-plane world view.",
+    "main_gap": "Agent updates are not applied yet and no LLM belongs inside this layer.",
+    "next_validation": "Update an agent through lifecycle approval and verify control-plane world view.",
     "source": "docs/roadmap.md"
   },
   {

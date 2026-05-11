@@ -633,6 +633,7 @@ class AgentLifecycleRequest(SynarchModel):
     requested_by_id: str
     reason: str
     proposed_agent: AgentDefinition | None = None
+    proposed_soul: AgentSoul | None = None
     target_agent_id: str | None = None
     status: ApprovalStatus = ApprovalStatus.requested
     requires_human_approval: bool = True

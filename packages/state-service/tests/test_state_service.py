@@ -2502,6 +2502,17 @@ def test_agent_lifecycle_approval_creates_agent_events_and_audit() -> None:
                 "manager_id": "agent-direction",
                 "created_by": "agent-direction",
             },
+            "proposed_soul": {
+                "id": "soul-agent-finance-reviewer-v1",
+                "agent_id": "agent-finance-reviewer",
+                "identity": "IA Finance Reviewer verifies invoice evidence before human approval.",
+                "mission": "Review invoice anomalies and keep payment execution out of scope.",
+                "responsibilities": ["Review invoice evidence", "Escalate unclear VAT cases"],
+                "operating_principles": ["Keep every recommendation auditable"],
+                "boundaries": ["Never execute payments"],
+                "escalation_rules": ["Escalate payment execution requests to IA Direction"],
+                "created_by": "agent-direction",
+            },
         },
     )
     assert lifecycle_response.status_code == 201
@@ -2524,21 +2535,27 @@ def test_agent_lifecycle_approval_creates_agent_events_and_audit() -> None:
     assert [event["type"] for event in decision["events_emitted"]] == [
         "approval.decided",
         "agent.created",
+        "agent_soul.created",
     ]
 
     agent_response = client.get("/agents/agent-finance-reviewer")
     assert agent_response.status_code == 200
     assert agent_response.json()["status"] == "active"
+    active_soul_response = client.get("/agents/agent-finance-reviewer/soul")
+    assert active_soul_response.status_code == 200
+    assert active_soul_response.json()["id"] == "soul-agent-finance-reviewer-v1"
 
     request_response = client.get("/agent-lifecycle-requests/lifecycle-create-finance-reviewer")
     assert request_response.status_code == 200
     assert request_response.json()["status"] == "applied"
+    assert request_response.json()["proposed_soul"]["id"] == "soul-agent-finance-reviewer-v1"
 
     events = client.get("/events", params={"trace_id": trace_id}).json()
     assert {event["type"] for event in events} == {
         "approval.requested",
         "approval.decided",
         "agent.created",
+        "agent_soul.created",
     }
 
     audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
@@ -2546,6 +2563,7 @@ def test_agent_lifecycle_approval_creates_agent_events_and_audit() -> None:
         "agent_lifecycle_request.created",
         "agent_lifecycle_request.applied",
         "agent.created",
+        "agent_soul.created",
     }
 
 
@@ -2616,6 +2634,37 @@ def test_agent_lifecycle_deactivation_blocks_new_task_assignment() -> None:
 
     assert task_response.status_code == 400
     assert task_response.json()["detail"] == "Agent is not active: agent-temporary-worker"
+
+
+def test_agent_lifecycle_create_rejects_soul_for_different_agent() -> None:
+    client = TestClient(app)
+
+    response = client.post(
+        "/agent-lifecycle-requests",
+        json={
+            "id": "lifecycle-create-mismatched-soul",
+            "action": "create_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "Invalid soul should not be accepted.",
+            "proposed_agent": {
+                "id": "agent-valid-target",
+                "name": "IA Valid Target",
+                "role": "Temporary reviewer",
+                "division": "dev",
+            },
+            "proposed_soul": {
+                "id": "soul-wrong-agent-v1",
+                "agent_id": "agent-other-target",
+                "identity": "This soul points at another agent.",
+                "mission": "This should fail validation.",
+                "created_by": "agent-direction",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "proposed_soul.agent_id must match proposed_agent.id"
 
 
 def test_agent_lifecycle_rejection_does_not_apply_request() -> None:
