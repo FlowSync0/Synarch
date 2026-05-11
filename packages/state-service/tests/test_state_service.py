@@ -2636,6 +2636,136 @@ def test_agent_lifecycle_deactivation_blocks_new_task_assignment() -> None:
     assert task_response.json()["detail"] == "Agent is not active: agent-temporary-worker"
 
 
+def test_agent_lifecycle_update_replaces_agent_and_active_soul() -> None:
+    client = TestClient(app)
+    trace_id = "trace_lifecycle_update_agent_soul"
+
+    direction_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-direction",
+            "name": "IA Direction",
+            "role": "Company director",
+            "division": "direction",
+        },
+    )
+    assert direction_response.status_code == 201
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-dev-reviewer",
+            "name": "IA Dev Reviewer",
+            "role": "Review pull requests",
+            "division": "dev",
+            "manager_id": "agent-direction",
+            "created_by": "agent-direction",
+        },
+    )
+    assert agent_response.status_code == 201
+    soul_response = client.post(
+        "/agent-souls",
+        json={
+            "id": "soul-agent-dev-reviewer-v1",
+            "agent_id": "agent-dev-reviewer",
+            "identity": "IA Dev Reviewer checks code changes.",
+            "mission": "Review code changes and raise unsafe deployments.",
+            "created_by": "agent-direction",
+        },
+    )
+    assert soul_response.status_code == 201
+
+    lifecycle_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "lifecycle-update-dev-reviewer",
+            "action": "update_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "The reviewer now owns CI review and event emission.",
+            "target_agent_id": "agent-dev-reviewer",
+            "proposed_agent": {
+                "id": "agent-dev-reviewer",
+                "name": "IA Dev Reviewer",
+                "role": "Review pull requests and CI signals",
+                "division": "dev",
+                "manager_id": "agent-direction",
+                "capabilities": {"skills": ["code-review"], "tools": ["event.emit"], "models": []},
+                "permissions": {
+                    "can_read_scopes": ["project:dev"],
+                    "can_write_scopes": ["project:dev"],
+                    "allowed_tools": ["event.emit"],
+                    "denied_tools": ["payment.execute"],
+                },
+                "created_by": "agent-other",
+            },
+            "proposed_soul": {
+                "id": "soul-agent-dev-reviewer-v2",
+                "agent_id": "agent-dev-reviewer",
+                "version": 2,
+                "identity": "IA Dev Reviewer owns code review and CI signal triage.",
+                "mission": "Review code changes, inspect CI signals, and escalate risky deploys.",
+                "responsibilities": ["Review pull requests", "Summarize CI failures"],
+                "operating_principles": ["Keep every review traceable"],
+                "boundaries": ["Never approve payment execution"],
+                "escalation_rules": ["Escalate production deploy risk to IA Direction"],
+                "created_by": "agent-direction",
+            },
+        },
+    )
+    assert lifecycle_response.status_code == 201
+
+    decision_response = client.post(
+        "/agent-lifecycle-requests/lifecycle-update-dev-reviewer/decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "request_id": "lifecycle-update-dev-reviewer",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "Update keeps the agent in the same division and scopes tools.",
+        },
+    )
+    assert decision_response.status_code == 201
+    decision = decision_response.json()
+    assert decision["status"] == "applied"
+    assert [event["type"] for event in decision["events_emitted"]] == [
+        "approval.decided",
+        "agent.updated",
+        "agent_soul.created",
+    ]
+
+    updated_agent = client.get("/agents/agent-dev-reviewer").json()
+    assert updated_agent["role"] == "Review pull requests and CI signals"
+    assert updated_agent["permissions"]["allowed_tools"] == ["event.emit"]
+    assert updated_agent["created_by"] == "agent-direction"
+
+    active_soul = client.get("/agents/agent-dev-reviewer/soul").json()
+    assert active_soul["id"] == "soul-agent-dev-reviewer-v2"
+    assert active_soul["version"] == 2
+    old_soul = client.get("/agent-souls/soul-agent-dev-reviewer-v1").json()
+    assert old_soul["active"] is False
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert {event["type"] for event in events} == {
+        "approval.requested",
+        "approval.decided",
+        "agent.updated",
+        "agent_soul.created",
+    }
+    update_event = next(event for event in events if event["type"] == "agent.updated")
+    assert "permissions" in update_event["payload"]["changed_fields"]
+    assert "role" in update_event["payload"]["changed_fields"]
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert {audit["action"] for audit in audits} >= {
+        "agent.updated",
+        "agent_soul.deactivated",
+        "agent_soul.created",
+        "agent_lifecycle_request.applied",
+    }
+
+
 def test_agent_lifecycle_create_rejects_soul_for_different_agent() -> None:
     client = TestClient(app)
 

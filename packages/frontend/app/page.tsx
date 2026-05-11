@@ -463,12 +463,18 @@ function lifecycleTone(request: AgentLifecycleRequest): Tone {
   if (request.action === "deactivate_agent") {
     return "warn";
   }
+  if (request.action === "update_agent") {
+    return "info";
+  }
   return "accent";
 }
 
 function lifecycleIcon(request: AgentLifecycleRequest): typeof UserRoundPlus {
   if (request.action === "deactivate_agent") {
     return UserRoundX;
+  }
+  if (request.action === "update_agent") {
+    return PencilLine;
   }
   return UserRoundPlus;
 }

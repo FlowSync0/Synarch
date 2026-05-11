@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.17",
-    detail: "Lifecycle soul creation",
+    value: "M5.18",
+    detail: "Lifecycle agent update",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "145",
+    value: "147",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,13 +50,16 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Lifecycle soul creation",
+  title: "Lifecycle agent update",
   body:
-    "Une demande lifecycle approuvee peut maintenant creer un employe IA avec sa soul active dans le meme changement auditable; sa world view expose ensuite cette identite persistante.",
+    "Une demande lifecycle approuvee peut maintenant modifier un employe IA existant, remplacer sa soul active et exposer immediatement la nouvelle identite dans sa world view.",
   checks: [
     "AgentLifecycleRequest accepte proposed_soul pour create_agent",
+    "AgentLifecycleRequest applique update_agent sur target_agent_id",
     "Validation refuse une soul rattachee a un autre agent",
     "Decision approved applique agent.created puis agent_soul.created",
+    "Decision approved applique agent.updated puis agent_soul.created pour update_agent",
+    "Ancienne soul active est desactivee avant creation de la nouvelle version",
     "State-service conserve proposed_soul en PostgreSQL via migration 0019",
     "Control-plane world view retourne la soul active du nouvel agent",
     "Dashboard affiche Active soul, identity et mission pour l'agent selectionne",
@@ -165,8 +168,8 @@ export const layers = [
     name: "Control Plane",
     status: "partial" as Status,
     icon: ShieldCheck,
-    summary: "LocalWorldView, services, policies, lifecycle queue et soul creation passent par state-service.",
-    next: "Ajouter update_agent controle et historique detaille des decisions."
+    summary: "LocalWorldView, services, policies, lifecycle create/update et soul replacement passent par state-service.",
+    next: "Ajouter creation de demandes lifecycle depuis l'interface."
   },
   {
     id: "D",
@@ -388,6 +391,11 @@ export const backlog = [
   {
     label: "M5.17",
     title: "Lifecycle soul creation",
+    done: true
+  },
+  {
+    label: "M5.18",
+    title: "Lifecycle agent update",
     done: true
   },
   {

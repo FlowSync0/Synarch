@@ -33,10 +33,11 @@
       "State-backed agents, capabilities, permissions, and policies",
       "Deterministic LocalWorldView",
       "Active AgentSoul injection",
-      "Lifecycle create_agent can apply a proposed active AgentSoul"
+      "Lifecycle create_agent can apply a proposed active AgentSoul",
+      "Lifecycle update_agent can replace mutable agent definition and active AgentSoul"
     ],
-    "main_gap": "Agent updates are not applied yet and no LLM belongs inside this layer.",
-    "next_validation": "Update an agent through lifecycle approval and verify control-plane world view.",
+    "main_gap": "No frontend form to author lifecycle requests yet and no LLM belongs inside this layer.",
+    "next_validation": "Create a lifecycle request from the dashboard, approve it, then verify control-plane world view.",
     "source": "docs/roadmap.md"
   },
   {

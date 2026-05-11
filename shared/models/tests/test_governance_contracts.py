@@ -104,6 +104,42 @@ def test_agent_lifecycle_request_requires_auditable_actor() -> None:
     assert payload["proposed_soul"]["agent_id"] == "agent-finance-analyst"
 
 
+def test_agent_lifecycle_update_can_carry_replacement_soul() -> None:
+    proposed_agent = AgentDefinition(
+        id="agent-dev-reviewer",
+        name="IA Dev Reviewer",
+        role="Review code and CI signals",
+        division="dev",
+        manager_id="agent-direction",
+        created_by="agent-direction",
+    )
+    proposed_soul = AgentSoul(
+        id="soul-agent-dev-reviewer-v2",
+        agent_id="agent-dev-reviewer",
+        version=2,
+        identity="IA Dev Reviewer owns code review and CI signal triage.",
+        mission="Review code changes and escalate risky deploys.",
+        created_by="agent-direction",
+    )
+
+    request = AgentLifecycleRequest(
+        action=LifecycleAction.update_agent,
+        requested_by_type=ActorType.agent,
+        requested_by_id="agent-direction",
+        reason="Dev reviewer scope changed.",
+        target_agent_id="agent-dev-reviewer",
+        proposed_agent=proposed_agent,
+        proposed_soul=proposed_soul,
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["action"] == "update_agent"
+    assert payload["target_agent_id"] == "agent-dev-reviewer"
+    assert payload["proposed_agent"]["role"] == "Review code and CI signals"
+    assert payload["proposed_soul"]["version"] == 2
+
+
 def test_credential_access_request_captures_blocking_tool_scope() -> None:
     request = CredentialAccessRequest(
         id="credential-access-task-fetch-web",

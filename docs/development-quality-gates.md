@@ -59,6 +59,7 @@ GoalEnvelope
   -> Gateway-triggered ProjectComplexityReport + optional gateway-applied ProjectSplitApplication
   -> Control Plane LocalWorldView + active AgentSoul
   -> Lifecycle approval can create an agent with active AgentSoul in one auditable trace
+  -> Lifecycle approval can update an agent and replace active AgentSoul in one auditable trace
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
   -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created

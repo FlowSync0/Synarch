@@ -752,7 +752,7 @@ def validate_lifecycle_proposed_soul(
     if not proposed_soul.active:
         raise HTTPException(
             status_code=400,
-            detail="create_agent proposed_soul must be active",
+            detail="proposed_soul must be active",
         )
     if REPOSITORIES.agent_souls.exists(proposed_soul.id):
         raise HTTPException(
@@ -775,6 +775,31 @@ def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None
                 status_code=409,
                 detail=f"Record already exists: {lifecycle_request.proposed_agent.id}",
             )
+        return
+
+    if lifecycle_request.action == LifecycleAction.update_agent:
+        if lifecycle_request.target_agent_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="update_agent requires target_agent_id",
+            )
+        if lifecycle_request.proposed_agent is None:
+            raise HTTPException(
+                status_code=400,
+                detail="update_agent requires proposed_agent",
+            )
+        if lifecycle_request.proposed_agent.id != lifecycle_request.target_agent_id:
+            raise HTTPException(
+                status_code=400,
+                detail="proposed_agent.id must match target_agent_id",
+            )
+        if not REPOSITORIES.agents.exists(lifecycle_request.target_agent_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown target agent: {lifecycle_request.target_agent_id}",
+            )
+        validate_agent_model_policy(lifecycle_request.proposed_agent)
+        validate_lifecycle_proposed_soul(lifecycle_request, lifecycle_request.proposed_agent)
         return
 
     if lifecycle_request.action == LifecycleAction.deactivate_agent:
@@ -860,6 +885,49 @@ def create_agent_soul_record(
         payload={"agent_id": record.agent_id, "version": record.version, "active": record.active},
     )
     return record, event
+
+
+def deactivate_active_agent_soul(
+    agent_id: str,
+    audit_context: AuditContext,
+    *,
+    lifecycle_request_id: str,
+) -> AgentSoul | None:
+    existing_soul = active_agent_soul(agent_id)
+    if existing_soul is None:
+        return None
+
+    deactivated_soul = existing_soul.model_copy(
+        update={"active": False, "updated_at": datetime.now(UTC)}
+    )
+    record = update_record(
+        REPOSITORIES.agent_souls,
+        existing_soul.id,
+        deactivated_soul,
+        "agent soul",
+    )
+    write_audit_log(
+        audit_context,
+        action="agent_soul.deactivated",
+        target_type="agent_soul",
+        target_id=record.id,
+        payload={"agent_id": agent_id, "lifecycle_request_id": lifecycle_request_id},
+    )
+    return record
+
+
+def agent_update_changed_fields(
+    current_agent: AgentDefinition,
+    updated_agent: AgentDefinition,
+) -> list[str]:
+    immutable_fields = {"id", "created_at", "updated_at"}
+    current_payload = current_agent.model_dump(mode="json")
+    updated_payload = updated_agent.model_dump(mode="json")
+    return sorted(
+        field
+        for field in current_payload
+        if field not in immutable_fields and current_payload[field] != updated_payload[field]
+    )
 
 
 @app.get("/agents", response_model=list[AgentDefinition])
@@ -3234,6 +3302,64 @@ def apply_agent_lifecycle_request(
             ),
         ]
         if lifecycle_request.proposed_soul is not None:
+            _created_soul, soul_event = create_agent_soul_record(
+                lifecycle_request.proposed_soul,
+                decision_context,
+            )
+            events.append(soul_event)
+        return events
+
+    if lifecycle_request.action == LifecycleAction.update_agent:
+        target_agent_id = lifecycle_request.target_agent_id
+        proposed_agent = lifecycle_request.proposed_agent
+        if target_agent_id is None:
+            raise HTTPException(status_code=400, detail="update_agent requires target_agent_id")
+        if proposed_agent is None:
+            raise HTTPException(status_code=400, detail="update_agent requires proposed_agent")
+        current_agent = read_record(REPOSITORIES.agents, target_agent_id, "agent")
+        validate_agent_model_policy(proposed_agent)
+        updated_agent = proposed_agent.model_copy(
+            update={
+                "created_at": current_agent.created_at,
+                "created_by": current_agent.created_by,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        changed_fields = agent_update_changed_fields(current_agent, updated_agent)
+        update_record(REPOSITORIES.agents, target_agent_id, updated_agent, "agent")
+        write_audit_log(
+            decision_context,
+            action="agent.updated",
+            target_type="agent",
+            target_id=target_agent_id,
+            payload={
+                "lifecycle_request_id": lifecycle_request.id,
+                "changed_fields": changed_fields,
+            },
+        )
+        events = [
+            create_domain_event(
+                EventRecord(
+                    type=EventType.agent_updated,
+                    source_agent_id=agent_event_source(
+                        decision_context.actor_type,
+                        decision_context.actor_id,
+                    ),
+                    target=target_agent_id,
+                    payload={
+                        "lifecycle_request_id": lifecycle_request.id,
+                        "changed_fields": changed_fields,
+                    },
+                    trace_id=decision_context.trace_id,
+                )
+            ),
+        ]
+        if lifecycle_request.proposed_soul is not None:
+            deactivate_active_agent_soul(
+                target_agent_id,
+                decision_context,
+                lifecycle_request_id=lifecycle_request.id,
+            )
             _created_soul, soul_event = create_agent_soul_record(
                 lifecycle_request.proposed_soul,
                 decision_context,

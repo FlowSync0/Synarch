@@ -42,7 +42,7 @@ through the dashboard.
 | --- | --- | --- | --- | --- |
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost/health dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, and exposes an opt-in scheduler worker. | Routing is keyword-based only and there is no durable worker queue yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
-| C. Control Plane | Partial | State-backed agents, lifecycle requests, active `AgentSoul`, services, policies, and deterministic `LocalWorldView`. | Agent updates are not applied yet and no LLM belongs inside this layer. | Update an agent through lifecycle approval and verify control-plane world view. |
+| C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry recovery, retry backoff, dead-letter review metadata, task review decisions, task result recording, bounded ready-batch execution, scheduler tick event/audit records, opt-in scheduler worker, and timeline events exist. | No durable worker queue or human review UI for dead-lettered tasks yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
 | F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and proposed memory candidates exist. | No human review UI, compaction, vector search, graph retrieval, or hierarchical context database. | Approve a proposed memory candidate and verify it appears in the next task context. |
@@ -312,6 +312,8 @@ Progress:
   runs, events, audits, traces, and payloads in one history view.
 - Done: lifecycle `create_agent` can carry a proposed active `AgentSoul`; approval creates the
   agent and soul in one auditable trace, and control-plane world view exposes the soul.
+- Done: lifecycle `update_agent` can replace an agent's mutable definition and active `AgentSoul`;
+  the previous soul is deactivated and events/audits preserve the same trace.
 
 Definition of done:
 
