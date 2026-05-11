@@ -1,0 +1,2 @@
+ALTER TABLE connector_jobs
+  ADD COLUMN IF NOT EXISTS next_run_at TIMESTAMPTZ;

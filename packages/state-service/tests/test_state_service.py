@@ -491,13 +491,14 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
             "purpose": "Relance supplier every six hours until reply.",
             "created_by_type": "agent",
             "created_by_id": "agent-ops-sourcing-live",
-            "metadata": {"stop_condition": "supplier replied"},
+            "metadata": {"stop_condition": "supplier replied", "cooldown_seconds": 120},
         },
     )
 
     assert job_response.status_code == 201
     job_result = job_response.json()
     assert job_result["job"]["status"] == "active"
+    assert job_result["job"]["next_run_at"] is None
     assert job_result["event"]["type"] == "connector_job.created"
     assert job_result["audit_log"]["action"] == "connector_job.created"
 
@@ -506,6 +507,11 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
         params={"task_id": task_response.json()["id"], "status": "active"},
     ).json()
     assert [job["id"] for job in jobs] == ["connector-job-supplier-followup"]
+    due_jobs = client.get(
+        "/connector-jobs",
+        params={"status": "active", "due_before": datetime.now(UTC).isoformat()},
+    ).json()
+    assert [job["id"] for job in due_jobs] == ["connector-job-supplier-followup"]
 
     run_response = client.post(
         "/connector-jobs/connector-job-supplier-followup/runs",
@@ -528,6 +534,24 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
     assert run_result["run"]["service_id"] == "connector-supplier-followup"
     assert run_result["event"]["type"] == "connector_job.run_recorded"
     assert run_result["audit_log"]["action"] == "connector_job.run_recorded"
+    expected_next_run_at = parse_timestamp(run_result["run"]["completed_at"]) + timedelta(
+        seconds=120
+    )
+    refreshed_job = client.get("/connector-jobs/connector-job-supplier-followup").json()
+    assert parse_timestamp(refreshed_job["next_run_at"]) == expected_next_run_at
+    not_due_jobs = client.get(
+        "/connector-jobs",
+        params={"status": "active", "due_before": datetime.now(UTC).isoformat()},
+    ).json()
+    assert [job["id"] for job in not_due_jobs] == []
+    future_due_jobs = client.get(
+        "/connector-jobs",
+        params={
+            "status": "active",
+            "due_before": (expected_next_run_at + timedelta(seconds=1)).isoformat(),
+        },
+    ).json()
+    assert [job["id"] for job in future_due_jobs] == ["connector-job-supplier-followup"]
 
     runs = client.get(
         "/connector-job-runs",

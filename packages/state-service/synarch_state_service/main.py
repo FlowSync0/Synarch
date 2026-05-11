@@ -78,6 +78,8 @@ MAX_TASK_LEASE_SECONDS = 86_400
 DEFAULT_TASK_RETRY_BACKOFF_SECONDS = 60
 MAX_TASK_RETRY_BACKOFF_SECONDS = 86_400
 MAX_CONNECTOR_JOB_TICK_JOBS = 20
+DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS = 300
+MAX_CONNECTOR_JOB_COOLDOWN_SECONDS = 86_400
 CONNECTOR_JOB_RUNNER_ID = "connector-job-runner"
 CONNECTOR_JOB_ADAPTER_NOT_WIRED_REASON = "connector adapter execution is not wired yet"
 
@@ -474,6 +476,35 @@ def validate_connector_job_run_request(run_request: ConnectorJobRunRequest) -> N
             status_code=400,
             detail="Connector job run completed_at cannot be before started_at",
         )
+
+
+def utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def connector_job_cooldown_seconds(job: ConnectorJobRecord) -> int:
+    raw_cooldown = job.metadata.get("cooldown_seconds")
+    if isinstance(raw_cooldown, bool) or raw_cooldown is None:
+        return DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS
+    if isinstance(raw_cooldown, int) and 1 <= raw_cooldown <= MAX_CONNECTOR_JOB_COOLDOWN_SECONDS:
+        return raw_cooldown
+    return DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS
+
+
+def connector_job_is_due(job: ConnectorJobRecord, due_before: datetime | None) -> bool:
+    if due_before is None or job.next_run_at is None:
+        return True
+    return utc_datetime(job.next_run_at) <= utc_datetime(due_before)
+
+
+def connector_job_sort_key(job: ConnectorJobRecord) -> tuple[datetime, datetime, str]:
+    return (
+        utc_datetime(job.next_run_at or job.created_at),
+        utc_datetime(job.created_at),
+        job.id,
+    )
 
 
 def validate_project_workspace(workspace: ProjectWorkspace) -> None:
@@ -1960,6 +1991,7 @@ def connector_job_payload(job: ConnectorJobRecord) -> dict[str, object]:
         "status": job.status,
         "schedule": job.schedule,
         "webhook_path": job.webhook_path,
+        "next_run_at": job.next_run_at,
     }
 
 
@@ -2076,19 +2108,42 @@ def create_connector_job_run_result(
         completed_at=run_request.completed_at,
     )
     record = create_record(REPOSITORIES.connector_job_runs, run.id, run)
-    event = create_domain_event(connector_job_run_event(job, record, trace_id))
+    event_job = update_connector_job_after_run(job, record)
+    event = create_domain_event(connector_job_run_event(event_job, record, trace_id))
     audit = write_audit_log(
         audit_context,
         action="connector_job.run_recorded",
         target_type="connector_job",
         target_id=job.id,
         payload={
-            **connector_job_payload(job),
+            **connector_job_payload(event_job),
             "connector_job_run_id": record.id,
             "run_status": record.status,
         },
     )
     return ConnectorJobRunResult(run=record, event=event, audit_log=audit)
+
+
+def update_connector_job_after_run(
+    job: ConnectorJobRecord,
+    run: ConnectorJobRunRecord,
+) -> ConnectorJobRecord:
+    if job.kind != ConnectorJobKind.cron or job.status != ConnectorJobStatus.active:
+        return job
+    completed_at = utc_datetime(run.completed_at)
+    updated_job = job.model_copy(
+        update={
+            "updated_at": completed_at,
+            "next_run_at": completed_at
+            + timedelta(seconds=connector_job_cooldown_seconds(job)),
+        }
+    )
+    return update_record(
+        REPOSITORIES.connector_jobs,
+        job.id,
+        updated_job,
+        "connector job",
+    )
 
 
 @app.post("/connector-jobs", response_model=ConnectorJobMutationResult, status_code=201)
@@ -2121,6 +2176,7 @@ def list_connector_jobs(
     owner_agent_id: str | None = None,
     kind: str | None = None,
     status: str | None = None,
+    due_before: datetime | None = None,
 ) -> list[ConnectorJobRecord]:
     jobs = REPOSITORIES.connector_jobs.list_records()
     if service_id is not None:
@@ -2135,7 +2191,10 @@ def list_connector_jobs(
         jobs = [job for job in jobs if job.kind == kind]
     if status is not None:
         jobs = [job for job in jobs if job.status == status]
-    return sorted(jobs, key=lambda job: job.created_at)
+    if due_before is not None:
+        jobs = [job for job in jobs if connector_job_is_due(job, due_before)]
+        return sorted(jobs, key=connector_job_sort_key)
+    return sorted(jobs, key=lambda job: (utc_datetime(job.created_at), job.id))
 
 
 @app.post("/connector-jobs/tick", response_model=ConnectorJobRunBatchResult)
@@ -2162,6 +2221,7 @@ def tick_connector_jobs(
         owner_agent_id=owner_agent_id,
         kind=kind,
         status=ConnectorJobStatus.active,
+        due_before=datetime.now(UTC),
     )
     selected_jobs = jobs[:max_jobs]
     runs = [

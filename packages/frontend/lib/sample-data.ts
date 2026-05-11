@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.10",
-    detail: "Connector job worker",
+    value: "M5.11",
+    detail: "Connector job cooldown",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "140",
+    value: "141",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,15 +50,17 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job worker",
+  title: "Connector job cooldown",
   body:
-    "Un worker opt-in peut executer en boucle des batches bornes de jobs connecteurs actifs via le gateway, avec logs JSON structures et tick durable dans le state-service.",
+    "Les jobs connecteurs actifs portent maintenant une prochaine date d'execution, ce qui evite au worker de retraiter le meme job en boucle serree.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
+    "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
     "ConnectorJobRunRecord garde sortie, erreur, trigger et trace",
     "Tick borne cree des runs skipped non fake quand aucun adaptateur n'est branche",
     "Execution gateway passe par permissions, service capabilities et credential scopes",
     "Batch gateway limite max_jobs et journalise connector_job.tick meme a vide",
+    "Un run cron recale next_run_at via un cooldown borne",
     "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
     "Create, tick, execute, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"

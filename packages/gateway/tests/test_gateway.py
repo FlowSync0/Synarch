@@ -619,6 +619,7 @@ class FakeStateClient:
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]:
         jobs = self.connector_jobs
         if service_id is not None:
@@ -633,6 +634,12 @@ class FakeStateClient:
             jobs = [job for job in jobs if job.kind == kind]
         if status is not None:
             jobs = [job for job in jobs if job.status == status]
+        if due_before is not None:
+            jobs = [
+                job
+                for job in jobs
+                if job.next_run_at is None or job.next_run_at <= due_before
+            ]
         return sorted(jobs, key=lambda job: job.created_at)
 
     def record_connector_job_run(
@@ -2038,6 +2045,60 @@ def test_connector_job_run_ready_records_empty_tick() -> None:
     assert payload["tick_audit_log"]["target_id"] == "project_empty"
     assert [event.type for event in state_client.events] == [EventType.connector_job_tick]
     assert [audit.action for audit in state_client.audit_logs] == ["connector_job.tick"]
+
+
+def test_connector_job_run_ready_ignores_jobs_in_cooldown() -> None:
+    state_client = FakeStateClient()
+    now = datetime.now(UTC)
+    state_client.connector_jobs.extend(
+        [
+            ConnectorJobRecord(
+                id="connector-job-future",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_supplier_future",
+                owner_agent_id="agent-ops-sourcing",
+                kind="cron",
+                schedule="*/5 * * * *",
+                purpose="Do not run while cooldown is active.",
+                created_by_type="agent",
+                created_by_id="agent-ops-sourcing",
+                created_at=now - timedelta(minutes=10),
+                next_run_at=now + timedelta(minutes=10),
+            ),
+            ConnectorJobRecord(
+                id="connector-job-due",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_supplier_due",
+                owner_agent_id="agent-ops-sourcing",
+                kind="cron",
+                schedule="*/5 * * * *",
+                purpose="Run once the cooldown has elapsed.",
+                created_by_type="agent",
+                created_by_id="agent-ops-sourcing",
+                created_at=now - timedelta(minutes=5),
+                next_run_at=now - timedelta(minutes=1),
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/connector-jobs/run-ready",
+            params={"project_id": "project_sourcing", "max_jobs": 3},
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_cooldown"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "no_ready_connector_job"
+    assert [run["run"]["job_id"] for run in payload["runs"]] == ["connector-job-due"]
+    assert payload["tick_event"]["payload"]["connector_job_ids"] == ["connector-job-due"]
+    assert [run.job_id for run in state_client.connector_job_runs] == ["connector-job-due"]
 
 
 def test_tool_gate_rejects_private_web_fetch_url() -> None:

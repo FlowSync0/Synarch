@@ -298,6 +298,8 @@ Progress:
   `connector_job.tick` event/audit even when no connector job is ready.
 - Done: the opt-in connector-job worker can run bounded gateway batches in a loop and emit
   structured JSON logs without starting by default.
+- Done: cron connector jobs now store `next_run_at`, and state-service/gateway ready-job queries
+  only select jobs whose cooldown has elapsed.
 
 Definition of done:
 

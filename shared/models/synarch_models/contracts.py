@@ -263,6 +263,7 @@ class ConnectorJobRecord(SynarchModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    next_run_at: datetime | None = None
     stopped_at: datetime | None = None
 
 

@@ -73,6 +73,7 @@ GoalEnvelope
   -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Gateway connector-job execution uses the existing tool gate before recording runs
   -> Gateway connector-job batch execution records bounded runs plus empty tick traces
+  -> Cron connector jobs update next_run_at after each run and are skipped until due
   -> Event Service timeline
 ```
 
@@ -132,8 +133,9 @@ make connector-job-worker
 ```
 
 This worker is not started by default. Each tick calls Gateway `/connector-jobs/run-ready` with an
-explicit `max_jobs` limit and writes structured JSON stdout with run counts, completed/failed/skipped
-counts, timestamps, duration, and transient errors.
+explicit `max_jobs` limit. Gateway only selects connector jobs whose `next_run_at` is empty or due.
+The worker writes structured JSON stdout with run counts, completed/failed/skipped counts,
+timestamps, duration, and transient errors.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

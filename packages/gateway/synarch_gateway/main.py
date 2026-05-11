@@ -2,6 +2,7 @@ import ipaddress
 import socket
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Literal, Protocol
 from urllib.parse import urljoin, urlparse
@@ -736,6 +737,7 @@ def run_ready_connector_jobs(
             owner_agent_id=owner_agent_id,
             kind=kind,
             status=ConnectorJobStatus.active,
+            due_before=datetime.now(UTC),
         )
         selected_jobs = jobs[:max_jobs]
         runs = [

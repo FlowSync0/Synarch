@@ -317,6 +317,7 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
 
     assert job_payload["kind"] == "cron"
     assert job_payload["status"] == "active"
+    assert job_payload["next_run_at"] is None
     assert job_payload["metadata"] == {"stop_condition": "supplier replied"}
     assert run_payload["status"] == "completed"
     assert run_payload["output"] == {"message": "Follow-up sent."}

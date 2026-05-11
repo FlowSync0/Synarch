@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 import httpx
@@ -227,6 +228,7 @@ class StateClient(Protocol):
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]: ...
 
     def record_connector_job_run(
@@ -557,6 +559,7 @@ class HttpStateClient:
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]:
         response = self._get(
             "/connector-jobs",
@@ -567,6 +570,7 @@ class HttpStateClient:
                 owner_agent_id=owner_agent_id,
                 kind=kind,
                 status=status,
+                due_before=due_before.isoformat() if due_before is not None else None,
             ),
         )
         return [ConnectorJobRecord.model_validate(job) for job in response.json()]

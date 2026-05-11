@@ -554,6 +554,7 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "metadata",
                 "created_at",
                 "updated_at",
+                "next_run_at",
                 "stopped_at",
             ),
             frozenset({"metadata"}),
