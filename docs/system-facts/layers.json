@@ -5,11 +5,11 @@
     "status": "partial",
     "exists_now": [
       "Next.js control surface",
-      "Live reads for projects, agents, lifecycle approvals, and timeline events",
+      "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, and connector jobs",
       "Sample metrics still present"
     ],
-    "main_gap": "No live cost or health dashboard and no user-facing goal submission flow.",
-    "next_validation": "Dashboard creates a goal through gateway and shows the resulting project and timeline.",
+    "main_gap": "No live cost/health dashboard and no connector-job control actions.",
+    "next_validation": "Dashboard reads state-service connector jobs/runs and shows latest run status for a live project.",
     "source": "docs/roadmap.md"
   },
   {
@@ -88,12 +88,16 @@
   {
     "id": "G",
     "name": "Execution & Tooling Layer",
-    "status": "later",
+    "status": "partial",
     "exists_now": [
-      "ToolCallRequest and ToolResult contracts"
+      "ToolCallRequest and ToolResult contracts",
+      "Gateway permission gate",
+      "Task-scoped credential gates",
+      "Service health checks",
+      "Durable connector job lifecycle and bounded runner"
     ],
-    "main_gap": "No tool registry, permission check before execution, sandbox, or audit trail for tool calls.",
-    "next_validation": "Denied tool call fails before execution and records audit/event.",
+    "main_gap": "No sandbox execution and no real external connector adapters yet.",
+    "next_validation": "Connector job executes a real adapter only after permission, service, and credential gates pass.",
     "source": "docs/roadmap.md"
   },
   {

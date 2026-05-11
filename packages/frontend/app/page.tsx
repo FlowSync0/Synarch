@@ -73,8 +73,12 @@ import {
   type ToolResult
 } from "../lib/gateway-api";
 import {
+  listConnectorJobRuns,
+  listConnectorJobs,
   listEvents,
   listProjects,
+  type ConnectorJobRecord,
+  type ConnectorJobRunRecord,
   type EventRecord,
   type ProjectRecord
 } from "../lib/state-service-api";
@@ -152,6 +156,17 @@ const memoryStatusClass: Record<MemoryStatus, string> = {
   proposed: "bg-warn-soft text-warn ring-warn/15",
   approved: "bg-ok-soft text-ok ring-ok/15",
   rejected: "bg-risk-soft text-risk ring-risk/15"
+};
+
+const connectorJobStatusClass: Record<string, string> = {
+  active: "bg-ok-soft text-ok ring-ok/15",
+  stopped: "bg-slate-100 text-muted ring-border"
+};
+
+const connectorJobRunStatusClass: Record<string, string> = {
+  completed: "bg-ok-soft text-ok ring-ok/15",
+  failed: "bg-risk-soft text-risk ring-risk/15",
+  skipped: "bg-warn-soft text-warn ring-warn/15"
 };
 
 const dataModeClass: Record<string, string> = {
@@ -754,6 +769,87 @@ function traceLabel(traceId: string): string {
   return traceId === "no-trace" ? "no trace" : traceId;
 }
 
+function formatRelativeTimestamp(value?: string | null): string {
+  if (!value) {
+    return "none";
+  }
+
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return "unknown";
+  }
+
+  const deltaMs = timestamp - Date.now();
+  const absMinutes = Math.round(Math.abs(deltaMs) / 60_000);
+  if (absMinutes < 1) {
+    return deltaMs >= 0 ? "in <1 min" : "<1 min ago";
+  }
+  if (absMinutes < 60) {
+    return deltaMs >= 0 ? `in ${absMinutes} min` : `${absMinutes} min ago`;
+  }
+
+  const hours = Math.round(absMinutes / 60);
+  if (hours < 24) {
+    return deltaMs >= 0 ? `in ${hours} h` : `${hours} h ago`;
+  }
+
+  const days = Math.round(hours / 24);
+  return deltaMs >= 0 ? `in ${days} d` : `${days} d ago`;
+}
+
+function metadataNumber(metadata: Record<string, unknown>, key: string): number | null {
+  const value = metadata[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function connectorJobPolicyLabels(job: ConnectorJobRecord): string[] {
+  const labels: string[] = [];
+  const maxRuns = metadataNumber(job.metadata, "max_runs");
+  const maxFailures = metadataNumber(job.metadata, "max_failures");
+  const cooldown = metadataNumber(job.metadata, "cooldown_seconds");
+  const failureCooldown = metadataNumber(job.metadata, "failure_cooldown_seconds");
+
+  if (maxRuns !== null) {
+    labels.push(`max_runs ${maxRuns}`);
+  }
+  if (maxFailures !== null) {
+    labels.push(`max_failures ${maxFailures}`);
+  }
+  if (cooldown !== null) {
+    labels.push(`cooldown ${cooldown}s`);
+  }
+  if (failureCooldown !== null) {
+    labels.push(`failure cooldown ${failureCooldown}s`);
+  }
+
+  return labels;
+}
+
+function connectorJobStopDetail(
+  job: ConnectorJobRecord,
+  lastRun?: ConnectorJobRunRecord
+): string | null {
+  const stopReason = lastRun?.output.stop_reason ?? lastRun?.output.reason;
+  if (typeof stopReason === "string" && stopReason.trim().length > 0) {
+    return stopReason;
+  }
+  if (job.status !== "stopped") {
+    return null;
+  }
+
+  const maxFailures = metadataNumber(job.metadata, "max_failures");
+  if (maxFailures !== null && lastRun?.status === "failed") {
+    return `max_failures=${maxFailures}`;
+  }
+
+  const maxRuns = metadataNumber(job.metadata, "max_runs");
+  if (maxRuns !== null) {
+    return `max_runs=${maxRuns}`;
+  }
+
+  return job.stopped_at ? `stopped ${formatRelativeTimestamp(job.stopped_at)}` : "stopped";
+}
+
 function formatPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
@@ -870,6 +966,16 @@ export default function DashboardPage() {
     queryKey: ["task-review-queue"],
     queryFn: listTaskReviewQueue,
     refetchInterval: 15_000
+  });
+  const connectorJobsQuery = useQuery({
+    queryKey: ["connector-jobs"],
+    queryFn: listConnectorJobs,
+    refetchInterval: 10_000
+  });
+  const connectorJobRunsQuery = useQuery({
+    queryKey: ["connector-job-runs"],
+    queryFn: listConnectorJobRuns,
+    refetchInterval: 10_000
   });
   const goalMutation = useMutation({
     mutationFn: submitGoal,
@@ -1238,6 +1344,61 @@ export default function DashboardPage() {
       : projectTimelineMode === "syncing"
         ? "Loading project timeline from gateway"
         : "Select a live project to inspect its tasks";
+  const connectorJobRunsByJobId = useMemo(() => {
+    const runsByJobId = new Map<string, ConnectorJobRunRecord[]>();
+    if (!connectorJobRunsQuery.isSuccess) {
+      return runsByJobId;
+    }
+
+    for (const run of connectorJobRunsQuery.data) {
+      const runs = runsByJobId.get(run.job_id) ?? [];
+      runs.push(run);
+      runsByJobId.set(run.job_id, runs);
+    }
+
+    for (const runs of runsByJobId.values()) {
+      runs.sort(
+        (left, right) =>
+          new Date(right.completed_at).getTime() - new Date(left.completed_at).getTime()
+      );
+    }
+
+    return runsByJobId;
+  }, [connectorJobRunsQuery.data, connectorJobRunsQuery.isSuccess]);
+  const connectorJobRows = useMemo<ConnectorJobRecord[]>(() => {
+    if (!connectorJobsQuery.isSuccess) {
+      return [];
+    }
+
+    return [...connectorJobsQuery.data].sort((left, right) => {
+      if (left.status !== right.status) {
+        return left.status === "active" ? -1 : 1;
+      }
+      return new Date(right.updated_at).getTime() - new Date(left.updated_at).getTime();
+    });
+  }, [connectorJobsQuery.data, connectorJobsQuery.isSuccess]);
+  const visibleConnectorJobRows = connectorJobRows
+    .filter((job) => !effectiveSelectedProjectId || job.project_id === effectiveSelectedProjectId)
+    .slice(0, 8);
+  const connectorJobMode =
+    connectorJobsQuery.isLoading || connectorJobRunsQuery.isLoading
+      ? "syncing"
+      : connectorJobsQuery.isError || connectorJobRunsQuery.isError
+        ? "sample"
+        : "live";
+  const connectorJobModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "No jobs"
+  }[connectorJobMode];
+  const connectorJobModeDetail =
+    connectorJobMode === "live"
+      ? `${visibleConnectorJobRows.length}/${connectorJobRows.length} jobs visibles / ${
+          connectorJobRunsQuery.data?.length ?? 0
+        } runs`
+      : connectorJobMode === "syncing"
+        ? "Loading connector jobs from state-service"
+        : "State-service connector jobs unavailable";
   const taskReviewRows = useMemo<TaskReviewViewModel[]>(() => {
     if (taskReviewsQuery.isSuccess) {
       return taskReviewsQuery.data.map(taskReviewRow);
@@ -2367,6 +2528,148 @@ export default function DashboardPage() {
                 </p>
               ) : null}
             </div>
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Connectors" title="Jobs autonomes" />
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{connectorJobModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[connectorJobMode]}`}
+              >
+                {connectorJobModeLabel}
+              </span>
+            </div>
+            <div className="divide-y divide-border">
+              {visibleConnectorJobRows.length === 0 ? (
+                <article className="px-4 py-5">
+                  <p className="text-sm font-medium text-ink">Aucun connector job visible</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Aucun job n&apos;est rattaché au projet sélectionné, ou le state-service ne répond
+                    pas encore.
+                  </p>
+                </article>
+              ) : null}
+              {visibleConnectorJobRows.map((job) => {
+                const lastRun = connectorJobRunsByJobId.get(job.id)?.[0];
+                const policyLabels = connectorJobPolicyLabels(job);
+                const stopDetail = connectorJobStopDetail(job, lastRun);
+                const nextRunLabel =
+                  job.status === "active"
+                    ? job.next_run_at
+                      ? formatRelativeTimestamp(job.next_run_at)
+                      : "due now"
+                    : job.stopped_at
+                      ? formatRelativeTimestamp(job.stopped_at)
+                      : "stopped";
+                return (
+                  <article
+                    key={job.id}
+                    className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_190px_210px]"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                            connectorJobStatusClass[job.status] ?? connectorJobStatusClass.stopped
+                          }`}
+                        >
+                          {job.status}
+                        </span>
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border">
+                          {job.kind}
+                        </span>
+                        <h3 className="min-w-0 truncate text-sm font-semibold text-ink">
+                          {job.id}
+                        </h3>
+                      </div>
+                      <p className="mt-1 truncate text-xs text-muted">
+                        {job.service_id} / {job.owner_agent_id}
+                      </p>
+                      <BalancedText className="mt-2 text-sm text-muted" font="400 13px Inter Variable" lineHeight={18}>
+                        {job.purpose}
+                      </BalancedText>
+                      {policyLabels.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-1.5">
+                          {policyLabels.map((label) => (
+                            <span
+                              key={`${job.id}-${label}`}
+                              className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                            >
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="grid content-start gap-2 text-xs text-muted">
+                      <div className="flex items-center justify-between gap-2">
+                        <span>next</span>
+                        <span className="min-w-0 truncate font-medium text-ink">{nextRunLabel}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>project</span>
+                        <span className="min-w-0 truncate font-medium text-ink">
+                          {job.project_id ?? "none"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>task</span>
+                        <span className="min-w-0 truncate font-medium text-ink">
+                          {job.task_id ?? "none"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span>schedule</span>
+                        <span className="min-w-0 truncate font-medium text-ink">
+                          {job.schedule ?? job.webhook_path ?? "manual"}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="grid content-start gap-2 text-xs text-muted">
+                      {lastRun ? (
+                        <>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                                connectorJobRunStatusClass[lastRun.status] ??
+                                connectorJobRunStatusClass.skipped
+                              }`}
+                            >
+                              last {lastRun.status}
+                            </span>
+                            <span className="min-w-0 truncate text-[11px] text-muted">
+                              {formatRelativeTimestamp(lastRun.completed_at)}
+                            </span>
+                          </div>
+                          {stopDetail ?? lastRun.error ? (
+                            <BalancedText className="text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                              {stopDetail ?? lastRun.error ?? ""}
+                            </BalancedText>
+                          ) : null}
+                          {lastRun.trace_id ? (
+                            <p className="truncate text-[11px] text-muted">
+                              {traceLabel(lastRun.trace_id)}
+                            </p>
+                          ) : null}
+                        </>
+                      ) : (
+                        <p className="text-xs text-muted">No run recorded yet.</p>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            {connectorJobMode === "sample" ? (
+              <p className="border-t border-border px-4 py-2 text-xs font-medium text-risk">
+                {connectorJobsQuery.error instanceof Error
+                  ? connectorJobsQuery.error.message
+                  : connectorJobRunsQuery.error instanceof Error
+                    ? connectorJobRunsQuery.error.message
+                    : "Connector jobs unavailable."}
+              </p>
+            ) : null}
           </section>
 
           <section className="rounded-md border border-border bg-panel">

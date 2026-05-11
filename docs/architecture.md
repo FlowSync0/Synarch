@@ -10,7 +10,7 @@ Synarch is organized as a monorepo that mirrors the nine layers described in the
 - `packages/memory-service`: memory item storage facade and context assembly boundary.
 - `packages/event-service`: event ingestion facade, ready to publish to NATS.
 - `packages/agent-runtime`: persistent division-agent execution facade.
-- `packages/frontend`: Next.js dashboard for projects, agents, timeline, and metrics.
+- `packages/frontend`: Next.js dashboard for projects, agents, timeline, reviews, connector jobs, and metrics.
 - `shared/models`: Pydantic contracts shared by all Python services.
 
 ## Phase 1 Contract Flow

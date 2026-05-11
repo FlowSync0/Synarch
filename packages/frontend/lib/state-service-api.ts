@@ -8,6 +8,10 @@ export type ProjectStatus =
   | "needs_review";
 
 export type Priority = "low" | "medium" | "high" | "critical";
+export type ConnectorJobKind = "cron" | "webhook";
+export type ConnectorJobStatus = "active" | "stopped";
+export type ConnectorJobRunStatus = "completed" | "failed" | "skipped";
+export type ConnectorActorType = "user" | "agent" | "system" | "service";
 
 export type ProjectRecord = {
   id: string;
@@ -27,6 +31,43 @@ export type EventRecord = {
   payload: Record<string, unknown>;
   timestamp: string;
   trace_id?: string | null;
+};
+
+export type ConnectorJobRecord = {
+  id: string;
+  service_id: string;
+  project_id?: string | null;
+  task_id?: string | null;
+  owner_agent_id: string;
+  kind: ConnectorJobKind;
+  status: ConnectorJobStatus;
+  schedule?: string | null;
+  webhook_path?: string | null;
+  purpose: string;
+  created_by_type: ConnectorActorType;
+  created_by_id: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  next_run_at?: string | null;
+  stopped_at?: string | null;
+};
+
+export type ConnectorJobRunRecord = {
+  id: string;
+  job_id: string;
+  service_id: string;
+  project_id?: string | null;
+  task_id?: string | null;
+  owner_agent_id: string;
+  status: ConnectorJobRunStatus;
+  triggered_by_type: ConnectorActorType;
+  triggered_by_id: string;
+  trace_id?: string | null;
+  output: Record<string, unknown>;
+  error?: string | null;
+  started_at: string;
+  completed_at: string;
 };
 
 export class ApiError extends Error {
@@ -63,4 +104,18 @@ export async function listEvents(): Promise<EventRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<EventRecord[]>(response);
+}
+
+export async function listConnectorJobs(): Promise<ConnectorJobRecord[]> {
+  const response = await fetch("/api/state-service/connector-jobs", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ConnectorJobRecord[]>(response);
+}
+
+export async function listConnectorJobRuns(): Promise<ConnectorJobRunRecord[]> {
+  const response = await fetch("/api/state-service/connector-job-runs", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ConnectorJobRunRecord[]>(response);
 }

@@ -76,6 +76,7 @@ GoalEnvelope
   -> Cron connector jobs update next_run_at after each run and are skipped until due
   -> Connector jobs can self-stop through run output or metadata.max_runs
   -> Failed connector jobs back off and can stop after metadata.max_failures
+  -> Frontend connector panel reads state-service connector jobs/runs through same-origin proxies
   -> Event Service timeline
 ```
 

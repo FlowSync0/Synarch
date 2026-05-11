@@ -25,8 +25,8 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.13",
-    detail: "Connector job failure policies",
+    value: "M5.14",
+    detail: "Connector job live panel",
     tone: "accent" as Tone
   },
   {
@@ -50,9 +50,9 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job failure policies",
+  title: "Connector job live panel",
   body:
-    "Les jobs connecteurs appliquent maintenant un backoff dedie apres echec et peuvent s'arreter durablement quand leur budget d'echecs est epuise.",
+    "Les jobs connecteurs et leurs derniers runs sont maintenant lisibles depuis l'interface via le state-service, avec statut, prochaine execution, policy et raison d'arret visible.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
@@ -65,6 +65,8 @@ export const currentFocus = {
     "metadata.max_runs stoppe le job apres un nombre borne de runs",
     "metadata.failure_cooldown_seconds espace les retries apres echec",
     "metadata.max_failures stoppe le job apres un nombre borne d'echecs",
+    "Frontend proxy lit /connector-jobs et /connector-job-runs depuis state-service",
+    "Dashboard affiche jobs actifs/stoppes, next_run_at, policies et dernier run",
     "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
     "Create, tick, execute, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"
@@ -104,9 +106,9 @@ export const projects = [
     owner: "Frontend",
     status: "partial",
     priority: "medium",
-    progress: 26,
+    progress: 34,
     summary:
-      "Afficher roadmap, agents, signaux, risques et file d'approbation avant branchement API live."
+      "Afficher projets, agents, timeline, reviews, permissions et jobs connecteurs depuis les APIs live."
   }
 ];
 
@@ -155,8 +157,8 @@ export const layers = [
     name: "Interface",
     status: "partial" as Status,
     icon: Sparkles,
-    summary: "Dashboard Next.js lit projets, agents, timeline, approvals et review queue en live.",
-    next: "Ajouter vues detaillees projet et taches."
+    summary: "Dashboard Next.js lit projets, agents, timeline, approvals, review queue et connector jobs en live.",
+    next: "Ajouter actions controlees sur connector jobs et vues detaillees projet/taches."
   },
   {
     id: "B",
@@ -204,7 +206,7 @@ export const layers = [
     status: "partial" as Status,
     icon: PlugZap,
     summary: "Tool gate, credential gates, health-checks et cycle de vie durable des jobs connecteurs existent.",
-    next: "Ajouter runner cron/webhook borne qui execute les jobs actifs."
+    next: "Brancher adaptateurs connecteurs reels et permissions par secret."
   },
   {
     id: "H",
