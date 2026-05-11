@@ -767,6 +767,155 @@ def test_connector_job_run_policy_stops_on_output_or_max_runs() -> None:
     ]
 
 
+def test_connector_job_failure_policy_backs_off_and_stops_after_max_failures() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_job_failure_policy"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-ops-failure-policy",
+            "name": "IA Ops Failure Policy",
+            "role": "Supplier retry owner",
+            "division": "ops-sourcing",
+        },
+    )
+    assert agent_response.status_code == 201
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-failure-policy",
+            "name": "Supplier Failure Connector",
+            "kind": "tool_provider",
+            "capabilities": ["web.fetch"],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier failure policy",
+            "goal": "Back off failed connector jobs and stop after bounded failures.",
+            "owner_agent_id": "agent-ops-failure-policy",
+        },
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_id,
+            "Retry supplier fetch failures",
+            assigned_agent_id="agent-ops-failure-policy",
+            required_tools=["web.fetch"],
+        ),
+    )
+    assert task_response.status_code == 201
+    job_response = client.post(
+        "/connector-jobs",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-failure-policy",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "connector-job-failure-policy",
+            "service_id": "connector-supplier-failure-policy",
+            "project_id": project_id,
+            "task_id": task_response.json()["id"],
+            "owner_agent_id": "agent-ops-failure-policy",
+            "kind": "cron",
+            "schedule": "*/5 * * * *",
+            "purpose": "Retry failed supplier fetches with a bounded failure budget.",
+            "created_by_type": "agent",
+            "created_by_id": "agent-ops-failure-policy",
+            "metadata": {
+                "cooldown_seconds": 300,
+                "failure_cooldown_seconds": 45,
+                "max_failures": 2,
+            },
+        },
+    )
+    assert job_response.status_code == 201
+
+    first_failure = client.post(
+        "/connector-jobs/connector-job-failure-policy/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "failed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {"attempt": 1, "retryable": True},
+            "error": "Supplier site timed out.",
+        },
+    )
+    assert first_failure.status_code == 201
+    first_run = first_failure.json()["run"]
+    expected_retry_at = parse_timestamp(first_run["completed_at"]) + timedelta(seconds=45)
+    retrying_job = client.get("/connector-jobs/connector-job-failure-policy").json()
+    assert retrying_job["status"] == "active"
+    assert parse_timestamp(retrying_job["next_run_at"]) == expected_retry_at
+
+    not_due_jobs = client.get(
+        "/connector-jobs",
+        params={
+            "project_id": project_id,
+            "status": "active",
+            "due_before": datetime.now(UTC).isoformat(),
+        },
+    ).json()
+    assert not_due_jobs == []
+    future_due_jobs = client.get(
+        "/connector-jobs",
+        params={
+            "project_id": project_id,
+            "status": "active",
+            "due_before": (expected_retry_at + timedelta(seconds=1)).isoformat(),
+        },
+    ).json()
+    assert [job["id"] for job in future_due_jobs] == ["connector-job-failure-policy"]
+
+    second_failure = client.post(
+        "/connector-jobs/connector-job-failure-policy/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "failed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {"attempt": 2, "retryable": False},
+            "error": "Supplier site still times out.",
+        },
+    )
+    assert second_failure.status_code == 201
+    stopped_job = client.get("/connector-jobs/connector-job-failure-policy").json()
+    assert stopped_job["status"] == "stopped"
+    assert stopped_job["next_run_at"] is None
+    assert stopped_job["stopped_at"] is not None
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    stopped_events = [
+        event for event in events if event["type"] == "connector_job.stopped"
+    ]
+    assert [event["payload"]["reason"] for event in stopped_events] == [
+        "Connector job reached max_failures=2."
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    stopped_audits = [
+        audit for audit in audits if audit["action"] == "connector_job.stopped"
+    ]
+    assert [audit["payload"]["reason"] for audit in stopped_audits] == [
+        "Connector job reached max_failures=2."
+    ]
+
+
 def test_connector_job_tick_records_bounded_skipped_runs_and_audits() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_job_tick"

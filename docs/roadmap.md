@@ -302,6 +302,8 @@ Progress:
   only select jobs whose cooldown has elapsed.
 - Done: connector job runs can stop their own job through explicit `output.stop_condition_met` /
   `output.stop_job`, and `metadata.max_runs` stops bounded follow-up loops after N recorded runs.
+- Done: failed connector job runs can use `metadata.failure_cooldown_seconds` for retry backoff,
+  and `metadata.max_failures` stops jobs after a bounded number of failed runs.
 
 Definition of done:
 

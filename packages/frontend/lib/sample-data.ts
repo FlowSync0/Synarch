@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.12",
-    detail: "Connector job stop policies",
+    value: "M5.13",
+    detail: "Connector job failure policies",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "142",
+    value: "143",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,9 +50,9 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job stop policies",
+  title: "Connector job failure policies",
   body:
-    "Les jobs connecteurs peuvent maintenant s'arreter automatiquement quand une sortie declare l'objectif atteint ou quand une limite de runs est atteinte.",
+    "Les jobs connecteurs appliquent maintenant un backoff dedie apres echec et peuvent s'arreter durablement quand leur budget d'echecs est epuise.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
@@ -63,6 +63,8 @@ export const currentFocus = {
     "Un run cron recale next_run_at via un cooldown borne",
     "output.stop_condition_met ou output.stop_job stoppe durablement le job",
     "metadata.max_runs stoppe le job apres un nombre borne de runs",
+    "metadata.failure_cooldown_seconds espace les retries apres echec",
+    "metadata.max_failures stoppe le job apres un nombre borne d'echecs",
     "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
     "Create, tick, execute, run et stop emettent connector_job.* et audit logs",
     "Tests backend complets passent"

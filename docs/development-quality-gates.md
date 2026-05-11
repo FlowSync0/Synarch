@@ -75,6 +75,7 @@ GoalEnvelope
   -> Gateway connector-job batch execution records bounded runs plus empty tick traces
   -> Cron connector jobs update next_run_at after each run and are skipped until due
   -> Connector jobs can self-stop through run output or metadata.max_runs
+  -> Failed connector jobs back off and can stop after metadata.max_failures
   -> Event Service timeline
 ```
 
@@ -141,6 +142,9 @@ timestamps, duration, and transient errors.
 Connector jobs can stop themselves without a separate manual request when a recorded run outputs
 `stop_condition_met: true` or `stop_job: true`. A job can also declare `metadata.max_runs` to stop a
 bounded follow-up loop after N recorded runs.
+
+Failed connector runs can use `metadata.failure_cooldown_seconds` to delay the next retry. A job can
+also declare `metadata.max_failures` to stop after a bounded number of failed runs.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

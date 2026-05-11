@@ -494,12 +494,30 @@ def connector_job_cooldown_seconds(job: ConnectorJobRecord) -> int:
     return DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS
 
 
+def connector_job_failure_cooldown_seconds(job: ConnectorJobRecord) -> int:
+    raw_cooldown = job.metadata.get("failure_cooldown_seconds")
+    if isinstance(raw_cooldown, bool) or raw_cooldown is None:
+        return connector_job_cooldown_seconds(job)
+    if isinstance(raw_cooldown, int) and 1 <= raw_cooldown <= MAX_CONNECTOR_JOB_COOLDOWN_SECONDS:
+        return raw_cooldown
+    return connector_job_cooldown_seconds(job)
+
+
 def connector_job_max_runs(job: ConnectorJobRecord) -> int | None:
     raw_max_runs = job.metadata.get("max_runs")
     if isinstance(raw_max_runs, bool) or raw_max_runs is None:
         return None
     if isinstance(raw_max_runs, int) and 1 <= raw_max_runs <= MAX_CONNECTOR_JOB_RUN_LIMIT:
         return raw_max_runs
+    return None
+
+
+def connector_job_max_failures(job: ConnectorJobRecord) -> int | None:
+    raw_max_failures = job.metadata.get("max_failures")
+    if isinstance(raw_max_failures, bool) or raw_max_failures is None:
+        return None
+    if isinstance(raw_max_failures, int) and 1 <= raw_max_failures <= MAX_CONNECTOR_JOB_RUN_LIMIT:
+        return raw_max_failures
     return None
 
 
@@ -517,12 +535,15 @@ def connector_job_sort_key(job: ConnectorJobRecord) -> tuple[datetime, datetime,
     )
 
 
-def connector_job_run_count(job_id: str) -> int:
+def connector_job_run_count(
+    job_id: str,
+    status: ConnectorJobRunStatus | None = None,
+) -> int:
     return len(
         [
             run
             for run in REPOSITORIES.connector_job_runs.list_records()
-            if run.job_id == job_id
+            if run.job_id == job_id and (status is None or run.status == status)
         ]
     )
 
@@ -536,6 +557,14 @@ def connector_job_run_stop_reason(
         if isinstance(raw_reason, str) and raw_reason.strip():
             return raw_reason.strip()
         return "Connector job stop condition met by run output."
+
+    max_failures = connector_job_max_failures(job)
+    if (
+        run.status == ConnectorJobRunStatus.failed
+        and max_failures is not None
+        and connector_job_run_count(job.id, ConnectorJobRunStatus.failed) >= max_failures
+    ):
+        return f"Connector job reached max_failures={max_failures}."
 
     max_runs = connector_job_max_runs(job)
     if max_runs is not None and connector_job_run_count(job.id) >= max_runs:
@@ -2195,11 +2224,15 @@ def update_connector_job_after_run(
 
     if job.kind != ConnectorJobKind.cron:
         return job, None
+    cooldown_seconds = (
+        connector_job_failure_cooldown_seconds(job)
+        if run.status == ConnectorJobRunStatus.failed
+        else connector_job_cooldown_seconds(job)
+    )
     updated_job = job.model_copy(
         update={
             "updated_at": completed_at,
-            "next_run_at": completed_at
-            + timedelta(seconds=connector_job_cooldown_seconds(job)),
+            "next_run_at": completed_at + timedelta(seconds=cooldown_seconds),
         }
     )
     record = update_record(
