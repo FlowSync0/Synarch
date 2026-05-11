@@ -78,6 +78,7 @@ GoalEnvelope
   -> Failed connector jobs back off and can stop after metadata.max_failures
   -> Frontend connector panel reads state-service connector jobs/runs through same-origin proxies
   -> Frontend connector controls run, stop, and resume jobs through Gateway with event/audit traces
+  -> Frontend connector history reads audit logs and shows job runs/events/audits by trace_id
   -> Event Service timeline
 ```
 

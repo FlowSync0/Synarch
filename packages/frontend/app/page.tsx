@@ -78,10 +78,12 @@ import {
   type ToolResult
 } from "../lib/gateway-api";
 import {
+  listAuditLogs,
   listConnectorJobRuns,
   listConnectorJobs,
   listEvents,
   listProjects,
+  type AuditLogRecord,
   type ConnectorJobRecord,
   type ConnectorJobRunRecord,
   type EventRecord,
@@ -395,6 +397,15 @@ type TraceViewModel = {
   eventCount: number;
   costCount: number;
   totalCost: number;
+  lastTimestamp: number;
+};
+
+type ConnectorTraceViewModel = {
+  id: string;
+  label: string;
+  runCount: number;
+  eventCount: number;
+  auditCount: number;
   lastTimestamp: number;
 };
 
@@ -770,6 +781,10 @@ function traceIdForCost(costRecord: { trace_id?: string | null }): string {
   return costRecord.trace_id ?? "no-trace";
 }
 
+function traceIdForConnectorRecord(record: { trace_id?: string | null }): string {
+  return record.trace_id ?? "no-trace";
+}
+
 function traceLabel(traceId: string): string {
   return traceId === "no-trace" ? "no trace" : traceId;
 }
@@ -853,6 +868,34 @@ function connectorJobStopDetail(
   }
 
   return job.stopped_at ? `stopped ${formatRelativeTimestamp(job.stopped_at)}` : "stopped";
+}
+
+function payloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function eventBelongsToConnectorJob(
+  event: EventRecord,
+  jobId: string,
+  traceIds: Set<string>
+): boolean {
+  return (
+    payloadString(event.payload, "connector_job_id") === jobId ||
+    Boolean(event.trace_id && traceIds.has(event.trace_id))
+  );
+}
+
+function auditBelongsToConnectorJob(
+  auditLog: AuditLogRecord,
+  jobId: string,
+  traceIds: Set<string>
+): boolean {
+  return (
+    (auditLog.target_type === "connector_job" && auditLog.target_id === jobId) ||
+    payloadString(auditLog.payload, "connector_job_id") === jobId ||
+    Boolean(auditLog.trace_id && traceIds.has(auditLog.trace_id))
+  );
 }
 
 function formatPayload(payload: unknown): string {
@@ -939,12 +982,19 @@ export default function DashboardPage() {
   const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
   const [selectedTimelineTraceId, setSelectedTimelineTraceId] = useState("");
   const [selectedTimelineEventId, setSelectedTimelineEventId] = useState("");
+  const [selectedConnectorJobId, setSelectedConnectorJobId] = useState("");
+  const [selectedConnectorTraceId, setSelectedConnectorTraceId] = useState("");
   const [selectedMemoryItemId, setSelectedMemoryItemId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
   const eventsQuery = useQuery({
     queryKey: ["events"],
     queryFn: listEvents,
+    refetchInterval: 15_000
+  });
+  const auditLogsQuery = useQuery({
+    queryKey: ["audit-logs"],
+    queryFn: listAuditLogs,
     refetchInterval: 15_000
   });
   const projectsQuery = useQuery({
@@ -1104,6 +1154,7 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1406,10 +1457,126 @@ export default function DashboardPage() {
   const visibleConnectorJobRows = connectorJobRows
     .filter((job) => !effectiveSelectedProjectId || job.project_id === effectiveSelectedProjectId)
     .slice(0, 8);
+  const effectiveSelectedConnectorJobId = visibleConnectorJobRows.some(
+    (job) => job.id === selectedConnectorJobId
+  )
+    ? selectedConnectorJobId
+    : (visibleConnectorJobRows[0]?.id ?? "");
+  const selectedConnectorJob =
+    visibleConnectorJobRows.find((job) => job.id === effectiveSelectedConnectorJobId) ?? null;
+  const selectedConnectorJobKey = selectedConnectorJob?.id ?? "";
+  const selectedConnectorJobRuns = selectedConnectorJobKey
+    ? (connectorJobRunsByJobId.get(selectedConnectorJobKey) ?? [])
+    : [];
+  const selectedConnectorTraceIds = new Set<string>();
+  if (selectedConnectorJobKey) {
+    for (const run of selectedConnectorJobRuns) {
+      selectedConnectorTraceIds.add(traceIdForConnectorRecord(run));
+    }
+    if (eventsQuery.isSuccess) {
+      for (const event of eventsQuery.data) {
+        if (payloadString(event.payload, "connector_job_id") === selectedConnectorJobKey) {
+          selectedConnectorTraceIds.add(traceIdForEvent(event));
+        }
+      }
+    }
+    if (auditLogsQuery.isSuccess) {
+      for (const auditLog of auditLogsQuery.data) {
+        if (
+          (auditLog.target_type === "connector_job" &&
+            auditLog.target_id === selectedConnectorJobKey) ||
+          payloadString(auditLog.payload, "connector_job_id") === selectedConnectorJobKey
+        ) {
+          selectedConnectorTraceIds.add(traceIdForConnectorRecord(auditLog));
+        }
+      }
+    }
+  }
+  const selectedConnectorEvents =
+    eventsQuery.isSuccess && selectedConnectorJobKey
+      ? eventsQuery.data
+          .filter((event) =>
+            eventBelongsToConnectorJob(event, selectedConnectorJobKey, selectedConnectorTraceIds)
+          )
+          .sort(
+            (left, right) =>
+              new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+          )
+      : [];
+  const selectedConnectorAuditLogs =
+    auditLogsQuery.isSuccess && selectedConnectorJobKey
+      ? auditLogsQuery.data
+          .filter((auditLog) =>
+            auditBelongsToConnectorJob(
+              auditLog,
+              selectedConnectorJobKey,
+              selectedConnectorTraceIds
+            )
+          )
+          .sort(
+            (left, right) =>
+              new Date(right.created_at).getTime() - new Date(left.created_at).getTime()
+          )
+      : [];
+  const connectorTraces = new Map<string, ConnectorTraceViewModel>();
+  const ensureConnectorTrace = (
+    traceId: string,
+    timestamp: string
+  ): ConnectorTraceViewModel => {
+    const timestampValue = new Date(timestamp).getTime();
+    const row =
+      connectorTraces.get(traceId) ??
+      {
+        id: traceId,
+        label: traceLabel(traceId),
+        runCount: 0,
+        eventCount: 0,
+        auditCount: 0,
+        lastTimestamp: 0
+      };
+    row.lastTimestamp = Math.max(
+      row.lastTimestamp,
+      Number.isNaN(timestampValue) ? 0 : timestampValue
+    );
+    connectorTraces.set(traceId, row);
+    return row;
+  };
+  for (const run of selectedConnectorJobRuns) {
+    ensureConnectorTrace(traceIdForConnectorRecord(run), run.completed_at).runCount += 1;
+  }
+  for (const event of selectedConnectorEvents) {
+    ensureConnectorTrace(traceIdForEvent(event), event.timestamp).eventCount += 1;
+  }
+  for (const auditLog of selectedConnectorAuditLogs) {
+    ensureConnectorTrace(traceIdForConnectorRecord(auditLog), auditLog.created_at).auditCount += 1;
+  }
+  const connectorTraceRows = [...connectorTraces.values()].sort(
+    (left, right) => right.lastTimestamp - left.lastTimestamp
+  );
+  const effectiveSelectedConnectorTraceId = connectorTraceRows.some(
+    (trace) => trace.id === selectedConnectorTraceId
+  )
+    ? selectedConnectorTraceId
+    : "";
+  const visibleSelectedConnectorRuns = effectiveSelectedConnectorTraceId
+    ? selectedConnectorJobRuns.filter(
+        (run) => traceIdForConnectorRecord(run) === effectiveSelectedConnectorTraceId
+      )
+    : selectedConnectorJobRuns.slice(0, 6);
+  const visibleSelectedConnectorEvents = effectiveSelectedConnectorTraceId
+    ? selectedConnectorEvents.filter(
+        (event) => traceIdForEvent(event) === effectiveSelectedConnectorTraceId
+      )
+    : selectedConnectorEvents.slice(0, 6);
+  const visibleSelectedConnectorAuditLogs = effectiveSelectedConnectorTraceId
+    ? selectedConnectorAuditLogs.filter(
+        (auditLog) => traceIdForConnectorRecord(auditLog) === effectiveSelectedConnectorTraceId
+      )
+    : selectedConnectorAuditLogs.slice(0, 6);
   const connectorJobMode =
-    connectorJobsQuery.isLoading || connectorJobRunsQuery.isLoading
+    connectorJobsQuery.isLoading || connectorJobRunsQuery.isLoading || auditLogsQuery.isLoading
       ? "syncing"
-      : connectorJobsQuery.isError || connectorJobRunsQuery.isError
+      : connectorJobsQuery.isError || connectorJobRunsQuery.isError || auditLogsQuery.isError
         ? "sample"
         : "live";
   const connectorJobModeLabel = {
@@ -1424,7 +1591,7 @@ export default function DashboardPage() {
         } runs`
       : connectorJobMode === "syncing"
         ? "Loading connector jobs from state-service"
-        : "State-service connector jobs unavailable";
+        : "State-service connector jobs or audit logs unavailable";
   const taskReviewRows = useMemo<TaskReviewViewModel[]>(() => {
     if (taskReviewsQuery.isSuccess) {
       return taskReviewsQuery.data.map(taskReviewRow);
@@ -2591,10 +2758,13 @@ export default function DashboardPage() {
                 const pendingConnectorJobAction =
                   connectorJobActionMutation.isPending &&
                   connectorJobActionMutation.variables?.jobId === job.id;
+                const isSelectedConnectorJob = job.id === effectiveSelectedConnectorJobId;
                 return (
                   <article
                     key={job.id}
-                    className="grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_190px_210px]"
+                    className={`grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_190px_210px] ${
+                      isSelectedConnectorJob ? "bg-info-soft/30" : ""
+                    }`}
                   >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
@@ -2686,6 +2856,18 @@ export default function DashboardPage() {
                         <p className="text-xs text-muted">No run recorded yet.</p>
                       )}
                       <div className="flex flex-wrap gap-1.5 pt-1">
+                        <button
+                          className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition hover:border-info/40 hover:bg-info-soft hover:text-info"
+                          title="Inspect connector job history"
+                          type="button"
+                          onClick={() => {
+                            setSelectedConnectorJobId(job.id);
+                            setSelectedConnectorTraceId("");
+                          }}
+                        >
+                          <FileText size={13} />
+                          <span>{isSelectedConnectorJob ? "Selected" : "Details"}</span>
+                        </button>
                         {job.status === "active" ? (
                           <>
                             <button
@@ -2752,6 +2934,181 @@ export default function DashboardPage() {
                 );
               })}
             </div>
+            {selectedConnectorJob ? (
+              <div className="border-t border-border px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+                      Historique du job
+                    </p>
+                    <h3 className="mt-1 truncate text-sm font-semibold text-ink">
+                      {selectedConnectorJob.id}
+                    </h3>
+                    <p className="mt-1 text-xs text-muted">
+                      {selectedConnectorJobRuns.length} runs / {selectedConnectorEvents.length}{" "}
+                      events / {selectedConnectorAuditLogs.length} audits
+                    </p>
+                  </div>
+                  <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border">
+                    {effectiveSelectedConnectorTraceId
+                      ? traceLabel(effectiveSelectedConnectorTraceId)
+                      : "all traces"}
+                  </span>
+                </div>
+
+                {connectorTraceRows.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    <button
+                      className={`h-7 rounded-md px-2 text-[11px] font-medium ring-1 transition ${
+                        effectiveSelectedConnectorTraceId
+                          ? "bg-white text-muted ring-border hover:bg-slate-50"
+                          : "bg-info-soft text-info ring-info/20"
+                      }`}
+                      type="button"
+                      onClick={() => setSelectedConnectorTraceId("")}
+                    >
+                      All
+                    </button>
+                    {connectorTraceRows.slice(0, 8).map((trace) => (
+                      <button
+                        key={trace.id}
+                        className={`h-7 max-w-full truncate rounded-md px-2 text-[11px] font-medium ring-1 transition ${
+                          trace.id === effectiveSelectedConnectorTraceId
+                            ? "bg-info-soft text-info ring-info/20"
+                            : "bg-white text-muted ring-border hover:bg-slate-50"
+                        }`}
+                        title={`${trace.runCount} runs / ${trace.eventCount} events / ${trace.auditCount} audits`}
+                        type="button"
+                        onClick={() =>
+                          setSelectedConnectorTraceId(
+                            trace.id === effectiveSelectedConnectorTraceId ? "" : trace.id
+                          )
+                        }
+                      >
+                        {trace.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-muted">
+                    Aucun trace_id encore rattaché à ce connector job.
+                  </p>
+                )}
+
+                <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                      <p className="text-xs font-semibold text-ink">Runs</p>
+                      <span className="text-[11px] text-muted">
+                        {visibleSelectedConnectorRuns.length}/{selectedConnectorJobRuns.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-3">
+                      {visibleSelectedConnectorRuns.length === 0 ? (
+                        <p className="text-xs text-muted">Aucun run enregistré.</p>
+                      ) : null}
+                      {visibleSelectedConnectorRuns.map((run) => (
+                        <div key={run.id} className="min-w-0 rounded-md bg-slate-50 p-3 ring-1 ring-border/70">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                                connectorJobRunStatusClass[run.status] ??
+                                connectorJobRunStatusClass.skipped
+                              }`}
+                            >
+                              {run.status}
+                            </span>
+                            <span className="min-w-0 truncate text-[11px] text-muted">
+                              {formatRelativeTimestamp(run.completed_at)}
+                            </span>
+                          </div>
+                          <p className="mt-2 truncate text-[11px] text-muted">
+                            {run.id} / {traceLabel(traceIdForConnectorRecord(run))}
+                          </p>
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-white p-2 text-[11px] leading-relaxed text-muted ring-1 ring-border">
+                            {formatPayload({ output: run.output, error: run.error })}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                      <p className="text-xs font-semibold text-ink">Events</p>
+                      <span className="text-[11px] text-muted">
+                        {visibleSelectedConnectorEvents.length}/{selectedConnectorEvents.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-3">
+                      {visibleSelectedConnectorEvents.length === 0 ? (
+                        <p className="text-xs text-muted">Aucun event lié.</p>
+                      ) : null}
+                      {visibleSelectedConnectorEvents.map((event) => (
+                        <div key={event.id} className="min-w-0 rounded-md bg-slate-50 p-3 ring-1 ring-border/70">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${toneSurface[eventTone(event)]}`}
+                            >
+                              {event.type}
+                            </span>
+                            <span className="min-w-0 truncate text-[11px] text-muted">
+                              {formatRelativeTimestamp(event.timestamp)}
+                            </span>
+                          </div>
+                          <p className="mt-2 truncate text-[11px] text-muted">
+                            {event.id} / {traceLabel(traceIdForEvent(event))}
+                          </p>
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-white p-2 text-[11px] leading-relaxed text-muted ring-1 ring-border">
+                            {formatPayload(event.payload)}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                      <p className="text-xs font-semibold text-ink">Audits</p>
+                      <span className="text-[11px] text-muted">
+                        {visibleSelectedConnectorAuditLogs.length}/
+                        {selectedConnectorAuditLogs.length}
+                      </span>
+                    </div>
+                    <div className="mt-3 grid gap-3">
+                      {visibleSelectedConnectorAuditLogs.length === 0 ? (
+                        <p className="text-xs text-muted">Aucun audit lié.</p>
+                      ) : null}
+                      {visibleSelectedConnectorAuditLogs.map((auditLog) => (
+                        <div
+                          key={auditLog.id}
+                          className="min-w-0 rounded-md bg-slate-50 p-3 ring-1 ring-border/70"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-md bg-accent-soft px-2 py-0.5 text-[11px] font-semibold text-accent ring-1 ring-accent/15">
+                              {auditLog.action}
+                            </span>
+                            <span className="min-w-0 truncate text-[11px] text-muted">
+                              {formatRelativeTimestamp(auditLog.created_at)}
+                            </span>
+                          </div>
+                          <p className="mt-2 truncate text-[11px] text-muted">
+                            {auditLog.actor_type}:{auditLog.actor_id} /{" "}
+                            {traceLabel(traceIdForConnectorRecord(auditLog))}
+                          </p>
+                          <p className="mt-1 truncate text-[11px] text-muted">
+                            {auditLog.target_type}:{auditLog.target_id}
+                          </p>
+                          <pre className="mt-2 max-h-40 overflow-auto rounded-md bg-white p-2 text-[11px] leading-relaxed text-muted ring-1 ring-border">
+                            {formatPayload(auditLog.payload)}
+                          </pre>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
             {connectorJobActionMutation.isError ? (
               <p className="border-t border-border px-4 py-2 text-xs font-medium text-risk">
                 {connectorJobActionMutation.error instanceof Error
@@ -2765,7 +3122,9 @@ export default function DashboardPage() {
                   ? connectorJobsQuery.error.message
                   : connectorJobRunsQuery.error instanceof Error
                     ? connectorJobRunsQuery.error.message
-                    : "Connector jobs unavailable."}
+                    : auditLogsQuery.error instanceof Error
+                      ? auditLogsQuery.error.message
+                      : "Connector jobs unavailable."}
               </p>
             ) : null}
           </section>

@@ -70,6 +70,18 @@ export type ConnectorJobRunRecord = {
   completed_at: string;
 };
 
+export type AuditLogRecord = {
+  id: string;
+  actor_type: ConnectorActorType;
+  actor_id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  payload: Record<string, unknown>;
+  trace_id?: string | null;
+  created_at: string;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -104,6 +116,13 @@ export async function listEvents(): Promise<EventRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<EventRecord[]>(response);
+}
+
+export async function listAuditLogs(): Promise<AuditLogRecord[]> {
+  const response = await fetch("/api/state-service/audit-logs", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<AuditLogRecord[]>(response);
 }
 
 export async function listConnectorJobs(): Promise<ConnectorJobRecord[]> {

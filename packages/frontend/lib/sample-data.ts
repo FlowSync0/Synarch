@@ -25,13 +25,13 @@ export type Status = "done" | "partial" | "next" | "later" | "blocked";
 export const overview = [
   {
     label: "Gate courant",
-    value: "M5.15",
-    detail: "Connector job controls",
+    value: "M5.16",
+    detail: "Connector job history",
     tone: "accent" as Tone
   },
   {
     label: "Tests backend",
-    value: "143",
+    value: "144",
     detail: "passed, 2 skipped",
     tone: "ok" as Tone
   },
@@ -50,9 +50,9 @@ export const overview = [
 ];
 
 export const currentFocus = {
-  title: "Connector job controls",
+  title: "Connector job history",
   body:
-    "Les jobs connecteurs peuvent maintenant etre executes, stoppes et repris depuis l'interface via le Gateway, tout en gardant les events/audits durables.",
+    "Les jobs connecteurs exposent maintenant leur historique live dans le dashboard: runs, traces, events, audits et payloads peuvent etre inspectes sans appeler l'API a la main.",
   checks: [
     "ConnectorJobRecord porte service, projet, tache, owner et kind",
     "ConnectorJobRecord expose next_run_at pour filtrer les jobs dus",
@@ -69,6 +69,8 @@ export const currentFocus = {
     "Dashboard affiche jobs actifs/stoppes, next_run_at, policies et dernier run",
     "Gateway expose stop/resume comme surface controlee au-dessus du state-service",
     "Dashboard peut run now, stop ou resume un connector job live",
+    "Dashboard lit /audit-logs et relie runs, events et audits par connector_job_id ou trace_id",
+    "Vue historique affiche les payloads de runs, events et audits par job selectionne",
     "Worker connector job se lance uniquement via commande explicite ou profil Docker worker",
     "Create, tick, execute, run, stop et resume emettent connector_job.* et audit logs",
     "Tests backend complets passent"
@@ -388,6 +390,11 @@ export const backlog = [
   {
     label: "M5.6",
     title: "Connector job lifecycle",
+    done: true
+  },
+  {
+    label: "M5.16",
+    title: "Connector job history",
     done: true
   },
   {

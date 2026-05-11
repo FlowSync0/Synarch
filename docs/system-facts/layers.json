@@ -5,11 +5,11 @@
     "status": "partial",
     "exists_now": [
       "Next.js control surface",
-      "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, and connector job controls",
+      "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history",
       "Sample metrics still present"
     ],
-    "main_gap": "No live cost/health dashboard and no detailed connector job history view.",
-    "next_validation": "Dashboard runs, stops, and resumes a live connector job through Gateway with event/audit traces.",
+    "main_gap": "No live cost/health dashboard.",
+    "next_validation": "Dashboard follows one live operation across runs, events, audits, and payloads by trace ID.",
     "source": "docs/roadmap.md"
   },
   {
@@ -119,7 +119,8 @@
     "exists_now": [
       "Events, audit logs, cost records, and trace IDs",
       "Model call started/completed/failed events",
-      "Chronological event API responses"
+      "Chronological event API responses",
+      "Frontend connector history links runs, events, and audits by trace ID"
     ],
     "main_gap": "No OpenTelemetry instrumentation, Langfuse traces, or live cost dashboard.",
     "next_validation": "One request has the same trace ID across gateway, state, runtime, event, cost, memory, and audit.",
