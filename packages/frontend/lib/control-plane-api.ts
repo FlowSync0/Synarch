@@ -81,6 +81,52 @@ export type AgentLifecycleRequest = {
   created_at: string;
 };
 
+export type AgentDefinitionDraft = Pick<
+  AgentDefinition,
+  "id" | "name" | "role" | "division"
+> &
+  Partial<
+    Pick<
+      AgentDefinition,
+      | "manager_id"
+      | "status"
+      | "capabilities"
+      | "permissions"
+      | "model"
+      | "model_policy_id"
+      | "allowed_model_ids"
+      | "created_by"
+    >
+  >;
+
+export type AgentSoulDraft = Pick<
+  AgentSoul,
+  "id" | "agent_id" | "identity" | "mission" | "created_by"
+> &
+  Partial<
+    Pick<
+      AgentSoul,
+      | "version"
+      | "responsibilities"
+      | "operating_principles"
+      | "boundaries"
+      | "escalation_rules"
+      | "communication_style"
+      | "active"
+    >
+  >;
+
+export type CreateAgentLifecycleRequestInput = {
+  id: string;
+  action: "create_agent";
+  requested_by_type: ActorType;
+  requested_by_id: string;
+  reason: string;
+  proposed_agent: AgentDefinitionDraft;
+  proposed_soul?: AgentSoulDraft | null;
+  requires_human_approval?: boolean;
+};
+
 export type AgentLifecycleDecision = {
   request_id: string;
   status: ApprovalStatus;
@@ -118,6 +164,22 @@ export async function listAgentLifecycleRequests(): Promise<AgentLifecycleReques
     cache: "no-store"
   });
   return parseJsonResponse<AgentLifecycleRequest[]>(response);
+}
+
+export async function createAgentLifecycleRequest(
+  lifecycleRequest: CreateAgentLifecycleRequestInput
+): Promise<AgentLifecycleRequest> {
+  const response = await fetch("/api/control-plane/agent-lifecycle-requests", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": `trace_frontend_lifecycle_create_${Date.now()}`
+    },
+    body: JSON.stringify(lifecycleRequest)
+  });
+  return parseJsonResponse<AgentLifecycleRequest>(response);
 }
 
 export async function listAgents(): Promise<AgentDefinition[]> {

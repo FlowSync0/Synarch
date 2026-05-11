@@ -38,6 +38,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  createAgentLifecycleRequest,
   decideAgentLifecycleRequest,
   getAgentWorldView,
   listAgents,
@@ -301,6 +302,7 @@ function ProgressBar({ value, tone = "accent" }: { value: number; tone?: Tone })
 
 type ApprovalViewModel = {
   id: string;
+  agentId?: string;
   title: string;
   action: string;
   requester: string;
@@ -381,6 +383,17 @@ type ToolCallDraft = {
   url: string;
 };
 
+type LifecycleCreateDraft = {
+  agentId: string;
+  name: string;
+  role: string;
+  division: string;
+  managerId: string;
+  reason: string;
+  soulIdentity: string;
+  soulMission: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -430,6 +443,55 @@ const initialToolCallDraft: ToolCallDraft = {
   summary: "Permission gate smoke event from Synarch dashboard.",
   url: "https://example.com"
 };
+
+const initialLifecycleCreateDraft: LifecycleCreateDraft = {
+  agentId: "agent-dashboard-draft",
+  name: "Dashboard Agent Draft",
+  role: "Dashboard-created AI employee",
+  division: "dev",
+  managerId: "agent-direction",
+  reason: "Create a scoped AI employee from the Synarch dashboard.",
+  soulIdentity: "A scoped AI employee created through Synarch lifecycle governance.",
+  soulMission: "Validate dashboard lifecycle creation, human approval, and active soul injection."
+};
+
+function createLifecycleCreateDraft(): LifecycleCreateDraft {
+  const suffix = Date.now().toString();
+  return {
+    agentId: `agent-dashboard-${suffix}`,
+    name: `Dashboard Agent ${suffix.slice(-6)}`,
+    role: "Dashboard-created AI employee",
+    division: "dev",
+    managerId: "agent-direction",
+    reason: "Create a scoped AI employee from the Synarch dashboard.",
+    soulIdentity: "A scoped AI employee created through Synarch lifecycle governance.",
+    soulMission:
+      "Validate dashboard lifecycle creation, human approval, and active soul injection."
+  };
+}
+
+function soulIdForAgent(agentId: string): string {
+  const suffix = agentId.replace(/^agent-/, "");
+  return `soul-${suffix}-v1`;
+}
+
+function resolveLifecycleCreateDraft(draft: LifecycleCreateDraft): LifecycleCreateDraft {
+  const generatedDraft = createLifecycleCreateDraft();
+  const usesDefaultAgentId = draft.agentId.trim() === initialLifecycleCreateDraft.agentId;
+  const usesDefaultName = draft.name.trim() === initialLifecycleCreateDraft.name;
+
+  return {
+    ...draft,
+    agentId: usesDefaultAgentId ? generatedDraft.agentId : draft.agentId.trim(),
+    name: usesDefaultAgentId && usesDefaultName ? generatedDraft.name : draft.name.trim(),
+    role: draft.role.trim(),
+    division: draft.division.trim(),
+    managerId: draft.managerId.trim(),
+    reason: draft.reason.trim(),
+    soulIdentity: draft.soulIdentity.trim(),
+    soulMission: draft.soulMission.trim()
+  };
+}
 
 function formatLifecycleAge(createdAt: string): string {
   const timestamp = new Date(createdAt).getTime();
@@ -482,6 +544,7 @@ function lifecycleIcon(request: AgentLifecycleRequest): typeof UserRoundPlus {
 function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel {
   return {
     id: request.id,
+    agentId: request.proposed_agent?.id ?? request.target_agent_id ?? undefined,
     title: request.proposed_agent?.name ?? request.target_agent_id ?? request.id,
     action: request.action,
     requester: request.requested_by_id,
@@ -984,6 +1047,10 @@ export default function DashboardPage() {
   const [lastTaskRun, setLastTaskRun] = useState<TaskRunResult | null>(null);
   const [toolCallDraft, setToolCallDraft] = useState<ToolCallDraft>(initialToolCallDraft);
   const [lastToolResult, setLastToolResult] = useState<ToolResult | null>(null);
+  const [lifecycleCreateDraft, setLifecycleCreateDraft] =
+    useState<LifecycleCreateDraft>(initialLifecycleCreateDraft);
+  const [lastLifecycleRequest, setLastLifecycleRequest] =
+    useState<AgentLifecycleRequest | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [focusedTimelineTaskId, setFocusedTimelineTaskId] = useState("");
   const [selectedTimelineTraceId, setSelectedTimelineTraceId] = useState("");
@@ -1099,10 +1166,37 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
+  const lifecycleCreateMutation = useMutation({
+    mutationFn: createAgentLifecycleRequest,
+    onSuccess: (request) => {
+      setLastLifecycleRequest(request);
+      setLifecycleCreateDraft(createLifecycleCreateDraft());
+      void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
   const decisionMutation = useMutation({
     mutationFn: decideAgentLifecycleRequest,
-    onSuccess: () => {
+    onSuccess: (_decision, variables) => {
+      if (variables.status === "approved") {
+        const request = lifecycleQuery.data?.find(
+          (lifecycleRequest) => lifecycleRequest.id === variables.requestId
+        );
+        const agentId = request?.proposed_agent?.id;
+        if (agentId) {
+          setToolCallDraft((draft) => ({
+            ...draft,
+            agentId
+          }));
+        }
+      }
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-world-view"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
     }
   });
   const credentialDecisionMutation = useMutation({
@@ -1657,6 +1751,92 @@ export default function DashboardPage() {
       : timelineMode === "syncing"
         ? "Connecting to state-service"
         : "State-service unavailable, showing sample timeline";
+  const lifecycleAgentId = lifecycleCreateDraft.agentId.trim();
+  const lifecycleDivision = lifecycleCreateDraft.division.trim();
+  const canCreateLifecycleRequest =
+    lifecycleAgentId.length > 0 &&
+    lifecycleCreateDraft.name.trim().length > 0 &&
+    lifecycleCreateDraft.role.trim().length > 0 &&
+    lifecycleDivision.length > 0 &&
+    lifecycleCreateDraft.reason.trim().length > 0 &&
+    lifecycleCreateDraft.soulIdentity.trim().length > 0 &&
+    lifecycleCreateDraft.soulMission.trim().length > 0 &&
+    !lifecycleCreateMutation.isPending;
+  const updateLifecycleCreateDraft = (
+    field: keyof LifecycleCreateDraft,
+    value: string
+  ) => {
+    setLifecycleCreateDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleLifecycleCreateSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canCreateLifecycleRequest) {
+      return;
+    }
+    const resolvedDraft = resolveLifecycleCreateDraft(lifecycleCreateDraft);
+
+    lifecycleCreateMutation.mutate({
+      id: `lifecycle-create-${resolvedDraft.agentId}`,
+      action: "create_agent",
+      requested_by_type: "user",
+      requested_by_id: "local-user",
+      reason: resolvedDraft.reason,
+      proposed_agent: {
+        id: resolvedDraft.agentId,
+        name: resolvedDraft.name,
+        role: resolvedDraft.role,
+        division: resolvedDraft.division,
+        manager_id: resolvedDraft.managerId || null,
+        capabilities: {
+          skills: ["task.breakdown"],
+          tools: ["event.emit"],
+          models: ["deepseek/deepseek-v4-flash"]
+        },
+        permissions: {
+          can_read_scopes: [
+            `agent:${resolvedDraft.agentId}`,
+            `division:${resolvedDraft.division}`
+          ],
+          can_write_scopes: [`agent:${resolvedDraft.agentId}`],
+          allowed_tools: ["event.emit"],
+          denied_tools: ["credential.read", "email.send", "web.fetch"]
+        },
+        model: "deepseek/deepseek-v4-flash",
+        model_policy_id: "policy-openrouter-deepseek-v4-flash",
+        allowed_model_ids: ["deepseek/deepseek-v4-flash"],
+        created_by: "local-user"
+      },
+      proposed_soul: {
+        id: soulIdForAgent(resolvedDraft.agentId),
+        agent_id: resolvedDraft.agentId,
+        version: 1,
+        identity: resolvedDraft.soulIdentity,
+        mission: resolvedDraft.soulMission,
+        responsibilities: [
+          "Operate inside assigned division scope",
+          "Report lifecycle-impacting changes through approvals"
+        ],
+        operating_principles: [
+          "Keep decisions auditable",
+          "Escalate unclear scope before external action"
+        ],
+        boundaries: [
+          "Do not request credentials without task context",
+          "Do not contact external services without an approved connector scope"
+        ],
+        escalation_rules: [
+          "Escalate missing permission or service ownership to the manager agent"
+        ],
+        communication_style: "Clear, concise, and auditable.",
+        created_by: resolvedDraft.managerId || "local-user",
+        active: true
+      },
+      requires_human_approval: true
+    });
+  };
   const canSubmitGoal = goalDraft.goal.trim().length > 0 && !goalMutation.isPending;
   const updateGoalDraft = <FieldT extends keyof GoalDraft>(
     field: FieldT,
@@ -3576,6 +3756,92 @@ export default function DashboardPage() {
                 {approvalModeLabel}
               </span>
             </div>
+            <form className="grid gap-3 border-b border-border px-4 py-3" onSubmit={handleLifecycleCreateSubmit}>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle agent id"
+                  value={lifecycleCreateDraft.agentId}
+                  onChange={(event) =>
+                    updateLifecycleCreateDraft("agentId", event.target.value)
+                  }
+                />
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle agent name"
+                  value={lifecycleCreateDraft.name}
+                  onChange={(event) => updateLifecycleCreateDraft("name", event.target.value)}
+                />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle agent role"
+                  value={lifecycleCreateDraft.role}
+                  onChange={(event) => updateLifecycleCreateDraft("role", event.target.value)}
+                />
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle agent division"
+                  value={lifecycleCreateDraft.division}
+                  onChange={(event) =>
+                    updateLifecycleCreateDraft("division", event.target.value)
+                  }
+                />
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle agent manager"
+                  value={lifecycleCreateDraft.managerId}
+                  onChange={(event) =>
+                    updateLifecycleCreateDraft("managerId", event.target.value)
+                  }
+                />
+              </div>
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle request reason"
+                value={lifecycleCreateDraft.reason}
+                onChange={(event) => updateLifecycleCreateDraft("reason", event.target.value)}
+              />
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle soul identity"
+                value={lifecycleCreateDraft.soulIdentity}
+                onChange={(event) =>
+                  updateLifecycleCreateDraft("soulIdentity", event.target.value)
+                }
+              />
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle soul mission"
+                value={lifecycleCreateDraft.soulMission}
+                onChange={(event) =>
+                  updateLifecycleCreateDraft("soulMission", event.target.value)
+                }
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-xs text-muted">
+                  {lastLifecycleRequest
+                    ? `${lastLifecycleRequest.id} / ${lastLifecycleRequest.status}`
+                    : soulIdForAgent(lifecycleAgentId)}
+                </p>
+                <button
+                  className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-md bg-ink px-3 text-xs font-medium text-white transition enabled:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!canCreateLifecycleRequest}
+                  type="submit"
+                >
+                  <UserRoundPlus size={14} />
+                  <span>{lifecycleCreateMutation.isPending ? "Creating..." : "Request agent"}</span>
+                </button>
+              </div>
+              {lifecycleCreateMutation.isError ? (
+                <p className="text-xs font-medium text-risk">
+                  {lifecycleCreateMutation.error instanceof Error
+                    ? lifecycleCreateMutation.error.message
+                    : "Lifecycle request failed"}
+                </p>
+              ) : null}
+            </form>
             <div className="divide-y divide-border">
               {approvalRows.length === 0 ? (
                 <article className="px-4 py-5">
