@@ -80,6 +80,7 @@ MAX_TASK_RETRY_BACKOFF_SECONDS = 86_400
 MAX_CONNECTOR_JOB_TICK_JOBS = 20
 DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS = 300
 MAX_CONNECTOR_JOB_COOLDOWN_SECONDS = 86_400
+MAX_CONNECTOR_JOB_RUN_LIMIT = 10_000
 CONNECTOR_JOB_RUNNER_ID = "connector-job-runner"
 CONNECTOR_JOB_ADAPTER_NOT_WIRED_REASON = "connector adapter execution is not wired yet"
 
@@ -493,6 +494,15 @@ def connector_job_cooldown_seconds(job: ConnectorJobRecord) -> int:
     return DEFAULT_CONNECTOR_JOB_COOLDOWN_SECONDS
 
 
+def connector_job_max_runs(job: ConnectorJobRecord) -> int | None:
+    raw_max_runs = job.metadata.get("max_runs")
+    if isinstance(raw_max_runs, bool) or raw_max_runs is None:
+        return None
+    if isinstance(raw_max_runs, int) and 1 <= raw_max_runs <= MAX_CONNECTOR_JOB_RUN_LIMIT:
+        return raw_max_runs
+    return None
+
+
 def connector_job_is_due(job: ConnectorJobRecord, due_before: datetime | None) -> bool:
     if due_before is None or job.next_run_at is None:
         return True
@@ -505,6 +515,32 @@ def connector_job_sort_key(job: ConnectorJobRecord) -> tuple[datetime, datetime,
         utc_datetime(job.created_at),
         job.id,
     )
+
+
+def connector_job_run_count(job_id: str) -> int:
+    return len(
+        [
+            run
+            for run in REPOSITORIES.connector_job_runs.list_records()
+            if run.job_id == job_id
+        ]
+    )
+
+
+def connector_job_run_stop_reason(
+    job: ConnectorJobRecord,
+    run: ConnectorJobRunRecord,
+) -> str | None:
+    if run.output.get("stop_job") is True or run.output.get("stop_condition_met") is True:
+        raw_reason = run.output.get("stop_reason") or run.output.get("reason")
+        if isinstance(raw_reason, str) and raw_reason.strip():
+            return raw_reason.strip()
+        return "Connector job stop condition met by run output."
+
+    max_runs = connector_job_max_runs(job)
+    if max_runs is not None and connector_job_run_count(job.id) >= max_runs:
+        return f"Connector job reached max_runs={max_runs}."
+    return None
 
 
 def validate_project_workspace(workspace: ProjectWorkspace) -> None:
@@ -2108,7 +2144,7 @@ def create_connector_job_run_result(
         completed_at=run_request.completed_at,
     )
     record = create_record(REPOSITORIES.connector_job_runs, run.id, run)
-    event_job = update_connector_job_after_run(job, record)
+    event_job, policy_stop_reason = update_connector_job_after_run(job, record)
     event = create_domain_event(connector_job_run_event(event_job, record, trace_id))
     audit = write_audit_log(
         audit_context,
@@ -2121,16 +2157,44 @@ def create_connector_job_run_result(
             "run_status": record.status,
         },
     )
+    if policy_stop_reason is not None:
+        record_connector_job_policy_stop(
+            event_job,
+            record,
+            policy_stop_reason,
+            trace_id,
+            audit_context,
+        )
     return ConnectorJobRunResult(run=record, event=event, audit_log=audit)
 
 
 def update_connector_job_after_run(
     job: ConnectorJobRecord,
     run: ConnectorJobRunRecord,
-) -> ConnectorJobRecord:
-    if job.kind != ConnectorJobKind.cron or job.status != ConnectorJobStatus.active:
-        return job
+) -> tuple[ConnectorJobRecord, str | None]:
+    if job.status != ConnectorJobStatus.active:
+        return job, None
     completed_at = utc_datetime(run.completed_at)
+    stop_reason = connector_job_run_stop_reason(job, run)
+    if stop_reason is not None:
+        stopped_job = job.model_copy(
+            update={
+                "status": ConnectorJobStatus.stopped,
+                "updated_at": completed_at,
+                "next_run_at": None,
+                "stopped_at": completed_at,
+            }
+        )
+        record = update_record(
+            REPOSITORIES.connector_jobs,
+            job.id,
+            stopped_job,
+            "connector job",
+        )
+        return record, stop_reason
+
+    if job.kind != ConnectorJobKind.cron:
+        return job, None
     updated_job = job.model_copy(
         update={
             "updated_at": completed_at,
@@ -2138,11 +2202,37 @@ def update_connector_job_after_run(
             + timedelta(seconds=connector_job_cooldown_seconds(job)),
         }
     )
-    return update_record(
+    record = update_record(
         REPOSITORIES.connector_jobs,
         job.id,
         updated_job,
         "connector job",
+    )
+    return record, None
+
+
+def record_connector_job_policy_stop(
+    job: ConnectorJobRecord,
+    run: ConnectorJobRunRecord,
+    reason: str,
+    trace_id: str | None,
+    audit_context: AuditContext | None,
+) -> None:
+    stop_payload: dict[str, object] = {"reason": reason, "stopped_by_run_id": run.id}
+    create_domain_event(
+        connector_job_event(
+            job,
+            EventType.connector_job_stopped,
+            trace_id,
+            extra_payload=stop_payload,
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="connector_job.stopped",
+        target_type="connector_job",
+        target_id=job.id,
+        payload={**connector_job_payload(job), **stop_payload},
     )
 
 
@@ -2327,6 +2417,7 @@ def stop_connector_job(
         update={
             "status": ConnectorJobStatus.stopped,
             "updated_at": stop_request.stopped_at,
+            "next_run_at": None,
             "stopped_at": stop_request.stopped_at,
         }
     )

@@ -607,6 +607,166 @@ def test_connector_job_lifecycle_records_events_and_audits() -> None:
     }.issubset({audit["action"] for audit in audits})
 
 
+def test_connector_job_run_policy_stops_on_output_or_max_runs() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_job_run_policy"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-ops-policy",
+            "name": "IA Ops Policy",
+            "role": "Supplier follow-up policy",
+            "division": "ops-sourcing",
+        },
+    )
+    assert agent_response.status_code == 201
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-policy",
+            "name": "Supplier Policy Connector",
+            "kind": "tool_provider",
+            "capabilities": ["web.fetch"],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier policy",
+            "goal": "Stop connector jobs when their objective or attempt limit is reached.",
+            "owner_agent_id": "agent-ops-policy",
+        },
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+
+    def create_policy_job(
+        job_id: str,
+        task_title: str,
+        metadata: dict[str, object],
+    ) -> None:
+        task_response = client.post(
+            "/tasks",
+            json=task_payload(
+                project_id,
+                task_title,
+                assigned_agent_id="agent-ops-policy",
+                required_tools=["web.fetch"],
+            ),
+        )
+        assert task_response.status_code == 201
+        job_response = client.post(
+            "/connector-jobs",
+            headers={
+                "X-Synarch-Actor-Type": "agent",
+                "X-Synarch-Actor-Id": "agent-ops-policy",
+                "X-Synarch-Trace-Id": trace_id,
+            },
+            json={
+                "id": job_id,
+                "service_id": "connector-supplier-policy",
+                "project_id": project_id,
+                "task_id": task_response.json()["id"],
+                "owner_agent_id": "agent-ops-policy",
+                "kind": "cron",
+                "schedule": "*/15 * * * *",
+                "purpose": f"Run policy job {job_id}.",
+                "created_by_type": "agent",
+                "created_by_id": "agent-ops-policy",
+                "metadata": metadata,
+            },
+        )
+        assert job_response.status_code == 201
+
+    create_policy_job(
+        "connector-job-output-stop",
+        "Stop when supplier replied",
+        {"stop_condition": "supplier replied", "cooldown_seconds": 60},
+    )
+    output_stop_response = client.post(
+        "/connector-jobs/connector-job-output-stop/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "completed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {
+                "stop_condition_met": True,
+                "stop_reason": "Supplier replied on WhatsApp.",
+            },
+        },
+    )
+    assert output_stop_response.status_code == 201
+    output_job = client.get("/connector-jobs/connector-job-output-stop").json()
+    assert output_job["status"] == "stopped"
+    assert output_job["next_run_at"] is None
+    assert output_job["stopped_at"] is not None
+
+    create_policy_job(
+        "connector-job-max-runs",
+        "Stop after first attempt",
+        {"max_runs": 1, "cooldown_seconds": 60},
+    )
+    max_runs_response = client.post(
+        "/connector-jobs/connector-job-max-runs/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "completed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {"attempt": 1, "result": "no supplier reply"},
+        },
+    )
+    assert max_runs_response.status_code == 201
+    max_runs_job = client.get("/connector-jobs/connector-job-max-runs").json()
+    assert max_runs_job["status"] == "stopped"
+    assert max_runs_job["next_run_at"] is None
+    assert max_runs_job["stopped_at"] is not None
+
+    active_jobs = client.get(
+        "/connector-jobs",
+        params={"project_id": project_id, "status": "active"},
+    ).json()
+    assert active_jobs == []
+    repeat_run = client.post(
+        "/connector-jobs/connector-job-output-stop/runs",
+        json={
+            "status": "completed",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+        },
+    )
+    assert repeat_run.status_code == 409
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    stopped_events = [
+        event for event in events if event["type"] == "connector_job.stopped"
+    ]
+    assert [event["payload"]["reason"] for event in stopped_events] == [
+        "Supplier replied on WhatsApp.",
+        "Connector job reached max_runs=1.",
+    ]
+    assert [event["payload"]["stopped_by_run_id"] for event in stopped_events]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    stopped_audits = [
+        audit for audit in audits if audit["action"] == "connector_job.stopped"
+    ]
+    assert [audit["payload"]["reason"] for audit in stopped_audits] == [
+        "Supplier replied on WhatsApp.",
+        "Connector job reached max_runs=1.",
+    ]
+
+
 def test_connector_job_tick_records_bounded_skipped_runs_and_audits() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_job_tick"

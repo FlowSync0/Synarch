@@ -74,6 +74,7 @@ GoalEnvelope
   -> Gateway connector-job execution uses the existing tool gate before recording runs
   -> Gateway connector-job batch execution records bounded runs plus empty tick traces
   -> Cron connector jobs update next_run_at after each run and are skipped until due
+  -> Connector jobs can self-stop through run output or metadata.max_runs
   -> Event Service timeline
 ```
 
@@ -136,6 +137,10 @@ This worker is not started by default. Each tick calls Gateway `/connector-jobs/
 explicit `max_jobs` limit. Gateway only selects connector jobs whose `next_run_at` is empty or due.
 The worker writes structured JSON stdout with run counts, completed/failed/skipped counts,
 timestamps, duration, and transient errors.
+
+Connector jobs can stop themselves without a separate manual request when a recorded run outputs
+`stop_condition_met: true` or `stop_job: true`. A job can also declare `metadata.max_runs` to stop a
+bounded follow-up loop after N recorded runs.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

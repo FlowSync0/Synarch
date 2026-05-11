@@ -300,6 +300,8 @@ Progress:
   structured JSON logs without starting by default.
 - Done: cron connector jobs now store `next_run_at`, and state-service/gateway ready-job queries
   only select jobs whose cooldown has elapsed.
+- Done: connector job runs can stop their own job through explicit `output.stop_condition_met` /
+  `output.stop_job`, and `metadata.max_runs` stops bounded follow-up loops after N recorded runs.
 
 Definition of done:
 

@@ -62,6 +62,7 @@
       "Opt-in scheduler worker for bounded autonomous ticks",
       "Opt-in connector-job worker for bounded connector batches",
       "Connector job next_run_at cooldown before repeat execution",
+      "Connector job self-stop policies from run output and max_runs",
       "Task review queue and retry/cancel/update decisions"
     ],
     "main_gap": "No durable worker queue or frontend review UI for dead-lettered tasks.",
