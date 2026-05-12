@@ -139,9 +139,20 @@ export type UpdateAgentLifecycleRequestInput = {
   requires_human_approval?: boolean;
 };
 
+export type DeactivateAgentLifecycleRequestInput = {
+  id: string;
+  action: "deactivate_agent";
+  requested_by_type: ActorType;
+  requested_by_id: string;
+  reason: string;
+  target_agent_id: string;
+  requires_human_approval?: boolean;
+};
+
 export type AgentLifecycleRequestInput =
   | CreateAgentLifecycleRequestInput
-  | UpdateAgentLifecycleRequestInput;
+  | UpdateAgentLifecycleRequestInput
+  | DeactivateAgentLifecycleRequestInput;
 
 export type AgentLifecycleDecision = {
   request_id: string;

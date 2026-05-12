@@ -404,6 +404,11 @@ type LifecycleUpdateDraft = {
   soulMission: string;
 };
 
+type LifecycleDeactivateDraft = {
+  targetAgentId: string;
+  reason: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -474,6 +479,11 @@ const initialLifecycleUpdateDraft: LifecycleUpdateDraft = {
   soulMission: ""
 };
 
+const initialLifecycleDeactivateDraft: LifecycleDeactivateDraft = {
+  targetAgentId: "",
+  reason: "Deactivate this AI employee through Synarch lifecycle governance."
+};
+
 function createLifecycleCreateDraft(): LifecycleCreateDraft {
   const suffix = Date.now().toString();
   return {
@@ -501,6 +511,10 @@ function lifecycleUpdateRequestId(agentId: string): string {
 function soulUpdateIdForAgent(agentId: string, version: number): string {
   const suffix = agentId.replace(/^agent-/, "");
   return `soul-${suffix}-update-${Date.now()}-v${version}`;
+}
+
+function lifecycleDeactivateRequestId(agentId: string): string {
+  return `lifecycle-deactivate-${agentId}-${Date.now()}`;
 }
 
 function resolveLifecycleCreateDraft(draft: LifecycleCreateDraft): LifecycleCreateDraft {
@@ -1109,6 +1123,8 @@ export default function DashboardPage() {
     useState<LifecycleCreateDraft>(initialLifecycleCreateDraft);
   const [lifecycleUpdateDraft, setLifecycleUpdateDraft] =
     useState<LifecycleUpdateDraft>(initialLifecycleUpdateDraft);
+  const [lifecycleDeactivateDraft, setLifecycleDeactivateDraft] =
+    useState<LifecycleDeactivateDraft>(initialLifecycleDeactivateDraft);
   const [lastLifecycleRequest, setLastLifecycleRequest] =
     useState<AgentLifecycleRequest | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -1239,6 +1255,9 @@ export default function DashboardPage() {
           targetAgentId: request.target_agent_id ?? request.proposed_agent?.id ?? ""
         });
       }
+      if (request.action === "deactivate_agent") {
+        setLifecycleDeactivateDraft(initialLifecycleDeactivateDraft);
+      }
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
@@ -1258,7 +1277,7 @@ export default function DashboardPage() {
         });
       }
       if (variables.status === "approved") {
-        const agentId = request?.proposed_agent?.id;
+        const agentId = request?.proposed_agent?.id ?? request?.target_agent_id;
         if (agentId) {
           setToolCallDraft((draft) => ({
             ...draft,
@@ -1439,6 +1458,9 @@ export default function DashboardPage() {
   );
   const activeSoulForLifecycleUpdate =
     effectiveLifecycleUpdateAgentId === effectiveToolAgentId ? worldViewQuery.data?.soul : null;
+  const selectedLifecycleDeactivateAgent = agentsQuery.data?.find(
+    (agent) => agent.id === lifecycleDeactivateDraft.targetAgentId
+  );
   const projectRows = useMemo<ProjectViewModel[]>(() => {
     if (projectsQuery.isSuccess) {
       return [...projectsQuery.data]
@@ -2006,6 +2028,36 @@ export default function DashboardPage() {
         created_by: selectedLifecycleUpdateAgent.manager_id ?? "local-user",
         active: true
       },
+      requires_human_approval: true
+    });
+  };
+  const canDeactivateLifecycleRequest =
+    !!selectedLifecycleDeactivateAgent &&
+    selectedLifecycleDeactivateAgent.status !== "inactive" &&
+    lifecycleDeactivateDraft.reason.trim().length > 0 &&
+    !lifecycleRequestMutation.isPending;
+  const updateLifecycleDeactivateDraft = (
+    field: keyof LifecycleDeactivateDraft,
+    value: string
+  ) => {
+    setLifecycleDeactivateDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleLifecycleDeactivateSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedLifecycleDeactivateAgent || !canDeactivateLifecycleRequest) {
+      return;
+    }
+
+    lifecycleRequestMutation.mutate({
+      id: lifecycleDeactivateRequestId(selectedLifecycleDeactivateAgent.id),
+      action: "deactivate_agent",
+      requested_by_type: "user",
+      requested_by_id: "local-user",
+      reason: lifecycleDeactivateDraft.reason.trim(),
+      target_agent_id: selectedLifecycleDeactivateAgent.id,
       requires_human_approval: true
     });
   };
@@ -4081,6 +4133,55 @@ export default function DashboardPage() {
                 >
                   <PencilLine size={14} />
                   <span>{lifecycleRequestMutation.isPending ? "Creating..." : "Request update"}</span>
+                </button>
+              </div>
+              {lifecycleRequestMutation.isError ? (
+                <p className="text-xs font-medium text-risk">
+                  {lifecycleRequestMutation.error instanceof Error
+                    ? lifecycleRequestMutation.error.message
+                    : "Lifecycle request failed"}
+                </p>
+              ) : null}
+            </form>
+            <form className="grid gap-3 border-b border-border px-4 py-3" onSubmit={handleLifecycleDeactivateSubmit}>
+              <select
+                className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-risk"
+                aria-label="Lifecycle deactivate target"
+                value={lifecycleDeactivateDraft.targetAgentId}
+                onChange={(event) =>
+                  updateLifecycleDeactivateDraft("targetAgentId", event.target.value)
+                }
+              >
+                <option value="">Select agent to deactivate</option>
+                {liveAgentRows
+                  .filter((agent) => agent.status !== "inactive")
+                  .map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+              </select>
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-risk"
+                aria-label="Lifecycle deactivate reason"
+                value={lifecycleDeactivateDraft.reason}
+                onChange={(event) =>
+                  updateLifecycleDeactivateDraft("reason", event.target.value)
+                }
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-xs text-muted">
+                  {selectedLifecycleDeactivateAgent
+                    ? `${selectedLifecycleDeactivateAgent.id} / ${selectedLifecycleDeactivateAgent.status}`
+                    : "No deactivate target"}
+                </p>
+                <button
+                  className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-risk/30 bg-white px-3 text-xs font-medium text-risk transition enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!canDeactivateLifecycleRequest}
+                  type="submit"
+                >
+                  <UserRoundX size={14} />
+                  <span>{lifecycleRequestMutation.isPending ? "Creating..." : "Request deactivate"}</span>
                 </button>
               </div>
               {lifecycleRequestMutation.isError ? (
