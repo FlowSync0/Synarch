@@ -256,6 +256,17 @@ class TaskRunner:
                 if was_credential_resumed:
                     credential_resumed_task_ids.append(task.id)
             except StateServiceRequestError as error:
+                inactive_agent_skip_reason = inactive_agent_skip_reason_from_error(error)
+                if inactive_agent_skip_reason is not None:
+                    skipped_task_ids.append(task.id)
+                    skipped_tasks.append(
+                        TaskSkipRecord(
+                            task_id=task.id,
+                            category="inactive_agent",
+                            reason=inactive_agent_skip_reason,
+                        )
+                    )
+                    continue
                 if not is_task_claim_conflict(error):
                     raise
                 skipped_task_ids.append(task.id)
@@ -748,6 +759,14 @@ def is_task_claim_conflict(error: StateServiceRequestError) -> bool:
     return detail.startswith("Task is already ") or detail.startswith(
         "Task dependencies are not completed:"
     )
+
+
+def inactive_agent_skip_reason_from_error(error: StateServiceRequestError) -> str | None:
+    if error.status_code != 409:
+        return None
+    if not str(error.detail).startswith("Agent is not active:"):
+        return None
+    return "Task assigned agent is inactive."
 
 
 def cost_record_for_run(

@@ -405,6 +405,15 @@ def validate_task_breakdown(task: TaskRecord) -> None:
         )
 
 
+def validate_task_assigned_agent_active(task: TaskRecord, *, status_code: int) -> None:
+    assigned_agent = REPOSITORIES.agents.get(task.assigned_agent_id)
+    if assigned_agent is not None and assigned_agent.status != AgentStatus.active:
+        raise HTTPException(
+            status_code=status_code,
+            detail=f"Agent is not active: {task.assigned_agent_id}",
+        )
+
+
 def validate_credential_access_request(access_request: CredentialAccessRequest) -> None:
     if not REPOSITORIES.projects.exists(access_request.project_id):
         raise HTTPException(
@@ -824,6 +833,37 @@ def validate_lifecycle_request(lifecycle_request: AgentLifecycleRequest) -> None
         status_code=400,
         detail=f"Unsupported lifecycle action: {lifecycle_request.action}",
     )
+
+
+def lifecycle_subject_agent_id(lifecycle_request: AgentLifecycleRequest) -> str | None:
+    if lifecycle_request.action == LifecycleAction.create_agent:
+        if lifecycle_request.proposed_agent is None:
+            return None
+        return lifecycle_request.proposed_agent.id
+    return lifecycle_request.target_agent_id
+
+
+def validate_no_pending_lifecycle_conflict(lifecycle_request: AgentLifecycleRequest) -> None:
+    subject_agent_id = lifecycle_subject_agent_id(lifecycle_request)
+    if subject_agent_id is None:
+        return
+    for existing_request in REPOSITORIES.agent_lifecycle_requests.list_records():
+        if existing_request.id == lifecycle_request.id:
+            continue
+        if existing_request.status != ApprovalStatus.requested:
+            continue
+        if existing_request.action != lifecycle_request.action:
+            continue
+        if lifecycle_subject_agent_id(existing_request) != subject_agent_id:
+            continue
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pending lifecycle request already exists for "
+                f"{subject_agent_id} and action {lifecycle_request.action}: "
+                f"{existing_request.id}"
+            ),
+        )
 
 
 @app.post("/divisions", response_model=DivisionRecord, status_code=201)
@@ -1519,12 +1559,7 @@ def create_task(task: TaskRecord, request: Request) -> TaskRecord:
     if not REPOSITORIES.projects.exists(task.project_id):
         raise HTTPException(status_code=400, detail=f"Unknown project: {task.project_id}")
     validate_task_breakdown(task)
-    assigned_agent = REPOSITORIES.agents.get(task.assigned_agent_id)
-    if assigned_agent is not None and assigned_agent.status != AgentStatus.active:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Agent is not active: {task.assigned_agent_id}",
-        )
+    validate_task_assigned_agent_active(task, status_code=400)
     record = create_record(REPOSITORIES.tasks, task.id, task)
     write_audit_log(
         audit_context,
@@ -1576,6 +1611,7 @@ def start_task(task_id: str, request: Request) -> TaskRecord:
         raise HTTPException(status_code=409, detail=f"Task is already {task.status}")
     if task.attempt_count >= task.max_attempts:
         raise HTTPException(status_code=409, detail="Task reached max attempts")
+    validate_task_assigned_agent_active(task, status_code=409)
 
     started_at = datetime.now(UTC)
     if task.retry_after_at is not None and task.retry_after_at > started_at:
@@ -3200,6 +3236,7 @@ def create_agent_lifecycle_request(
     request: Request,
 ) -> AgentLifecycleRequest:
     validate_lifecycle_request(lifecycle_request)
+    validate_no_pending_lifecycle_conflict(lifecycle_request)
     audit_context = audit_context_from_request(request)
     record = create_record(
         REPOSITORIES.agent_lifecycle_requests,

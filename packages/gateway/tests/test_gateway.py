@@ -816,6 +816,27 @@ class ClaimConflictStateClient(FakeStateClient):
         return super().start_task(task_id, headers=headers)
 
 
+class InactiveAgentStateClient(FakeStateClient):
+    def __init__(self, inactive_task_id: str) -> None:
+        super().__init__()
+        self.inactive_task_id = inactive_task_id
+
+    def start_task(
+        self,
+        task_id: str,
+        *,
+        headers: dict[str, str],
+    ) -> TaskRecord:
+        if task_id == self.inactive_task_id:
+            self.headers.append(headers)
+            task = next(task for task in self.tasks if task.id == task_id)
+            raise StateServiceRequestError(
+                409,
+                f"Agent is not active: {task.assigned_agent_id}",
+            )
+        return super().start_task(task_id, headers=headers)
+
+
 class RecoveringStateClient(FakeStateClient):
     def recover_expired_task_leases(
         self,
@@ -3231,6 +3252,76 @@ def test_run_ready_tasks_skips_claim_conflict_and_continues() -> None:
     ]
     assert [task.status for task in state_client.tasks] == [
         TaskStatus.running,
+        TaskStatus.completed,
+    ]
+
+
+def test_run_ready_tasks_skips_inactive_agent_and_continues() -> None:
+    state_client = InactiveAgentStateClient("task_inactive_agent")
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_inactive_agent",
+            title="Inactive agent",
+            goal="Skip queued work assigned to inactive agents.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task_inactive_agent",
+                project_id="project_inactive_agent",
+                title="Assigned to inactive agent",
+                assigned_agent_id="agent-retired",
+                acceptance_criteria=["Inactive agent task remains queued."],
+            ),
+            TaskRecord(
+                id="task_after_inactive_agent",
+                project_id="project_inactive_agent",
+                title="Run active agent task",
+                assigned_agent_id="agent-dev",
+                acceptance_criteria=["Next ready task still runs."],
+            ),
+        ]
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=CompletingAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-ready",
+            params={"project_id": "project_inactive_agent", "max_tasks": 2},
+            headers={"X-Synarch-Trace-Id": "trace_inactive_agent_skip"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["stop_reason"] == "no_ready_task"
+    assert payload["skipped_task_ids"] == ["task_inactive_agent"]
+    assert payload["skipped_tasks"] == [
+        {
+            "task_id": "task_inactive_agent",
+            "category": "inactive_agent",
+            "reason": "Task assigned agent is inactive.",
+        }
+    ]
+    assert [run["task"]["id"] for run in payload["runs"]] == ["task_after_inactive_agent"]
+    assert payload["scheduler_event"]["payload"]["skipped_tasks"] == [
+        {
+            "task_id": "task_inactive_agent",
+            "category": "inactive_agent",
+            "reason": "Task assigned agent is inactive.",
+        }
+    ]
+    assert [task.status for task in state_client.tasks] == [
+        TaskStatus.queued,
         TaskStatus.completed,
     ]
 

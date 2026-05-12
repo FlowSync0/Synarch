@@ -2636,6 +2636,140 @@ def test_agent_lifecycle_deactivation_blocks_new_task_assignment() -> None:
     assert task_response.json()["detail"] == "Agent is not active: agent-temporary-worker"
 
 
+def test_agent_lifecycle_rejects_duplicate_pending_request_for_same_action() -> None:
+    client = TestClient(app)
+    trace_id = "trace_duplicate_lifecycle_request"
+
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-duplicate-lifecycle",
+            "name": "IA Duplicate Lifecycle",
+            "role": "Temporary lifecycle target",
+            "division": "dev",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    first_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "lifecycle-deactivate-duplicate-first",
+            "action": "deactivate_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "The agent should be deactivated once.",
+            "target_agent_id": "agent-duplicate-lifecycle",
+        },
+    )
+    assert first_response.status_code == 201
+
+    second_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "lifecycle-deactivate-duplicate-second",
+            "action": "deactivate_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "A duplicate request should not create a second approval item.",
+            "target_agent_id": "agent-duplicate-lifecycle",
+        },
+    )
+
+    assert second_response.status_code == 409
+    assert second_response.json()["detail"] == (
+        "Pending lifecycle request already exists for agent-duplicate-lifecycle "
+        "and action deactivate_agent: lifecycle-deactivate-duplicate-first"
+    )
+    requests_response = client.get("/agent-lifecycle-requests")
+    assert requests_response.status_code == 200
+    assert [request["id"] for request in requests_response.json()] == [
+        "lifecycle-deactivate-duplicate-first"
+    ]
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == ["approval.requested"]
+
+
+def test_agent_lifecycle_deactivation_blocks_existing_task_start() -> None:
+    client = TestClient(app)
+    lifecycle_trace_id = "trace_lifecycle_deactivate_runner"
+    start_trace_id = "trace_start_deactivated_runner"
+
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-temporary-runner",
+            "name": "IA Temporary Runner",
+            "role": "Run queued work during a temporary phase",
+            "division": "dev",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Stop deactivated task start",
+            "goal": "Queued work must not start after its agent is deactivated",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Queued before deactivation",
+            "agent-temporary-runner",
+        ),
+    )
+    assert task_response.status_code == 201
+    task = task_response.json()
+
+    lifecycle_response = client.post(
+        "/agent-lifecycle-requests",
+        headers={"X-Synarch-Trace-Id": lifecycle_trace_id},
+        json={
+            "id": "lifecycle-deactivate-temporary-runner",
+            "action": "deactivate_agent",
+            "requested_by_type": "agent",
+            "requested_by_id": "agent-direction",
+            "reason": "The temporary runner should stop receiving execution leases.",
+            "target_agent_id": "agent-temporary-runner",
+        },
+    )
+    assert lifecycle_response.status_code == 201
+
+    decision_response = client.post(
+        "/agent-lifecycle-requests/lifecycle-deactivate-temporary-runner/decisions",
+        headers={"X-Synarch-Trace-Id": lifecycle_trace_id},
+        json={
+            "request_id": "lifecycle-deactivate-temporary-runner",
+            "status": "approved",
+            "decided_by_type": "user",
+            "decided_by_id": "local-user",
+            "rationale": "The agent is out of rotation.",
+        },
+    )
+    assert decision_response.status_code == 201
+
+    start_response = client.post(
+        f"/tasks/{task['id']}/start",
+        headers={"X-Synarch-Trace-Id": start_trace_id},
+    )
+
+    assert start_response.status_code == 409
+    assert start_response.json()["detail"] == "Agent is not active: agent-temporary-runner"
+    queued_task = client.get(f"/tasks/{task['id']}").json()
+    assert queued_task["status"] == "queued"
+    assert queued_task["attempt_count"] == 0
+    assert client.get("/events", params={"trace_id": start_trace_id}).json() == []
+    assert client.get("/audit-logs", params={"trace_id": start_trace_id}).json() == []
+
+
 def test_agent_lifecycle_update_replaces_agent_and_active_soul() -> None:
     client = TestClient(app)
     trace_id = "trace_lifecycle_update_agent_soul"
