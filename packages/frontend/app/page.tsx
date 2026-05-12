@@ -303,6 +303,7 @@ function ProgressBar({ value, tone = "accent" }: { value: number; tone?: Tone })
 type ApprovalViewModel = {
   id: string;
   agentId?: string;
+  createdAtMs: number;
   title: string;
   action: string;
   requester: string;
@@ -394,6 +395,15 @@ type LifecycleCreateDraft = {
   soulMission: string;
 };
 
+type LifecycleUpdateDraft = {
+  targetAgentId: string;
+  role: string;
+  division: string;
+  reason: string;
+  soulIdentity: string;
+  soulMission: string;
+};
+
 type TimelineViewModel = {
   id: string;
   time: string;
@@ -455,6 +465,15 @@ const initialLifecycleCreateDraft: LifecycleCreateDraft = {
   soulMission: "Validate dashboard lifecycle creation, human approval, and active soul injection."
 };
 
+const initialLifecycleUpdateDraft: LifecycleUpdateDraft = {
+  targetAgentId: "",
+  role: "",
+  division: "",
+  reason: "Update this AI employee through Synarch lifecycle governance.",
+  soulIdentity: "",
+  soulMission: ""
+};
+
 function createLifecycleCreateDraft(): LifecycleCreateDraft {
   const suffix = Date.now().toString();
   return {
@@ -475,6 +494,15 @@ function soulIdForAgent(agentId: string): string {
   return `soul-${suffix}-v1`;
 }
 
+function lifecycleUpdateRequestId(agentId: string): string {
+  return `lifecycle-update-${agentId}-${Date.now()}`;
+}
+
+function soulUpdateIdForAgent(agentId: string, version: number): string {
+  const suffix = agentId.replace(/^agent-/, "");
+  return `soul-${suffix}-update-${Date.now()}-v${version}`;
+}
+
 function resolveLifecycleCreateDraft(draft: LifecycleCreateDraft): LifecycleCreateDraft {
   const generatedDraft = createLifecycleCreateDraft();
   const usesDefaultAgentId = draft.agentId.trim() === initialLifecycleCreateDraft.agentId;
@@ -491,6 +519,34 @@ function resolveLifecycleCreateDraft(draft: LifecycleCreateDraft): LifecycleCrea
     soulIdentity: draft.soulIdentity.trim(),
     soulMission: draft.soulMission.trim()
   };
+}
+
+function timestampMs(value: string): number {
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function approvalStatusRank(status: string): number {
+  if (status === "requested") {
+    return 0;
+  }
+  if (status === "approved") {
+    return 1;
+  }
+  if (status === "applied") {
+    return 2;
+  }
+  return 3;
+}
+
+function sortApprovalRows(rows: ApprovalViewModel[]): ApprovalViewModel[] {
+  return [...rows].sort((left, right) => {
+    const statusDelta = approvalStatusRank(left.status) - approvalStatusRank(right.status);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+    return right.createdAtMs - left.createdAtMs;
+  });
 }
 
 function formatLifecycleAge(createdAt: string): string {
@@ -545,6 +601,7 @@ function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel
   return {
     id: request.id,
     agentId: request.proposed_agent?.id ?? request.target_agent_id ?? undefined,
+    createdAtMs: timestampMs(request.created_at),
     title: request.proposed_agent?.name ?? request.target_agent_id ?? request.id,
     action: request.action,
     requester: request.requested_by_id,
@@ -565,6 +622,7 @@ function credentialApprovalRow(request: CredentialAccessRequest): ApprovalViewMo
       : "tool/service mapping";
   return {
     id: request.id,
+    createdAtMs: timestampMs(request.created_at),
     title: `${request.tool_name} access`,
     action: "credential_access",
     requester: request.requested_by_id,
@@ -1049,6 +1107,8 @@ export default function DashboardPage() {
   const [lastToolResult, setLastToolResult] = useState<ToolResult | null>(null);
   const [lifecycleCreateDraft, setLifecycleCreateDraft] =
     useState<LifecycleCreateDraft>(initialLifecycleCreateDraft);
+  const [lifecycleUpdateDraft, setLifecycleUpdateDraft] =
+    useState<LifecycleUpdateDraft>(initialLifecycleUpdateDraft);
   const [lastLifecycleRequest, setLastLifecycleRequest] =
     useState<AgentLifecycleRequest | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -1166,11 +1226,19 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
-  const lifecycleCreateMutation = useMutation({
+  const lifecycleRequestMutation = useMutation({
     mutationFn: createAgentLifecycleRequest,
     onSuccess: (request) => {
       setLastLifecycleRequest(request);
-      setLifecycleCreateDraft(createLifecycleCreateDraft());
+      if (request.action === "create_agent") {
+        setLifecycleCreateDraft(createLifecycleCreateDraft());
+      }
+      if (request.action === "update_agent") {
+        setLifecycleUpdateDraft({
+          ...initialLifecycleUpdateDraft,
+          targetAgentId: request.target_agent_id ?? request.proposed_agent?.id ?? ""
+        });
+      }
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
@@ -1180,10 +1248,16 @@ export default function DashboardPage() {
   const decisionMutation = useMutation({
     mutationFn: decideAgentLifecycleRequest,
     onSuccess: (_decision, variables) => {
+      const request = lifecycleQuery.data?.find(
+        (lifecycleRequest) => lifecycleRequest.id === variables.requestId
+      );
+      if (request) {
+        setLastLifecycleRequest({
+          ...request,
+          status: variables.status === "approved" ? "applied" : "rejected"
+        });
+      }
       if (variables.status === "approved") {
-        const request = lifecycleQuery.data?.find(
-          (lifecycleRequest) => lifecycleRequest.id === variables.requestId
-        );
         const agentId = request?.proposed_agent?.id;
         if (agentId) {
           setToolCallDraft((draft) => ({
@@ -1268,16 +1342,19 @@ export default function DashboardPage() {
   );
   const approvalRows = useMemo<ApprovalViewModel[]>(() => {
     if (lifecycleQuery.isSuccess || credentialAccessQuery.isSuccess) {
-      return [
+      return sortApprovalRows([
         ...(lifecycleQuery.data ?? []).map(lifecycleApprovalRow),
         ...(credentialAccessQuery.data ?? []).map(credentialApprovalRow)
-      ];
+      ]);
     }
 
-    return approvals.map((approval) => ({
-      ...approval,
-      source: "sample" as const
-    }));
+    return sortApprovalRows(
+      approvals.map((approval) => ({
+        ...approval,
+        createdAtMs: 0,
+        source: "sample" as const
+      }))
+    );
   }, [
     credentialAccessQuery.data,
     credentialAccessQuery.isSuccess,
@@ -1352,6 +1429,16 @@ export default function DashboardPage() {
     worldViewQuery.data?.permissions.allowed_tools ?? selectedToolAgent?.allowedTools ?? [];
   const availableServiceOptions = worldViewQuery.data?.available_services ?? [];
   const availableConnectorOptions = worldViewQuery.data?.available_connector_ids ?? [];
+  const effectiveLifecycleUpdateAgentId =
+    lifecycleUpdateDraft.targetAgentId &&
+    liveAgentRows.some((agent) => agent.id === lifecycleUpdateDraft.targetAgentId)
+      ? lifecycleUpdateDraft.targetAgentId
+      : effectiveToolAgentId;
+  const selectedLifecycleUpdateAgent = agentsQuery.data?.find(
+    (agent) => agent.id === effectiveLifecycleUpdateAgentId
+  );
+  const activeSoulForLifecycleUpdate =
+    effectiveLifecycleUpdateAgentId === effectiveToolAgentId ? worldViewQuery.data?.soul : null;
   const projectRows = useMemo<ProjectViewModel[]>(() => {
     if (projectsQuery.isSuccess) {
       return [...projectsQuery.data]
@@ -1761,7 +1848,7 @@ export default function DashboardPage() {
     lifecycleCreateDraft.reason.trim().length > 0 &&
     lifecycleCreateDraft.soulIdentity.trim().length > 0 &&
     lifecycleCreateDraft.soulMission.trim().length > 0 &&
-    !lifecycleCreateMutation.isPending;
+    !lifecycleRequestMutation.isPending;
   const updateLifecycleCreateDraft = (
     field: keyof LifecycleCreateDraft,
     value: string
@@ -1778,7 +1865,7 @@ export default function DashboardPage() {
     }
     const resolvedDraft = resolveLifecycleCreateDraft(lifecycleCreateDraft);
 
-    lifecycleCreateMutation.mutate({
+    lifecycleRequestMutation.mutate({
       id: `lifecycle-create-${resolvedDraft.agentId}`,
       action: "create_agent",
       requested_by_type: "user",
@@ -1832,6 +1919,91 @@ export default function DashboardPage() {
         ],
         communication_style: "Clear, concise, and auditable.",
         created_by: resolvedDraft.managerId || "local-user",
+        active: true
+      },
+      requires_human_approval: true
+    });
+  };
+  const effectiveLifecycleUpdateRole =
+    lifecycleUpdateDraft.role.trim() || selectedLifecycleUpdateAgent?.role || "";
+  const effectiveLifecycleUpdateDivision =
+    lifecycleUpdateDraft.division.trim() || selectedLifecycleUpdateAgent?.division || "";
+  const effectiveLifecycleUpdateSoulIdentity =
+    lifecycleUpdateDraft.soulIdentity.trim() ||
+    activeSoulForLifecycleUpdate?.identity ||
+    "Updated AI employee soul.";
+  const effectiveLifecycleUpdateSoulMission =
+    lifecycleUpdateDraft.soulMission.trim() ||
+    activeSoulForLifecycleUpdate?.mission ||
+    "Operate with the updated role and lifecycle-governed constraints.";
+  const canUpdateLifecycleRequest =
+    !!selectedLifecycleUpdateAgent &&
+    effectiveLifecycleUpdateRole.length > 0 &&
+    effectiveLifecycleUpdateDivision.length > 0 &&
+    lifecycleUpdateDraft.reason.trim().length > 0 &&
+    effectiveLifecycleUpdateSoulIdentity.length > 0 &&
+    effectiveLifecycleUpdateSoulMission.length > 0 &&
+    !lifecycleRequestMutation.isPending;
+  const updateLifecycleUpdateDraft = (
+    field: keyof LifecycleUpdateDraft,
+    value: string
+  ) => {
+    setLifecycleUpdateDraft((draft) => ({
+      ...draft,
+      [field]: value
+    }));
+  };
+  const handleLifecycleUpdateTargetChange = (agentId: string) => {
+    setLifecycleUpdateDraft({
+      ...initialLifecycleUpdateDraft,
+      targetAgentId: agentId
+    });
+    setToolCallDraft((draft) => ({
+      ...draft,
+      agentId
+    }));
+  };
+  const handleLifecycleUpdateSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedLifecycleUpdateAgent || !canUpdateLifecycleRequest) {
+      return;
+    }
+
+    const nextSoulVersion = (activeSoulForLifecycleUpdate?.version ?? 0) + 1;
+    lifecycleRequestMutation.mutate({
+      id: lifecycleUpdateRequestId(selectedLifecycleUpdateAgent.id),
+      action: "update_agent",
+      requested_by_type: "user",
+      requested_by_id: "local-user",
+      reason: lifecycleUpdateDraft.reason.trim(),
+      target_agent_id: selectedLifecycleUpdateAgent.id,
+      proposed_agent: {
+        ...selectedLifecycleUpdateAgent,
+        role: effectiveLifecycleUpdateRole,
+        division: effectiveLifecycleUpdateDivision
+      },
+      proposed_soul: {
+        id: soulUpdateIdForAgent(selectedLifecycleUpdateAgent.id, nextSoulVersion),
+        agent_id: selectedLifecycleUpdateAgent.id,
+        version: nextSoulVersion,
+        identity: effectiveLifecycleUpdateSoulIdentity,
+        mission: effectiveLifecycleUpdateSoulMission,
+        responsibilities: activeSoulForLifecycleUpdate?.responsibilities ?? [
+          "Operate inside assigned division scope"
+        ],
+        operating_principles: activeSoulForLifecycleUpdate?.operating_principles ?? [
+          "Keep decisions auditable"
+        ],
+        boundaries: activeSoulForLifecycleUpdate?.boundaries ?? [
+          "Do not execute external actions without an approved connector scope"
+        ],
+        escalation_rules: activeSoulForLifecycleUpdate?.escalation_rules ?? [
+          "Escalate missing permissions to the manager agent"
+        ],
+        communication_style:
+          activeSoulForLifecycleUpdate?.communication_style ??
+          "Clear, concise, and auditable.",
+        created_by: selectedLifecycleUpdateAgent.manager_id ?? "local-user",
         active: true
       },
       requires_human_approval: true
@@ -3831,13 +4003,90 @@ export default function DashboardPage() {
                   type="submit"
                 >
                   <UserRoundPlus size={14} />
-                  <span>{lifecycleCreateMutation.isPending ? "Creating..." : "Request agent"}</span>
+                  <span>{lifecycleRequestMutation.isPending ? "Creating..." : "Request agent"}</span>
                 </button>
               </div>
-              {lifecycleCreateMutation.isError ? (
+              {lifecycleRequestMutation.isError ? (
                 <p className="text-xs font-medium text-risk">
-                  {lifecycleCreateMutation.error instanceof Error
-                    ? lifecycleCreateMutation.error.message
+                  {lifecycleRequestMutation.error instanceof Error
+                    ? lifecycleRequestMutation.error.message
+                    : "Lifecycle request failed"}
+                </p>
+              ) : null}
+            </form>
+            <form className="grid gap-3 border-b border-border px-4 py-3" onSubmit={handleLifecycleUpdateSubmit}>
+              <select
+                className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle update target"
+                value={effectiveLifecycleUpdateAgentId}
+                onChange={(event) => handleLifecycleUpdateTargetChange(event.target.value)}
+              >
+                {liveAgentRows.length === 0 ? <option value="">No live agent</option> : null}
+                {liveAgentRows.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle update role"
+                  value={effectiveLifecycleUpdateRole}
+                  onChange={(event) =>
+                    updateLifecycleUpdateDraft("role", event.target.value)
+                  }
+                />
+                <input
+                  className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
+                  aria-label="Lifecycle update division"
+                  value={effectiveLifecycleUpdateDivision}
+                  onChange={(event) =>
+                    updateLifecycleUpdateDraft("division", event.target.value)
+                  }
+                />
+              </div>
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle update reason"
+                value={lifecycleUpdateDraft.reason}
+                onChange={(event) => updateLifecycleUpdateDraft("reason", event.target.value)}
+              />
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle update soul identity"
+                value={effectiveLifecycleUpdateSoulIdentity}
+                onChange={(event) =>
+                  updateLifecycleUpdateDraft("soulIdentity", event.target.value)
+                }
+              />
+              <textarea
+                className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
+                aria-label="Lifecycle update soul mission"
+                value={effectiveLifecycleUpdateSoulMission}
+                onChange={(event) =>
+                  updateLifecycleUpdateDraft("soulMission", event.target.value)
+                }
+              />
+              <div className="flex items-center justify-between gap-3">
+                <p className="min-w-0 truncate text-xs text-muted">
+                  {selectedLifecycleUpdateAgent
+                    ? `${selectedLifecycleUpdateAgent.id} / v${(activeSoulForLifecycleUpdate?.version ?? 0) + 1}`
+                    : "No update target"}
+                </p>
+                <button
+                  className="flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border border-border bg-white px-3 text-xs font-medium text-ink transition enabled:hover:border-accent/40 enabled:hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!canUpdateLifecycleRequest}
+                  type="submit"
+                >
+                  <PencilLine size={14} />
+                  <span>{lifecycleRequestMutation.isPending ? "Creating..." : "Request update"}</span>
+                </button>
+              </div>
+              {lifecycleRequestMutation.isError ? (
+                <p className="text-xs font-medium text-risk">
+                  {lifecycleRequestMutation.error instanceof Error
+                    ? lifecycleRequestMutation.error.message
                     : "Lifecycle request failed"}
                 </p>
               ) : null}

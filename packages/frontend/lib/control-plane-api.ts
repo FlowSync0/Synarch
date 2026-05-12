@@ -127,6 +127,22 @@ export type CreateAgentLifecycleRequestInput = {
   requires_human_approval?: boolean;
 };
 
+export type UpdateAgentLifecycleRequestInput = {
+  id: string;
+  action: "update_agent";
+  requested_by_type: ActorType;
+  requested_by_id: string;
+  reason: string;
+  target_agent_id: string;
+  proposed_agent: AgentDefinitionDraft;
+  proposed_soul?: AgentSoulDraft | null;
+  requires_human_approval?: boolean;
+};
+
+export type AgentLifecycleRequestInput =
+  | CreateAgentLifecycleRequestInput
+  | UpdateAgentLifecycleRequestInput;
+
 export type AgentLifecycleDecision = {
   request_id: string;
   status: ApprovalStatus;
@@ -167,7 +183,7 @@ export async function listAgentLifecycleRequests(): Promise<AgentLifecycleReques
 }
 
 export async function createAgentLifecycleRequest(
-  lifecycleRequest: CreateAgentLifecycleRequestInput
+  lifecycleRequest: AgentLifecycleRequestInput
 ): Promise<AgentLifecycleRequest> {
   const response = await fetch("/api/control-plane/agent-lifecycle-requests", {
     method: "POST",
