@@ -43,6 +43,7 @@ import {
   getAgentWorldView,
   listAgents,
   listAgentLifecycleRequests,
+  updateAgentModelPolicy,
   type AgentDefinition,
   type AgentLifecycleRequest,
   type LocalWorldView
@@ -86,11 +87,15 @@ import {
   listConnectorJobRuns,
   listConnectorJobs,
   listEvents,
+  listModelDefinitions,
+  listModelPolicies,
   listProjects,
   type AuditLogRecord,
   type ConnectorJobRecord,
   type ConnectorJobRunRecord,
   type EventRecord,
+  type ModelDefinition,
+  type ModelPolicy,
   type ProjectRecord
 } from "../lib/state-service-api";
 import {
@@ -329,6 +334,8 @@ type AgentViewModel = {
   division: string;
   allowedTools: string[];
   deniedTools: string[];
+  modelPolicyId?: string | null;
+  allowedModelIds: string[];
   icon: typeof GitBranch;
   source: "api" | "sample";
 };
@@ -701,6 +708,8 @@ function agentRow(agent: AgentDefinition): AgentViewModel {
     division: agent.division,
     allowedTools: agent.permissions.allowed_tools,
     deniedTools: agent.permissions.denied_tools,
+    modelPolicyId: agent.model_policy_id,
+    allowedModelIds: agent.allowed_model_ids,
     icon: agentIcon(agent),
     source: "api"
   };
@@ -1001,6 +1010,21 @@ function connectorJobPolicyLabels(job: ConnectorJobRecord): string[] {
   return labels;
 }
 
+function modelPolicyLabel(
+  policy: ModelPolicy,
+  modelById: Map<string, ModelDefinition>
+): string {
+  const defaultModel = modelById.get(policy.default_model_id);
+  return `${policy.name} / ${defaultModel?.display_name ?? policy.default_model_id}`;
+}
+
+function modelPolicyShortLabel(policyId?: string | null): string {
+  if (!policyId) {
+    return "no policy";
+  }
+  return policyId.replace(/^policy-/, "");
+}
+
 function connectorJobStopDetail(
   job: ConnectorJobRecord,
   lastRun?: ConnectorJobRunRecord
@@ -1281,6 +1305,16 @@ export default function DashboardPage() {
     queryFn: listAgents,
     refetchInterval: 30_000
   });
+  const modelPoliciesQuery = useQuery({
+    queryKey: ["model-policies"],
+    queryFn: listModelPolicies,
+    refetchInterval: 30_000
+  });
+  const modelDefinitionsQuery = useQuery({
+    queryKey: ["model-definitions"],
+    queryFn: listModelDefinitions,
+    refetchInterval: 30_000
+  });
   const lifecycleQuery = useQuery({
     queryKey: ["agent-lifecycle-requests"],
     queryFn: listAgentLifecycleRequests,
@@ -1427,6 +1461,21 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
     }
   });
+  const agentModelPolicyMutation = useMutation({
+    mutationFn: ({
+      agentId,
+      modelPolicyId
+    }: {
+      agentId: string;
+      modelPolicyId: string | null;
+    }) => updateAgentModelPolicy(agentId, modelPolicyId),
+    onSuccess: (_agent, variables) => {
+      void queryClient.invalidateQueries({ queryKey: ["agents"] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-world-view", variables.agentId] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
+    }
+  });
   const credentialDecisionMutation = useMutation({
     mutationFn: decideCredentialAccessRequest,
     onSuccess: () => {
@@ -1540,9 +1589,22 @@ export default function DashboardPage() {
       ...agent,
       allowedTools: [],
       deniedTools: [],
+      modelPolicyId: null,
+      allowedModelIds: [],
       source: "sample" as const
     }));
   }, [agentsQuery.data, agentsQuery.isSuccess]);
+  const modelById = useMemo(
+    () =>
+      new Map(
+        (modelDefinitionsQuery.data ?? []).map((modelDefinition) => [
+          modelDefinition.id,
+          modelDefinition
+        ])
+      ),
+    [modelDefinitionsQuery.data]
+  );
+  const modelPolicyOptions = modelPoliciesQuery.data ?? [];
   const agentMode = agentsQuery.isLoading ? "syncing" : agentsQuery.isError ? "sample" : "live";
   const agentModeLabel = {
     live: "Live API",
@@ -3861,6 +3923,39 @@ export default function DashboardPage() {
                     <div className="mt-3 grid grid-cols-[1fr_40px] items-center gap-3">
                       <ProgressBar value={agent.load} tone="warn" />
                       <span className="text-right text-xs text-muted">{agent.load}%</span>
+                    </div>
+                    <div className="mt-3 grid gap-2">
+                      <div className="flex items-center justify-between gap-2 text-[11px]">
+                        <span className="font-semibold uppercase text-muted">
+                          Model policy
+                        </span>
+                        <span className="min-w-0 truncate text-muted">
+                          {modelPolicyShortLabel(agent.modelPolicyId)}
+                        </span>
+                      </div>
+                      <select
+                        className="h-9 min-w-0 rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent disabled:bg-slate-100 disabled:text-muted"
+                        aria-label={`Model policy for ${agent.name}`}
+                        value={agent.modelPolicyId ?? ""}
+                        disabled={
+                          agent.source !== "api" ||
+                          modelPoliciesQuery.isLoading ||
+                          agentModelPolicyMutation.isPending
+                        }
+                        onChange={(event) =>
+                          agentModelPolicyMutation.mutate({
+                            agentId: agent.id,
+                            modelPolicyId: event.target.value || null
+                          })
+                        }
+                      >
+                        <option value="">No policy</option>
+                        {modelPolicyOptions.map((policy) => (
+                          <option key={policy.id} value={policy.id}>
+                            {modelPolicyLabel(policy, modelById)}
+                          </option>
+                        ))}
+                      </select>
                     </div>
                   </article>
                 );
