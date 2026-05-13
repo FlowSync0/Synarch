@@ -520,3 +520,70 @@ def test_memory_compaction_plan_discovers_overloaded_scopes_without_duplicates()
     assert duplicate_plan["inspected_scope_count"] == 1
     assert duplicate_plan["planned_scope_count"] == 0
     assert duplicate_plan["items"] == []
+
+
+def test_memory_compaction_plan_respects_explicit_scope_allowlist() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-active-a",
+            "scope": "project:project_active",
+            "project_id": "project_active",
+            "content": "A" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-active-b",
+            "scope": "project:project_active",
+            "project_id": "project_active",
+            "content": "B" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-archived-a",
+            "scope": "project:project_archived",
+            "project_id": "project_archived",
+            "content": "C" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-archived-b",
+            "scope": "project:project_archived",
+            "project_id": "project_archived",
+            "content": "D" * 100,
+            "status": "approved",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    response = client.post(
+        "/memory-items/compaction-plan",
+        json={
+            "scopes": ["project:project_active"],
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["inspected_scope_count"] == 1
+    assert payload["planned_scope_count"] == 1
+    assert payload["items"][0]["scope"] == "project:project_active"
+    assert payload["items"][0]["source_memory_ids"] == [
+        "memory-active-a",
+        "memory-active-b",
+    ]
+
+    empty_response = client.post(
+        "/memory-items/compaction-plan",
+        json={
+            "scopes": [],
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+        },
+    )
+    assert empty_response.status_code == 200
+    assert empty_response.json()["inspected_scope_count"] == 0
+    assert empty_response.json()["planned_scope_count"] == 0

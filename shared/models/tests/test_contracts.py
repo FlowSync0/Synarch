@@ -60,6 +60,7 @@ def test_memory_compaction_plan_request_defaults() -> None:
     request = MemoryCompactionPlanRequest(project_id="project_demo")
 
     assert request.status == "proposed"
+    assert request.scopes is None
     assert request.min_source_tokens == 1200
     assert request.max_source_items == 20
     assert request.max_scopes == 20

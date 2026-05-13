@@ -184,7 +184,14 @@ memory-service.
 
 Omit `SYNARCH_MEMORY_COMPACTION_SCOPE` to let the worker call Gateway
 `/memory-items/compaction-plan` first, then execute `compact-if-needed` for each planned scope.
-Use `SYNARCH_MEMORY_COMPACTION_PROJECT_ID` to constrain that discovery to one project.
+Gateway fills the plan request with active project workspace scopes from state-service. Use
+`SYNARCH_MEMORY_COMPACTION_PROJECT_ID` to constrain that discovery to one project.
+
+Run the active/inactive workspace scope check with:
+
+```bash
+PYTHON=./.venv/bin/python scripts/live_memory_compaction_scope_e2e.sh
+```
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

@@ -2303,16 +2303,42 @@ def compact_memory_items_if_needed(
 def plan_memory_compaction(
     compaction_request: MemoryCompactionPlanRequest,
     memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
 ) -> MemoryCompactionPlanResult:
     try:
-        return memory_client.plan_memory_compaction(compaction_request)
-    except TaskRunnerRequestError as error:
+        request_with_active_scopes = compaction_request
+        if compaction_request.scopes is None:
+            request_with_active_scopes = compaction_request.model_copy(
+                update={
+                    "scopes": active_project_memory_scopes(
+                        state_client,
+                        project_id=compaction_request.project_id,
+                    )
+                }
+            )
+        return memory_client.plan_memory_compaction(request_with_active_scopes)
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
-    except TaskRunnerUnavailable as error:
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(
             status_code=502,
             detail="Memory compaction plan dependency unavailable",
         ) from error
+
+
+def active_project_memory_scopes(
+    state_client: StateClient,
+    *,
+    project_id: str | None = None,
+) -> list[str]:
+    seen: set[str] = set()
+    scopes: list[str] = []
+    for workspace in state_client.list_project_workspaces(project_id=project_id, active=True):
+        if workspace.memory_scope in seen:
+            continue
+        seen.add(workspace.memory_scope)
+        scopes.append(workspace.memory_scope)
+    return scopes
 
 
 def memory_compacted_event(

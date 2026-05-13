@@ -91,12 +91,14 @@
       "Compacted memories persist structured source provenance in MemoryItem.metadata",
       "compact-if-needed suppresses duplicate proposed or approved compactions for the same source IDs",
       "memory_compaction_worker runs compact-if-needed as a bounded tick or loop for a configured scope",
-      "Memory-service and gateway expose compaction-plan to find overloaded non-compacted scopes",
-      "memory_compaction_worker can plan candidate scopes before executing compact-if-needed",
-      "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
-    ],
-    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or background scope discovery from project/workspace state.",
-    "next_validation": "Let the worker run compaction planning on active project scopes from state-service instead of relying on static env filters.",
+    "Memory-service and gateway expose compaction-plan to find overloaded non-compacted scopes",
+    "Gateway restricts compaction-plan discovery to active project workspace scopes from state-service",
+    "scripts/live_memory_compaction_scope_e2e.sh verifies active workspaces compact and inactive workspaces are skipped",
+    "memory_compaction_worker can plan candidate scopes before executing compact-if-needed",
+    "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
+  ],
+  "main_gap": "No semantic/vector retrieval, graph retrieval, or hierarchical context database yet.",
+  "next_validation": "Add semantic/vector retrieval behind the existing scoped context contract and verify provenance remains explicit.",
     "source": "docs/roadmap.md"
   },
   {

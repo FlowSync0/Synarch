@@ -390,10 +390,13 @@ def compactable_memory_groups(
     request: MemoryCompactionPlanRequest,
 ) -> list[list[MemoryItem]]:
     grouped: dict[tuple[str, str | None, str | None], list[MemoryItem]] = {}
+    allowed_scopes = set(request.scopes) if request.scopes is not None else None
     for item in STORE.list_items():
         if item.status != MemoryStatus.approved:
             continue
         if item.metadata.get("kind") == "compaction":
+            continue
+        if allowed_scopes is not None and item.scope not in allowed_scopes:
             continue
         if request.project_id is not None and item.project_id != request.project_id:
             continue

@@ -11,6 +11,7 @@ TASK_ID="task_live_openrouter_${RUN_ID}"
 FOLLOWUP_TASK_ID="task_live_openrouter_followup_${RUN_ID}"
 REJECTED_MEMORY_ID="memory_live_openrouter_rejected_${RUN_ID}"
 COMPACTION_PROJECT_ID="proj_compact_${RUN_ID}"
+COMPACTION_WORKSPACE_ID="workspace_compact_${RUN_ID}"
 COMPACTION_TASK_ID="task_compact_${RUN_ID}"
 COMPACTION_SOURCE_ID_A="mem_compact_a_${RUN_ID}"
 COMPACTION_SOURCE_ID_B="mem_compact_b_${RUN_ID}"
@@ -310,7 +311,23 @@ compaction_project_payload="$(
     }'
 )"
 
+compaction_workspace_payload="$(
+  jq -n \
+    --arg id "$COMPACTION_WORKSPACE_ID" \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    '{
+      id: $id,
+      project_id: $project_id,
+      name: "Live compacted memory context",
+      summary: "Active workspace for live memory compaction planning.",
+      memory_scope: ("project:" + $project_id),
+      allowed_agent_ids: ["agent-ops-sourcing"],
+      active: true
+    }'
+)"
+
 post_json "${STATE_SERVICE_URL}/projects" "$compaction_project_payload" >/dev/null
+post_json "${STATE_SERVICE_URL}/project-workspaces" "$compaction_workspace_payload" >/dev/null
 
 long_source_a="$(
   printf "Large source A: supplier qualification requires checking MOQ, export terms, certifications, and response SLA. "

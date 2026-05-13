@@ -104,6 +104,21 @@ class FakeStateClient:
         self.workspaces.append(workspace)
         return workspace
 
+    def list_project_workspaces(
+        self,
+        *,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[ProjectWorkspace]:
+        workspaces = self.workspaces
+        if project_id is not None:
+            workspaces = [
+                workspace for workspace in workspaces if workspace.project_id == project_id
+            ]
+        if active is not None:
+            workspaces = [workspace for workspace in workspaces if workspace.active is active]
+        return workspaces
+
     def create_agent_project_assignment(
         self,
         assignment: AgentProjectAssignment,
@@ -905,6 +920,7 @@ class FakeMemoryClient:
         self.context_items = context_items or []
         self.items: list[MemoryItem] = []
         self.items_by_id: dict[str, MemoryItem] = {}
+        self.compaction_plan_requests: list[MemoryCompactionPlanRequest] = []
 
     def assemble_context(self, context: MemoryContext) -> MemoryContext:
         self.contexts.append(context)
@@ -1055,11 +1071,15 @@ class FakeMemoryClient:
     def plan_memory_compaction(
         self, request: MemoryCompactionPlanRequest
     ) -> MemoryCompactionPlanResult:
+        self.compaction_plan_requests.append(request)
         groups: dict[tuple[str, str | None, str | None], list[MemoryItem]] = {}
+        allowed_scopes = set(request.scopes) if request.scopes is not None else None
         for item in self.items_by_id.values():
             if item.status != MemoryStatus.approved:
                 continue
             if item.metadata.get("kind") == "compaction":
+                continue
+            if allowed_scopes is not None and item.scope not in allowed_scopes:
                 continue
             if request.project_id is not None and item.project_id != request.project_id:
                 continue
@@ -4353,7 +4373,24 @@ def test_compact_memory_items_if_needed_skips_event_when_under_threshold() -> No
     assert state_client.events == []
 
 
-def test_plan_memory_compaction_forwards_gateway_request() -> None:
+def test_plan_memory_compaction_uses_active_workspace_scopes() -> None:
+    state_client = FakeStateClient()
+    state_client.workspaces = [
+        ProjectWorkspace(
+            id="workspace-demo",
+            project_id="project_demo",
+            name="Demo workspace",
+            memory_scope="project:project_demo",
+            active=True,
+        ),
+        ProjectWorkspace(
+            id="workspace-archived",
+            project_id="project_archived",
+            name="Archived workspace",
+            memory_scope="project:project_archived",
+            active=False,
+        ),
+    ]
     memory_client = FakeMemoryClient()
     memory_client.items_by_id["memory-source-a"] = MemoryItem(
         id="memory-source-a",
@@ -4369,17 +4406,33 @@ def test_plan_memory_compaction_forwards_gateway_request() -> None:
         status=MemoryStatus.approved,
         project_id="project_demo",
     )
+    memory_client.items_by_id["memory-archived-a"] = MemoryItem(
+        id="memory-archived-a",
+        scope="project:project_archived",
+        content="C" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_archived",
+    )
+    memory_client.items_by_id["memory-archived-b"] = MemoryItem(
+        id="memory-archived-b",
+        scope="project:project_archived",
+        content="D" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_archived",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
     app.dependency_overrides[get_memory_client] = lambda: memory_client
 
     try:
         response = TestClient(app).post(
             "/memory-items/compaction-plan",
-            json={"project_id": "project_demo", "min_source_tokens": 10},
+            json={"min_source_tokens": 10},
         )
     finally:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
+    assert memory_client.compaction_plan_requests[0].scopes == ["project:project_demo"]
     payload = response.json()
     assert payload["threshold_tokens"] == 10
     assert payload["inspected_scope_count"] == 1
@@ -4390,6 +4443,78 @@ def test_plan_memory_compaction_forwards_gateway_request() -> None:
         "memory-source-b",
     ]
     assert payload["items"][0]["source_tokens"] == 40
+
+
+def test_plan_memory_compaction_explicit_empty_scopes_plans_nothing() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="A" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-source-b"] = MemoryItem(
+        id="memory-source-b",
+        scope="project:project_demo",
+        content="B" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compaction-plan",
+            json={"scopes": [], "min_source_tokens": 10},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert memory_client.compaction_plan_requests[0].scopes == []
+    payload = response.json()
+    assert payload["inspected_scope_count"] == 0
+    assert payload["planned_scope_count"] == 0
+    assert payload["items"] == []
+
+
+def test_plan_memory_compaction_without_active_workspaces_plans_nothing() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="A" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-source-b"] = MemoryItem(
+        id="memory-source-b",
+        scope="project:project_demo",
+        content="B" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compaction-plan",
+            json={"min_source_tokens": 10},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert memory_client.compaction_plan_requests[0].scopes == []
+    payload = response.json()
+    assert payload["inspected_scope_count"] == 0
+    assert payload["planned_scope_count"] == 0
+    assert payload["items"] == []
 
 
 def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -> None:

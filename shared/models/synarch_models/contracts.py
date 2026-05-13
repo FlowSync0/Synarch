@@ -439,6 +439,7 @@ class MemoryCompactionPolicyResult(SynarchModel):
 class MemoryCompactionPlanRequest(SynarchModel):
     project_id: str | None = None
     agent_id: str | None = None
+    scopes: list[str] | None = None
     status: MemoryStatus = MemoryStatus.proposed
     min_source_tokens: int = Field(default=1200, ge=1)
     max_source_items: int = Field(default=20, ge=1, le=100)

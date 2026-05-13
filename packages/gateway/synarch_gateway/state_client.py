@@ -66,6 +66,13 @@ class StateClient(Protocol):
         headers: dict[str, str],
     ) -> ProjectWorkspace: ...
 
+    def list_project_workspaces(
+        self,
+        *,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[ProjectWorkspace]: ...
+
     def create_agent_project_assignment(
         self,
         assignment: AgentProjectAssignment,
@@ -290,6 +297,24 @@ class HttpStateClient:
     ) -> ProjectWorkspace:
         response = self._post("/project-workspaces", workspace.model_dump(mode="json"), headers)
         return ProjectWorkspace.model_validate(response.json())
+
+    def list_project_workspaces(
+        self,
+        *,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[ProjectWorkspace]:
+        response = self._get(
+            "/project-workspaces",
+            params=compact_params(
+                project_id=project_id,
+                active=str(active).lower() if active is not None else None,
+            ),
+        )
+        return [
+            ProjectWorkspace.model_validate(workspace)
+            for workspace in response.json()
+        ]
 
     def create_agent_project_assignment(
         self,
