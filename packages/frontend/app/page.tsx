@@ -48,6 +48,7 @@ import {
   type LocalWorldView
 } from "../lib/control-plane-api";
 import {
+  applyMemoryRelationProposal,
   applyCredentialAccessGrant,
   callTool,
   decideCredentialAccessRequest,
@@ -68,6 +69,7 @@ import {
   type GoalPriority,
   type GoalSubmissionResult,
   type CredentialAccessRequest,
+  type MemoryItem,
   type MemoryStatus,
   type ProjectTimeline,
   type TaskSkipRecord,
@@ -1122,6 +1124,38 @@ function formatPayload(payload: unknown): string {
   return JSON.stringify(payload, null, 2);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function memoryMetadata(memoryItem: MemoryItem): Record<string, unknown> {
+  return isRecord(memoryItem.metadata) ? memoryItem.metadata : {};
+}
+
+function isMemoryRelationProposal(memoryItem: MemoryItem): boolean {
+  return memoryMetadata(memoryItem).kind === "memory_relation_proposal";
+}
+
+function memoryRelationSourceId(memoryItem: MemoryItem): string | null {
+  const sourceMemoryId = memoryMetadata(memoryItem).source_memory_id;
+  return typeof sourceMemoryId === "string" ? sourceMemoryId : null;
+}
+
+function memoryRelationRelatedIds(memoryItem: MemoryItem): string[] {
+  const relatedMemoryIds = memoryMetadata(memoryItem).related_memory_ids;
+  if (!Array.isArray(relatedMemoryIds)) {
+    return [];
+  }
+  return relatedMemoryIds.filter(
+    (relatedMemoryId): relatedMemoryId is string =>
+      typeof relatedMemoryId === "string" && relatedMemoryId.length > 0
+  );
+}
+
+function memoryRelationApplied(memoryItem: MemoryItem): boolean {
+  return memoryMetadata(memoryItem).applied === true;
+}
+
 function memoryCountByStatus(timeline: ProjectTimeline, status: MemoryStatus): number {
   return timeline.memory_items.filter((item) => item.status === status).length;
 }
@@ -1327,6 +1361,16 @@ export default function DashboardPage() {
     mutationFn: updateMemoryStatus,
     onSuccess: (memoryItem) => {
       setSelectedMemoryItemId(memoryItem.id);
+      setSelectedTimelineTraceId("");
+      setSelectedTimelineEventId("");
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const memoryRelationApplyMutation = useMutation({
+    mutationFn: applyMemoryRelationProposal,
+    onSuccess: (result) => {
+      setSelectedMemoryItemId(result.source_memory.id);
       setSelectedTimelineTraceId("");
       setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["events"] });
@@ -2738,6 +2782,13 @@ export default function DashboardPage() {
                         const isMutatingMemory =
                           memoryStatusMutation.isPending &&
                           memoryStatusMutation.variables?.itemId === memoryItem.id;
+                        const isRelationProposal = isMemoryRelationProposal(memoryItem);
+                        const relationSourceId = memoryRelationSourceId(memoryItem);
+                        const relationRelatedIds = memoryRelationRelatedIds(memoryItem);
+                        const isRelationApplied = memoryRelationApplied(memoryItem);
+                        const isApplyingRelation =
+                          memoryRelationApplyMutation.isPending &&
+                          memoryRelationApplyMutation.variables?.proposalId === memoryItem.id;
                         return (
                           <article
                             key={memoryItem.id}
@@ -2760,6 +2811,12 @@ export default function DashboardPage() {
                                 >
                                   {memoryItem.status}
                                 </span>
+                                {isRelationProposal ? (
+                                  <span className="flex items-center gap-1 rounded-md bg-info-soft px-2 py-0.5 text-[11px] font-semibold text-info ring-1 ring-info/15">
+                                    <GitBranch size={11} />
+                                    relation
+                                  </span>
+                                ) : null}
                                 <span className="max-w-full truncate text-xs text-muted">
                                   {memoryItem.id} / {memoryItem.agent_id ?? "agent"} /{" "}
                                   {memoryItem.scope}
@@ -2768,6 +2825,22 @@ export default function DashboardPage() {
                               <BalancedText className="mt-2 text-sm text-muted" font="400 13px Inter Variable" lineHeight={18}>
                                 {memoryItem.content}
                               </BalancedText>
+                              {isRelationProposal ? (
+                                <div className="mt-2 grid gap-1 rounded-md bg-slate-50 px-2 py-2 text-[11px] text-muted ring-1 ring-border">
+                                  <span className="truncate">
+                                    source {relationSourceId ?? "unknown"}
+                                  </span>
+                                  <span className="truncate">
+                                    targets{" "}
+                                    {relationRelatedIds.length > 0
+                                      ? relationRelatedIds.join(", ")
+                                      : "none"}
+                                  </span>
+                                  {isRelationApplied ? (
+                                    <span className="font-medium text-ok">applied</span>
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </button>
                             <div className="flex items-center gap-1.5 md:justify-end">
                               <button
@@ -2806,6 +2879,32 @@ export default function DashboardPage() {
                                 <X size={13} />
                                 <span>{isMutatingMemory ? "Saving" : "Reject"}</span>
                               </button>
+                              {isRelationProposal ? (
+                                <button
+                                  className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-info transition enabled:hover:border-info/40 enabled:hover:bg-info-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                  disabled={
+                                    memoryItem.status !== "approved" ||
+                                    isRelationApplied ||
+                                    isApplyingRelation ||
+                                    memoryRelationApplyMutation.isPending
+                                  }
+                                  type="button"
+                                  onClick={() =>
+                                    memoryRelationApplyMutation.mutate({
+                                      proposalId: memoryItem.id
+                                    })
+                                  }
+                                >
+                                  <GitBranch size={13} />
+                                  <span>
+                                    {isApplyingRelation
+                                      ? "Applying"
+                                      : isRelationApplied
+                                        ? "Applied"
+                                        : "Apply"}
+                                  </span>
+                                </button>
+                              ) : null}
                             </div>
                           </article>
                         );
@@ -2821,6 +2920,13 @@ export default function DashboardPage() {
                         {memoryStatusMutation.error instanceof Error
                           ? memoryStatusMutation.error.message
                           : "Memory status update failed."}
+                      </p>
+                    ) : null}
+                    {memoryRelationApplyMutation.isError ? (
+                      <p className="text-xs font-medium text-risk">
+                        {memoryRelationApplyMutation.error instanceof Error
+                          ? memoryRelationApplyMutation.error.message
+                          : "Memory relation apply failed."}
                       </p>
                     ) : null}
                   </div>

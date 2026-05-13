@@ -179,8 +179,16 @@ export type MemoryItem = {
   agent_id?: string | null;
   project_id?: string | null;
   embedding?: number[] | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
   expires_at?: string | null;
+};
+
+export type MemoryRelationApplicationResult = {
+  proposal_memory: MemoryItem;
+  source_memory: MemoryItem;
+  applied_related_memory_ids: string[];
+  event: unknown;
 };
 
 export type MemoryContext = {
@@ -619,6 +627,25 @@ export async function updateMemoryStatus({
     }
   );
   return parseJsonResponse<MemoryItem>(response);
+}
+
+export async function applyMemoryRelationProposal({
+  proposalId
+}: {
+  proposalId: string;
+}): Promise<MemoryRelationApplicationResult> {
+  const response = await fetch(
+    `/api/gateway/memory-items/relation-proposals/${encodeURIComponent(proposalId)}/apply`,
+    {
+      method: "POST",
+      headers: {
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_memory_relation_apply_${Date.now()}`
+      }
+    }
+  );
+  return parseJsonResponse<MemoryRelationApplicationResult>(response);
 }
 
 export async function decideTaskReview({
