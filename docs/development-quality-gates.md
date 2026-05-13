@@ -77,6 +77,7 @@ GoalEnvelope
   -> Durable connector jobs can be created, run-recorded, and stopped with event/audit traces
   -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Gateway connector-job execution uses the existing tool gate before recording runs
+  -> Authorized agents can create durable connector jobs through `connector.job.create`
   -> Gateway connector-job batch execution records bounded runs plus empty tick traces
   -> Cron connector jobs update next_run_at after each run and are skipped until due
   -> Connector jobs can self-stop through run output or metadata.max_runs

@@ -140,6 +140,7 @@ Every state-changing endpoint should write an audit record. Every model call sho
 Implemented baseline:
 
 - Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
+- `connector.job.create` lets an authorized agent create a durable cron/webhook connector job after the same service and tool gate.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
 - `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.

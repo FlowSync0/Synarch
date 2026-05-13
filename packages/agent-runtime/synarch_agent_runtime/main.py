@@ -293,6 +293,9 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "Do not claim a lifecycle request was created in summary or actions_taken "
                 "unless the lifecycle_requests_created array contains the request object. "
                 "For web.fetch, arguments must include url and may include max_bytes. "
+                "For connector.job.create, select the service that will run the job; "
+                "arguments must include kind, purpose, run_tool_name, and may include "
+                "schedule, webhook_path, run_arguments, run_reason, and metadata. "
                 "Keep the answer operational and auditable."
             ),
         ),

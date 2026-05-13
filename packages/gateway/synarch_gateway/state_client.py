@@ -258,6 +258,13 @@ class StateClient(Protocol):
         due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]: ...
 
+    def create_connector_job(
+        self,
+        job: ConnectorJobRecord,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult: ...
+
     def record_connector_job_run(
         self,
         job_id: str,
@@ -660,6 +667,19 @@ class HttpStateClient:
             ),
         )
         return [ConnectorJobRecord.model_validate(job) for job in response.json()]
+
+    def create_connector_job(
+        self,
+        job: ConnectorJobRecord,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorJobMutationResult:
+        response = self._post(
+            "/connector-jobs",
+            job.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorJobMutationResult.model_validate(response.json())
 
     def record_connector_job_run(
         self,

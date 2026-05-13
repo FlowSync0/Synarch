@@ -1381,9 +1381,37 @@ def tool_access_error(tool_call: ToolCallRequest, world_view: LocalWorldView) ->
                 f"Tool not exposed by service: {tool_call.tool_name} "
                 f"via {tool_call.service_id}"
             )
+        connector_job_error = connector_job_run_tool_access_error(
+            tool_call,
+            world_view,
+            service_capabilities,
+        )
+        if connector_job_error is not None:
+            return connector_job_error
     credential_error = tool_credential_scope_error(tool_call, world_view)
     if credential_error is not None:
         return credential_error
+    return None
+
+
+def connector_job_run_tool_access_error(
+    tool_call: ToolCallRequest,
+    world_view: LocalWorldView,
+    service_capabilities: list[str],
+) -> str | None:
+    if tool_call.tool_name != "connector.job.create":
+        return None
+    raw_run_tool_name = tool_call.arguments.get("run_tool_name")
+    if not isinstance(raw_run_tool_name, str) or not raw_run_tool_name.strip():
+        return None
+    run_tool_name = raw_run_tool_name.strip()
+    if run_tool_name not in world_view.permissions.allowed_tools:
+        return f"Connector job run tool not allowed for agent: {run_tool_name}"
+    if run_tool_name not in service_capabilities:
+        return (
+            f"Connector job run tool not exposed by service: {run_tool_name} "
+            f"via {tool_call.service_id}"
+        )
     return None
 
 
@@ -1691,6 +1719,20 @@ def execute_web_fetch_adapter(
     return execute_web_fetch_tool(tool_call)
 
 
+def execute_connector_job_create_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_connector_job_create_tool(
+        tool_call,
+        state_client=state_client,
+        trace_id=trace_id,
+    )
+
+
 class HtmlSummaryParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -1894,12 +1936,115 @@ def execute_event_emit_tool(
     }
 
 
+def execute_connector_job_create_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    trace_id: str,
+) -> dict[str, object]:
+    service_id = tool_call.service_id
+    if service_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.create requires selected service_id",
+        )
+
+    kind = connector_job_kind_argument(tool_call)
+    job = ConnectorJobRecord(
+        id=string_argument(tool_call, "id") or f"connector-job-{uuid4().hex[:12]}",
+        service_id=service_id,
+        project_id=tool_call.project_id,
+        task_id=tool_call.task_id,
+        owner_agent_id=tool_call.agent_id,
+        kind=kind,
+        schedule=string_argument(tool_call, "schedule"),
+        webhook_path=string_argument(tool_call, "webhook_path"),
+        purpose=required_string_argument(tool_call, "purpose", "connector.job.create"),
+        created_by_type=ActorType.agent,
+        created_by_id=tool_call.agent_id,
+        metadata=connector_job_metadata_argument(tool_call, trace_id),
+    )
+    result = state_client.create_connector_job(
+        job,
+        headers=connector_job_operator_headers(ActorType.agent, tool_call.agent_id, trace_id),
+    )
+    return {
+        "executed": True,
+        "adapter": "connector.job.create",
+        "connector_job_id": result.job.id,
+        "service_id": result.job.service_id,
+        "kind": result.job.kind,
+        "status": result.job.status,
+        "event_id": result.event.id,
+        "audit_id": result.audit_log.id if result.audit_log is not None else None,
+        "run_tool_name": result.job.metadata.get("tool_name"),
+    }
+
+
+def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
+    raw_kind = required_string_argument(tool_call, "kind", "connector.job.create")
+    try:
+        return ConnectorJobKind(raw_kind)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"connector.job.create kind must be one of: {', '.join(ConnectorJobKind)}",
+        ) from error
+
+
+def connector_job_metadata_argument(
+    tool_call: ToolCallRequest,
+    trace_id: str,
+) -> dict[str, object]:
+    raw_metadata = tool_call.arguments.get("metadata", {})
+    if not isinstance(raw_metadata, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.create metadata must be an object",
+        )
+    raw_run_arguments = tool_call.arguments.get("run_arguments", {})
+    if not isinstance(raw_run_arguments, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.create run_arguments must be an object",
+        )
+
+    return {
+        **raw_metadata,
+        "tool_name": required_string_argument(
+            tool_call,
+            "run_tool_name",
+            "connector.job.create",
+        ),
+        "arguments": raw_run_arguments,
+        "reason": string_argument(tool_call, "run_reason") or tool_call.reason,
+        "created_by_tool_call": "connector.job.create",
+        "source_trace_id": trace_id,
+    }
+
+
 TOOL_ADAPTERS: dict[str, ToolAdapter] = {
+    "connector.job.create": execute_connector_job_create_adapter,
     "event.emit": execute_event_emit_adapter,
     "web.fetch": execute_web_fetch_adapter,
 }
 
 TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
+    "connector.job.create": ToolAdapterManifest(
+        tool_name="connector.job.create",
+        adapter="connector.job.create",
+        required_arguments=("kind", "purpose", "run_tool_name"),
+        optional_arguments=(
+            "id",
+            "schedule",
+            "webhook_path",
+            "run_arguments",
+            "run_reason",
+            "metadata",
+        ),
+        risk_level="medium",
+        audit_required=True,
+    ),
     "event.emit": ToolAdapterManifest(
         tool_name="event.emit",
         adapter="event.emit",
@@ -1943,8 +2088,22 @@ def string_argument(tool_call: ToolCallRequest, key: str) -> str | None:
     if raw_value is None:
         return None
     if not isinstance(raw_value, str):
-        raise HTTPException(status_code=400, detail=f"event.emit {key} must be a string")
-    return raw_value
+        raise HTTPException(status_code=400, detail=f"Tool argument {key} must be a string")
+    return raw_value.strip() or None
+
+
+def required_string_argument(
+    tool_call: ToolCallRequest,
+    key: str,
+    adapter: str,
+) -> str:
+    value = string_argument(tool_call, key)
+    if value is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{adapter} requires string argument: {key}",
+        )
+    return value
 
 
 def tool_call_event(

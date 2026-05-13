@@ -67,13 +67,25 @@ AGENTS: list[AgentDefinition] = [
         manager_id="agent-direction",
         capabilities=CapabilityMap(
             skills=["supplier_search", "rfq_comparison", "order_tracking"],
-            tools=["web.search", "spreadsheet.write", "event.emit"],
+            tools=[
+                "web.search",
+                "web.fetch",
+                "spreadsheet.write",
+                "connector.job.create",
+                "event.emit",
+            ],
             models=["worker-ops"],
         ),
         permissions=PermissionBundle(
             can_read_scopes=["division:ops-sourcing", "project:*"],
             can_write_scopes=["division:ops-sourcing", "event:*"],
-            allowed_tools=["web.search", "spreadsheet.write", "event.emit"],
+            allowed_tools=[
+                "web.search",
+                "web.fetch",
+                "spreadsheet.write",
+                "connector.job.create",
+                "event.emit",
+            ],
         ),
         model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
