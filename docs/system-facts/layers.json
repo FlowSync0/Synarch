@@ -86,10 +86,11 @@
       "Live OpenRouter E2E verifies approved memory appears in the next task context",
       "Live OpenRouter E2E verifies rejected memory stays out of the next task context",
       "Memory-service can create deterministic proposed compaction items with source memory IDs",
-      "Gateway emits memory.compacted with source IDs, source count, and source token estimate"
+      "Gateway emits memory.compacted with source IDs, source count, and source token estimate",
+      "Live OpenRouter E2E verifies approved compacted memory reaches a real task context while oversized source memories are excluded"
     ],
     "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or automated compaction policy.",
-    "next_validation": "Approve a compacted memory item and verify constrained context keeps the compacted summary with source IDs preserved.",
+    "next_validation": "Add a compaction policy that detects oversized project memory and proposes a compacted item before the task context overflows.",
     "source": "docs/roadmap.md"
   },
   {

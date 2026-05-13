@@ -10,9 +10,14 @@ PROJECT_ID="project_live_openrouter_${RUN_ID}"
 TASK_ID="task_live_openrouter_${RUN_ID}"
 FOLLOWUP_TASK_ID="task_live_openrouter_followup_${RUN_ID}"
 REJECTED_MEMORY_ID="memory_live_openrouter_rejected_${RUN_ID}"
+COMPACTION_PROJECT_ID="proj_compact_${RUN_ID}"
+COMPACTION_TASK_ID="task_compact_${RUN_ID}"
+COMPACTION_SOURCE_ID_A="mem_compact_a_${RUN_ID}"
+COMPACTION_SOURCE_ID_B="mem_compact_b_${RUN_ID}"
 TRACE_ID="trace_live_openrouter_${RUN_ID}"
 MARKER="SYNARCH_LIVE_OK_${RUN_ID}"
 REJECTED_MARKER="SYNARCH_REJECTED_MEMORY_${RUN_ID}"
+COMPACTION_MARKER="SYNARCH_COMPACTED_CONTEXT_${RUN_ID}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -294,15 +299,182 @@ printf "%s" "$memory_items_after_review" | jq -e \
     ([.[] | select(.id == $rejected_memory_id and .status == "rejected")] | length == 1)
   ' >/dev/null
 
+compaction_project_payload="$(
+  jq -n \
+    --arg id "$COMPACTION_PROJECT_ID" \
+    '{
+      id: $id,
+      title: "Live compacted memory context",
+      goal: "Verify approved compacted memory can replace oversized source facts in a live model run.",
+      owner_agent_id: "agent-ops-sourcing"
+    }'
+)"
+
+post_json "${STATE_SERVICE_URL}/projects" "$compaction_project_payload" >/dev/null
+
+long_source_a="$(
+  printf "Large source A: supplier qualification requires checking MOQ, export terms, certifications, and response SLA. "
+  printf "%06000d" 0 | tr "0" "A"
+)"
+long_source_b="$(
+  printf "Large source B: outreach must track platform, contact channel, follow-up date, quoted price, and human escalation reason. "
+  printf "%06000d" 0 | tr "0" "B"
+)"
+
+source_memory_payload_a="$(
+  jq -n \
+    --arg id "$COMPACTION_SOURCE_ID_A" \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    --arg content "$long_source_a" \
+    '{
+      id: $id,
+      scope: ("project:" + $project_id),
+      agent_id: "agent-ops-sourcing",
+      project_id: $project_id,
+      status: "approved",
+      content: $content
+    }'
+)"
+source_memory_payload_b="$(
+  jq -n \
+    --arg id "$COMPACTION_SOURCE_ID_B" \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    --arg content "$long_source_b" \
+    '{
+      id: $id,
+      scope: ("project:" + $project_id),
+      agent_id: "agent-ops-sourcing",
+      project_id: $project_id,
+      status: "approved",
+      content: $content
+    }'
+)"
+
+curl -fsS -X POST "${MEMORY_SERVICE_URL}/memory-items" \
+  -H "Content-Type: application/json" \
+  -d "$source_memory_payload_a" >/dev/null
+curl -fsS -X POST "${MEMORY_SERVICE_URL}/memory-items" \
+  -H "Content-Type: application/json" \
+  -d "$source_memory_payload_b" >/dev/null
+
+compaction_payload="$(
+  jq -n \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    '{
+      scope: ("project:" + $project_id),
+      agent_id: "agent-ops-sourcing",
+      project_id: $project_id,
+      status: "proposed",
+      max_source_items: 10,
+      max_summary_chars: 200
+    }'
+)"
+
+compaction_response="$(post_json "${GATEWAY_URL}/memory-items/compact" "$compaction_payload")"
+compacted_memory_id="$(printf "%s" "$compaction_response" | jq -r '.compacted_item.id')"
+if [ -z "$compacted_memory_id" ] || [ "$compacted_memory_id" = "null" ]; then
+  echo "Could not find compacted memory id in compaction response" >&2
+  exit 1
+fi
+
+printf "%s" "$compaction_response" | jq -e \
+  --arg source_a "$COMPACTION_SOURCE_ID_A" \
+  --arg source_b "$COMPACTION_SOURCE_ID_B" \
+  '
+    (.compacted_item.status == "proposed") and
+    (.source_memory_ids == [$source_a, $source_b]) and
+    (.source_count == 2) and
+    (.source_tokens > 2400) and
+    (.compacted_item.content | contains("Source memory ids: " + $source_a + ", " + $source_b))
+  ' >/dev/null
+
+patch_json "${GATEWAY_URL}/memory-items/${compacted_memory_id}/status" \
+  '{"status":"approved"}' >/dev/null
+
+compaction_task_payload="$(
+  jq -n \
+    --arg id "$COMPACTION_TASK_ID" \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    --arg compacted_memory_id "$compacted_memory_id" \
+    --arg source_a "$COMPACTION_SOURCE_ID_A" \
+    --arg source_b "$COMPACTION_SOURCE_ID_B" \
+    --arg marker "$COMPACTION_MARKER" \
+    '{
+      id: $id,
+      project_id: $project_id,
+      title: "Verify compacted memory reaches the AI employee",
+      description: ("Return status completed. Inspect memory_context. Do not create child tasks. The summary must include marker " + $marker + ", compacted memory id " + $compacted_memory_id + ", and both source memory ids " + $source_a + " and " + $source_b + "."),
+      assigned_agent_id: "agent-ops-sourcing",
+      acceptance_criteria: [
+        "The compacted memory item is present in memory_context.",
+        "The oversized source memory items are absent from memory_context.",
+        "The summary mentions the compacted item and both source IDs."
+      ],
+      sequence: 1
+    }'
+)"
+
+post_json "${STATE_SERVICE_URL}/tasks" "$compaction_task_payload" >/dev/null
+
+compaction_run_response="$(
+  curl -fsS -X POST "${GATEWAY_URL}/tasks/${COMPACTION_TASK_ID}/run" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}"
+)"
+
+printf "%s" "$compaction_run_response" | jq -e \
+  --arg task_id "$COMPACTION_TASK_ID" \
+  --arg compacted_memory_id "$compacted_memory_id" \
+  --arg source_a "$COMPACTION_SOURCE_ID_A" \
+  --arg source_b "$COMPACTION_SOURCE_ID_B" \
+  --arg marker "$COMPACTION_MARKER" \
+  '
+    (.task.id == $task_id) and
+    (.task.status == "completed") and
+    (.agent_result.status == "completed") and
+    (.memory_context.items | type == "array") and
+    (any(.memory_context.items[]; .id == $compacted_memory_id and (.content | contains("Source memory ids: " + $source_a + ", " + $source_b)))) and
+    (all(.memory_context.items[]; .id != $source_a and .id != $source_b)) and
+    (.agent_result.summary | contains($marker)) and
+    (.agent_result.summary | contains($compacted_memory_id)) and
+    (.agent_result.summary | contains($source_a)) and
+    (.agent_result.summary | contains($source_b)) and
+    (.cost_records[0].provider_id == "provider-openrouter") and
+    (.cost_records[0].model_id == "deepseek/deepseek-v4-flash") and
+    (.cost_records[0].input_tokens > 0) and
+    (.cost_records[0].output_tokens > 0)
+  ' >/dev/null
+
+compaction_timeline="$(
+  curl -fsS "${GATEWAY_URL}/projects/${COMPACTION_PROJECT_ID}/timeline"
+)"
+
+printf "%s" "$compaction_timeline" | jq -e \
+  --arg trace_id "$TRACE_ID" \
+  --arg compacted_memory_id "$compacted_memory_id" \
+  --arg task_id "$COMPACTION_TASK_ID" \
+  '
+    ([.events[] | select(.trace_id == $trace_id and .type == "memory.compacted" and .payload.memory_id == $compacted_memory_id)] | length == 1) and
+    ([.events[] | select(.trace_id == $trace_id and .type == "memory.status_updated" and .payload.memory_id == $compacted_memory_id and .payload.status == "approved")] | length == 1) and
+    ([.events[] | select(.trace_id == $trace_id and .type == "model_call.started" and .payload.task_id == $task_id and (.payload.memory_item_ids | index($compacted_memory_id) != null))] | length == 1) and
+    ([.tasks[] | select(.id == $task_id and .status == "completed")] | length == 1) and
+    ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .model_id == "deepseek/deepseek-v4-flash" and .input_tokens > 0 and .output_tokens > 0)] | length == 1)
+  ' >/dev/null
+
 printf "%s" "$run_response" | jq \
   --arg project_id "$PROJECT_ID" \
   --arg task_id "$TASK_ID" \
   --arg followup_task_id "$FOLLOWUP_TASK_ID" \
+  --arg compaction_project_id "$COMPACTION_PROJECT_ID" \
+  --arg compaction_task_id "$COMPACTION_TASK_ID" \
   --arg trace_id "$TRACE_ID" \
   --arg marker "$MARKER" \
   --arg approved_memory_id "$approved_candidate_memory_id" \
   --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
+  --arg compacted_memory_id "$compacted_memory_id" \
+  --arg source_a "$COMPACTION_SOURCE_ID_A" \
+  --arg source_b "$COMPACTION_SOURCE_ID_B" \
   --argjson followup_run "$followup_run_response" \
+  --argjson compaction_run "$compaction_run_response" \
   --arg stop_reason "$(printf "%s" "$batch_response" | jq -r '.stop_reason')" \
   --arg scheduler_event_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_event.id')" \
   --arg scheduler_audit_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_audit_log.id')" \
@@ -311,10 +483,14 @@ printf "%s" "$run_response" | jq \
     project_id: $project_id,
     task_id: $task_id,
     followup_task_id: $followup_task_id,
+    compaction_project_id: $compaction_project_id,
+    compaction_task_id: $compaction_task_id,
     trace_id: $trace_id,
     marker: $marker,
     approved_memory_id: $approved_memory_id,
     rejected_memory_id: $rejected_memory_id,
+    compacted_memory_id: $compacted_memory_id,
+    compacted_source_memory_ids: [$source_a, $source_b],
     batch_stop_reason: $stop_reason,
     scheduler_event_id: $scheduler_event_id,
     scheduler_audit_id: $scheduler_audit_id,
@@ -322,7 +498,10 @@ printf "%s" "$run_response" | jq \
     agent_status: .agent_result.status,
     followup_task_status: $followup_run.task.status,
     followup_agent_status: $followup_run.agent_result.status,
+    compaction_task_status: $compaction_run.task.status,
+    compaction_agent_status: $compaction_run.agent_result.status,
     followup_memory_context_items: ($followup_run.memory_context.items | length),
+    compaction_memory_context_items: ($compaction_run.memory_context.items | length),
     memory_context_items: (.memory_context.items | length),
     memory_candidates: (.agent_result.memory_candidates | length),
     memory_events: (.memory_events | length),

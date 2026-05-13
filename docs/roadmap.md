@@ -1,6 +1,6 @@
 # Synarch Roadmap
 
-Last updated: 2026-05-04
+Last updated: 2026-05-13
 
 This roadmap is the operating map for Synarch. The README explains the vision, and
 `docs/development-quality-gates.md` defines the verification discipline. This document answers:
@@ -45,7 +45,7 @@ through the dashboard.
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry recovery, retry backoff, dead-letter review metadata, task review decisions, task result recording, bounded ready-batch execution, scheduler tick event/audit records, opt-in scheduler worker, and timeline events exist. | No durable worker queue or human review UI for dead-lettered tasks yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
-| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, live approved/rejected-memory validation, and deterministic compaction with source provenance exist. | No semantic/vector retrieval, graph retrieval, hierarchical context database, or automated compaction policy. | Approve a compacted memory item and verify constrained context keeps the compacted summary with source IDs preserved. |
+| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, live approved/rejected-memory validation, deterministic compaction with source provenance, and live compacted-memory validation exist. | No semantic/vector retrieval, graph retrieval, hierarchical context database, or automated compaction policy. | Add a compaction policy that detects oversized project memory and proposes a compacted item before the task context overflows. |
 | G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, `event.emit`/`web.fetch` adapters, task-scoped credential gates, service health checks, durable connector job lifecycle records, and bounded connector workers exist. | No sandbox execution and no real external connector adapters yet. | Connector job executes a real adapter only after permission, service, and credential gates pass. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
@@ -356,6 +356,8 @@ Progress:
   preserving source memory IDs in the result and content.
 - Done: gateway exposes memory compaction and emits `memory.compacted` with source IDs, source
   count, and source token estimate.
+- Done: live OpenRouter E2E approves a compacted memory item and verifies a real DeepSeek task gets
+  the compacted summary with source IDs while oversized source memories stay out of context.
 - Done: system layer-status facts can be seeded into global memory for self-inspection tests.
 
 Do not include yet:
