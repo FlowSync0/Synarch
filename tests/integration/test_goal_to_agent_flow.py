@@ -23,6 +23,9 @@ from synarch_models import (
     LocalWorldView,
     MemoryContext,
     MemoryItem,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
     ProjectComplexityAssessment,
     ProjectRecord,
     ProjectSplitApplication,
@@ -31,6 +34,7 @@ from synarch_models import (
 )
 from synarch_state_service.main import app as state_service_app
 from synarch_state_service.main import reset_repositories
+from synarch_state_service.seeds import WORKER_DEFAULT_MODEL_POLICY_ID
 
 
 class StateServiceTestClient:
@@ -214,6 +218,24 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return CostRecord.model_validate(response.json())
 
+    def get_model_provider(self, provider_id: str) -> ModelProviderConfig:
+        response = self.client.get(f"/model-providers/{provider_id}")
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ModelProviderConfig.model_validate(response.json())
+
+    def get_model_definition(self, model_id: str) -> ModelDefinition:
+        response = self.client.get(f"/model-definitions/{model_id}")
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ModelDefinition.model_validate(response.json())
+
+    def get_model_policy(self, policy_id: str) -> ModelPolicy:
+        response = self.client.get(f"/model-policies/{policy_id}")
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return ModelPolicy.model_validate(response.json())
+
 
 class ControlPlaneTestClient:
     def __init__(self, client: TestClient) -> None:
@@ -285,6 +307,16 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
         },
     )
     assert model_response.status_code == 201
+    policy_response = state.post(
+        "/model-policies",
+        json={
+            "id": WORKER_DEFAULT_MODEL_POLICY_ID,
+            "name": "Worker default",
+            "default_model_id": LOCAL_RUNTIME_MODEL_ID,
+            "allowed_model_ids": [LOCAL_RUNTIME_MODEL_ID],
+        },
+    )
+    assert policy_response.status_code == 201
     for agent_id, division in [
         ("agent-direction", "direction"),
         ("agent-finance", "finance"),
@@ -386,6 +418,10 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     direction_run = direction_run_response.json()
     assert direction_run["task"]["assigned_agent_id"] == "agent-direction"
     assert direction_run["task"]["status"] == "completed"
+    assert (
+        direction_run["model_call_events"][0]["payload"]["model_policy_id"]
+        == WORKER_DEFAULT_MODEL_POLICY_ID
+    )
     assert [event["type"] for event in direction_run["model_call_events"]] == [
         "model_call.started",
         "model_call.completed",
@@ -405,6 +441,10 @@ def test_goal_to_agent_result_flow_across_current_layers() -> None:
     assert finance_run["model_call_events"][0]["payload"]["memory_item_ids"] == [
         memory_item_response.json()["id"]
     ]
+    assert (
+        finance_run["model_call_events"][0]["payload"]["model_policy_id"]
+        == WORKER_DEFAULT_MODEL_POLICY_ID
+    )
 
     task = finance_run["task"]
     agent_result = finance_run["agent_result"]

@@ -23,6 +23,7 @@ from synarch_state_service.repositories import StateRepositories
 LOCAL_RUNTIME_PROVIDER_ID = "provider-local-runtime-stub"
 LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
 LOCAL_RUNTIME_POLICY_ID = "policy-local-runtime-default"
+WORKER_DEFAULT_MODEL_POLICY_ID = "policy-worker-default"
 OPENROUTER_PROVIDER_ID = "provider-openrouter"
 OPENROUTER_DEEPSEEK_V4_MODEL_ID = "deepseek/deepseek-v4-flash"
 OPENROUTER_DEEPSEEK_V4_POLICY_ID = "policy-openrouter-deepseek-v4-flash"
@@ -77,6 +78,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             allowed_tools=["project.create", "task.create", "event.emit"],
         ),
         model="gpt-4.1",
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-finance",
@@ -95,6 +97,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             allowed_tools=["document.read", "ledger.write", "event.emit"],
             denied_tools=["payment.execute"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-ops-sourcing",
@@ -112,6 +115,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             can_write_scopes=["division:ops-sourcing", "event:*"],
             allowed_tools=["web.search", "web.fetch", "spreadsheet.write", "event.emit"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-dev",
@@ -130,6 +134,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             allowed_tools=["git.read", "git.write", "shell.sandbox", "event.emit"],
             denied_tools=["payment.execute"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-admin-knowledge",
@@ -147,6 +152,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             can_write_scopes=["division:admin-knowledge", "event:*"],
             allowed_tools=["document.read", "document.write", "event.emit"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
 )
 
@@ -319,6 +325,15 @@ DEFAULT_MODEL_POLICIES: tuple[ModelPolicy, ...] = (
         name="Local runtime default",
         default_model_id=LOCAL_RUNTIME_MODEL_ID,
         allowed_model_ids=[LOCAL_RUNTIME_MODEL_ID],
+        max_cost_per_task=0.01,
+        max_cost_per_day=1.0,
+        currency="USD",
+    ),
+    ModelPolicy(
+        id=WORKER_DEFAULT_MODEL_POLICY_ID,
+        name="Worker default",
+        default_model_id=LOCAL_RUNTIME_MODEL_ID,
+        allowed_model_ids=[LOCAL_RUNTIME_MODEL_ID, OPENROUTER_DEEPSEEK_V4_MODEL_ID],
         max_cost_per_task=0.01,
         max_cost_per_day=1.0,
         currency="USD",
@@ -556,9 +571,15 @@ def seed_repositories(repositories: StateRepositories) -> SeedSummary:
             divisions_created += 1
 
     for agent in DEFAULT_AGENTS:
-        if not repositories.agents.exists(agent.id):
+        existing_agent = repositories.agents.get(agent.id)
+        if existing_agent is None:
             repositories.agents.create(agent.id, agent)
             agents_created += 1
+        elif existing_agent.model_policy_id is None:
+            repositories.agents.update(
+                agent.id,
+                existing_agent.model_copy(update={"model_policy_id": agent.model_policy_id}),
+            )
 
     for soul in DEFAULT_AGENT_SOULS:
         if not repositories.agent_souls.exists(soul.id):

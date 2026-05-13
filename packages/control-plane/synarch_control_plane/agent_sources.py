@@ -16,7 +16,7 @@ from synarch_models import (
     SkillDefinition,
 )
 
-from .seed import AGENT_SOULS, AGENTS
+from .seed import AGENT_SOULS, AGENTS, MODEL_POLICIES
 
 
 class AgentSourceUnavailable(Exception):
@@ -71,6 +71,7 @@ class AgentSource(Protocol):
 @dataclass(frozen=True)
 class SeedAgentSource:
     agents: tuple[AgentDefinition, ...] = tuple(AGENTS)
+    model_policies: tuple[ModelPolicy, ...] = tuple(MODEL_POLICIES)
 
     def list_agents(self) -> list[AgentDefinition]:
         return list(self.agents)
@@ -93,7 +94,10 @@ class SeedAgentSource:
         return []
 
     def get_model_policy(self, policy_id: str) -> ModelPolicy | None:
-        return None
+        return next(
+            (policy for policy in self.model_policies if policy.id == policy_id),
+            None,
+        )
 
     def list_agent_lifecycle_requests(
         self,

@@ -1,4 +1,25 @@
-from synarch_models import AgentDefinition, AgentSoul, CapabilityMap, PermissionBundle
+from synarch_models import (
+    AgentDefinition,
+    AgentSoul,
+    CapabilityMap,
+    ModelPolicy,
+    PermissionBundle,
+)
+
+LOCAL_RUNTIME_MODEL_ID = "model-local-runtime-stub"
+WORKER_DEFAULT_MODEL_POLICY_ID = "policy-worker-default"
+OPENROUTER_DEEPSEEK_V4_MODEL_ID = "deepseek/deepseek-v4-flash"
+
+MODEL_POLICIES: list[ModelPolicy] = [
+    ModelPolicy(
+        id=WORKER_DEFAULT_MODEL_POLICY_ID,
+        name="Worker default",
+        default_model_id=LOCAL_RUNTIME_MODEL_ID,
+        allowed_model_ids=[LOCAL_RUNTIME_MODEL_ID, OPENROUTER_DEEPSEEK_V4_MODEL_ID],
+        max_cost_per_task=0.01,
+        max_cost_per_day=1.0,
+    )
+]
 
 AGENTS: list[AgentDefinition] = [
     AgentDefinition(
@@ -17,6 +38,7 @@ AGENTS: list[AgentDefinition] = [
             allowed_tools=["project.create", "task.create", "event.emit"],
         ),
         model="gpt-4.1",
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-finance",
@@ -35,6 +57,7 @@ AGENTS: list[AgentDefinition] = [
             allowed_tools=["document.read", "ledger.write", "event.emit"],
             denied_tools=["payment.execute"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-ops-sourcing",
@@ -52,6 +75,7 @@ AGENTS: list[AgentDefinition] = [
             can_write_scopes=["division:ops-sourcing", "event:*"],
             allowed_tools=["web.search", "spreadsheet.write", "event.emit"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-dev",
@@ -70,6 +94,7 @@ AGENTS: list[AgentDefinition] = [
             allowed_tools=["git.read", "git.write", "shell.sandbox", "event.emit"],
             denied_tools=["payment.execute"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
     AgentDefinition(
         id="agent-admin-knowledge",
@@ -87,6 +112,7 @@ AGENTS: list[AgentDefinition] = [
             can_write_scopes=["division:admin-knowledge", "event:*"],
             allowed_tools=["document.read", "document.write", "event.emit"],
         ),
+        model_policy_id=WORKER_DEFAULT_MODEL_POLICY_ID,
     ),
 ]
 

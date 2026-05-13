@@ -6,7 +6,12 @@ from fastapi.testclient import TestClient
 
 from synarch_control_plane.agent_sources import StateServiceAgentSource
 from synarch_control_plane.main import app, set_agent_source
-from synarch_control_plane.seed import AGENT_SOULS, AGENTS
+from synarch_control_plane.seed import (
+    AGENT_SOULS,
+    AGENTS,
+    LOCAL_RUNTIME_MODEL_ID,
+    WORKER_DEFAULT_MODEL_POLICY_ID,
+)
 
 
 def setup_function() -> None:
@@ -33,6 +38,8 @@ def test_world_view_is_limited_to_agent_scope() -> None:
     assert payload["soul"]["agent_id"] == "agent-dev"
     assert payload["soul"]["identity"].startswith("IA Dev")
     assert "payment.execute" in payload["permissions"]["denied_tools"]
+    assert f"model_policy:{WORKER_DEFAULT_MODEL_POLICY_ID}" in payload["policies"]
+    assert f"default_model:{LOCAL_RUNTIME_MODEL_ID}" in payload["policies"]
 
 
 def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -12,6 +12,7 @@ from synarch_state_service.seeds import (
     LOCAL_RUNTIME_PROVIDER_ID,
     OPENROUTER_DEEPSEEK_V4_MODEL_ID,
     OPENROUTER_PROVIDER_ID,
+    WORKER_DEFAULT_MODEL_POLICY_ID,
     seed_repositories,
 )
 
@@ -37,6 +38,15 @@ def test_seed_repositories_creates_default_divisions_and_agents() -> None:
     assert repositories.model_definitions.exists(LOCAL_RUNTIME_MODEL_ID)
     assert repositories.model_providers.exists(OPENROUTER_PROVIDER_ID)
     assert repositories.model_definitions.exists(OPENROUTER_DEEPSEEK_V4_MODEL_ID)
+    assert repositories.model_policies.exists(WORKER_DEFAULT_MODEL_POLICY_ID)
+    assert all(
+        agent.model_policy_id == WORKER_DEFAULT_MODEL_POLICY_ID
+        for agent in repositories.agents.list_records()
+    )
+    worker_policy = repositories.model_policies.get(WORKER_DEFAULT_MODEL_POLICY_ID)
+    assert worker_policy is not None
+    assert worker_policy.default_model_id == LOCAL_RUNTIME_MODEL_ID
+    assert OPENROUTER_DEEPSEEK_V4_MODEL_ID in worker_policy.allowed_model_ids
     assert repositories.services.exists("connector-github")
     assert repositories.skills.exists("implementation")
 
@@ -71,3 +81,16 @@ def test_seed_repositories_is_idempotent() -> None:
     assert len(repositories.model_policies.list_records()) == len(DEFAULT_MODEL_POLICIES)
     assert len(repositories.services.list_records()) == len(DEFAULT_SERVICES)
     assert len(repositories.skills.list_records()) == len(DEFAULT_SKILLS)
+
+
+def test_seed_repositories_backfills_default_agent_model_policy() -> None:
+    repositories = StateRepositories.in_memory()
+    legacy_agent = DEFAULT_AGENTS[0].model_copy(update={"model_policy_id": None})
+    repositories.agents.create(legacy_agent.id, legacy_agent)
+
+    summary = seed_repositories(repositories)
+
+    assert summary.agents_created == len(DEFAULT_AGENTS) - 1
+    updated_agent = repositories.agents.get(legacy_agent.id)
+    assert updated_agent is not None
+    assert updated_agent.model_policy_id == WORKER_DEFAULT_MODEL_POLICY_ID
