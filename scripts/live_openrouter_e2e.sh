@@ -8,6 +8,7 @@ RUN_ID="${RUN_ID:-$(date +%s)}"
 
 PROJECT_ID="project_live_openrouter_${RUN_ID}"
 TASK_ID="task_live_openrouter_${RUN_ID}"
+FOLLOWUP_TASK_ID="task_live_openrouter_followup_${RUN_ID}"
 TRACE_ID="trace_live_openrouter_${RUN_ID}"
 MARKER="SYNARCH_LIVE_OK_${RUN_ID}"
 
@@ -22,6 +23,17 @@ post_json() {
   local url="$1"
   local payload="$2"
   curl -fsS -X POST "$url" \
+    -H "Content-Type: application/json" \
+    -H "X-Synarch-Actor-Type: user" \
+    -H "X-Synarch-Actor-Id: live-openrouter-e2e" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}" \
+    -d "$payload"
+}
+
+patch_json() {
+  local url="$1"
+  local payload="$2"
+  curl -fsS -X PATCH "$url" \
     -H "Content-Type: application/json" \
     -H "X-Synarch-Actor-Type: user" \
     -H "X-Synarch-Actor-Id: live-openrouter-e2e" \
@@ -181,11 +193,78 @@ printf "%s" "$memory_items" | jq -e \
     ([.[] | select(.status == "proposed")] | length >= 1)
   ' >/dev/null
 
+approved_candidate_memory_id="$(printf "%s" "$run_response" | jq -r '.memory_events[0].payload.memory_id')"
+if [ -z "$approved_candidate_memory_id" ] || [ "$approved_candidate_memory_id" = "null" ]; then
+  echo "Could not find proposed memory id in first run response" >&2
+  exit 1
+fi
+
+patch_json "${GATEWAY_URL}/memory-items/${approved_candidate_memory_id}/status" \
+  '{"status":"approved"}' >/dev/null
+
+followup_task_payload="$(
+  jq -n \
+    --arg id "$FOLLOWUP_TASK_ID" \
+    --arg project_id "$PROJECT_ID" \
+    --arg memory_id "$approved_candidate_memory_id" \
+    '{
+      id: $id,
+      project_id: $project_id,
+      title: "Verify approved memory is injected",
+      description: ("Return status completed after inspecting memory_context. Do not create child tasks. The approved memory id that must be present in memory_context is " + $memory_id + "."),
+      assigned_agent_id: "agent-ops-sourcing",
+      acceptance_criteria: [
+        "The approved memory candidate from the previous run is present in memory_context.",
+        "The task completes without creating child tasks."
+      ],
+      sequence: 2
+    }'
+)"
+
+post_json "${STATE_SERVICE_URL}/tasks" "$followup_task_payload" >/dev/null
+
+followup_run_response="$(
+  curl -fsS -X POST "${GATEWAY_URL}/tasks/${FOLLOWUP_TASK_ID}/run" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}"
+)"
+
+printf "%s" "$followup_run_response" | jq -e \
+  --arg task_id "$FOLLOWUP_TASK_ID" \
+  --arg memory_id "$approved_candidate_memory_id" \
+  '
+    (.task.id == $task_id) and
+    (.task.status == "completed") and
+    (.agent_result.status == "completed") and
+    (.memory_context.items | type == "array") and
+    (any(.memory_context.items[]; .id == $memory_id)) and
+    (.cost_records[0].provider_id == "provider-openrouter") and
+    (.cost_records[0].model_id == "deepseek/deepseek-v4-flash") and
+    (.cost_records[0].input_tokens > 0) and
+    (.cost_records[0].output_tokens > 0)
+  ' >/dev/null
+
+timeline_after_memory_review="$(
+  curl -fsS "${GATEWAY_URL}/projects/${PROJECT_ID}/timeline"
+)"
+
+printf "%s" "$timeline_after_memory_review" | jq -e \
+  --arg trace_id "$TRACE_ID" \
+  --arg memory_id "$approved_candidate_memory_id" \
+  --arg followup_task_id "$FOLLOWUP_TASK_ID" \
+  '
+    ([.events[] | select(.trace_id == $trace_id and .type == "memory.status_updated" and .payload.memory_id == $memory_id and .payload.status == "approved")] | length == 1) and
+    ([.tasks[] | select(.id == $followup_task_id and .status == "completed")] | length == 1) and
+    ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .model_id == "deepseek/deepseek-v4-flash" and .input_tokens > 0 and .output_tokens > 0)] | length >= 2)
+  ' >/dev/null
+
 printf "%s" "$run_response" | jq \
   --arg project_id "$PROJECT_ID" \
   --arg task_id "$TASK_ID" \
+  --arg followup_task_id "$FOLLOWUP_TASK_ID" \
   --arg trace_id "$TRACE_ID" \
   --arg marker "$MARKER" \
+  --arg approved_memory_id "$approved_candidate_memory_id" \
+  --argjson followup_run "$followup_run_response" \
   --arg stop_reason "$(printf "%s" "$batch_response" | jq -r '.stop_reason')" \
   --arg scheduler_event_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_event.id')" \
   --arg scheduler_audit_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_audit_log.id')" \
@@ -193,13 +272,18 @@ printf "%s" "$run_response" | jq \
     passed: true,
     project_id: $project_id,
     task_id: $task_id,
+    followup_task_id: $followup_task_id,
     trace_id: $trace_id,
     marker: $marker,
+    approved_memory_id: $approved_memory_id,
     batch_stop_reason: $stop_reason,
     scheduler_event_id: $scheduler_event_id,
     scheduler_audit_id: $scheduler_audit_id,
     task_status: .task.status,
     agent_status: .agent_result.status,
+    followup_task_status: $followup_run.task.status,
+    followup_agent_status: $followup_run.agent_result.status,
+    followup_memory_context_items: ($followup_run.memory_context.items | length),
     memory_context_items: (.memory_context.items | length),
     memory_candidates: (.agent_result.memory_candidates | length),
     memory_events: (.memory_events | length),

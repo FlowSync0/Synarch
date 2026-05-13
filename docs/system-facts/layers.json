@@ -81,10 +81,12 @@
       "Scoped context assembly",
       "Deterministic ranking and token budget enforcement",
       "Gateway persists agent memory candidates as proposed and emits memory.candidate_created",
-      "Proposed and rejected memories are excluded from context assembly"
+      "Proposed and rejected memories are excluded from context assembly",
+      "Gateway and dashboard can approve or reject memory candidates",
+      "Live OpenRouter E2E verifies approved memory appears in the next task context"
     ],
-    "main_gap": "No human review UI, compaction, vector search, graph retrieval, or hierarchical context database.",
-    "next_validation": "Approve a proposed memory candidate and verify it appears in the next task context.",
+    "main_gap": "No compaction, vector search, graph retrieval, or hierarchical context database.",
+    "next_validation": "Reject a bad memory candidate and verify it stays out of future task context.",
     "source": "docs/roadmap.md"
   },
   {

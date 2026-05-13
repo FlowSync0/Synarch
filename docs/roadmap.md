@@ -45,7 +45,7 @@ through the dashboard.
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry recovery, retry backoff, dead-letter review metadata, task review decisions, task result recording, bounded ready-batch execution, scheduler tick event/audit records, opt-in scheduler worker, and timeline events exist. | No durable worker queue or human review UI for dead-lettered tasks yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
-| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, and proposed memory candidates exist. | No human review UI, compaction, vector search, graph retrieval, or hierarchical context database. | Approve a proposed memory candidate and verify it appears in the next task context. |
+| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, deterministic ranking, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, and live approved-memory reuse validation exist. | No compaction, vector search, graph retrieval, or hierarchical context database. | Reject a bad memory candidate and verify it stays out of future task context. |
 | G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, `event.emit`/`web.fetch` adapters, task-scoped credential gates, service health checks, and durable connector job lifecycle records exist. | No sandbox execution or active cron/webhook runner yet. | Denied tool call fails before execution and records audit/event. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
@@ -346,6 +346,10 @@ Progress:
 - Done: memory items persist in PostgreSQL when `DATABASE_URL` is configured.
 - Done: gateway persists agent `memory_candidates` as project-scoped `proposed` memory and emits
   `memory.candidate_created`; proposed/rejected memories are excluded from context assembly.
+- Done: proposed memory candidates can be approved or rejected through the gateway and dashboard;
+  approval emits `memory.status_updated`.
+- Done: live OpenRouter E2E approves a proposed candidate and verifies it appears in the next
+  task's `memory_context`.
 - Done: system layer-status facts can be seeded into global memory for self-inspection tests.
 
 Do not include yet:
