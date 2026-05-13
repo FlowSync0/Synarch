@@ -429,6 +429,8 @@ def related_memory_ids(item: MemoryItem) -> list[str]:
 def is_visible(item: MemoryItem, request: MemoryContext) -> bool:
     if item.status != MemoryStatus.approved:
         return False
+    if item.metadata.get("kind") == "memory_relation_proposal":
+        return False
     allowed_scopes = set(request.allowed_scopes) or default_allowed_scopes(request)
     if item.scope not in allowed_scopes:
         return False

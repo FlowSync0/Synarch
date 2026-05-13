@@ -20,6 +20,7 @@ from synarch_models import (
     MemoryContext,
     MemoryEmbeddingBackfillRequest,
     MemoryItem,
+    MemoryRelationProposalRequest,
     MemoryStatus,
     ModelUsage,
     ProjectComplexityAssessment,
@@ -73,6 +74,17 @@ def test_memory_embedding_backfill_request_defaults() -> None:
     assert request.project_id == "project_demo"
     assert request.status == "approved"
     assert request.max_items == 10
+
+
+def test_memory_relation_proposal_request_requires_related_ids() -> None:
+    request = MemoryRelationProposalRequest(
+        source_memory_id="memory-source",
+        related_memory_ids=["memory-related"],
+        reason="The related memory gives source context.",
+    )
+
+    assert request.source_memory_id == "memory-source"
+    assert request.related_memory_ids == ["memory-related"]
 
 
 def test_memory_context_can_carry_query_embedding() -> None:

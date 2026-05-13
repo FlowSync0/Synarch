@@ -244,6 +244,10 @@ memory-service still rejects project memory whose project ID is not explicitly a
 Minimal graph retrieval uses `MemoryItem.metadata.related_memory_ids`. Memory-service expands those
 links after a selected memory, bounded by `MemoryContext.max_related_items`, and still applies the
 same visibility and token-budget checks to every related item.
+Gateway relation proposals create `proposed` memory items with `metadata.kind` set to
+`memory_relation_proposal`. Applying a proposal requires it to be approved first, then Gateway merges
+the approved related IDs into the source memory and emits `memory.relation_applied`. Relation
+proposal memory items are excluded from runtime context assembly even after approval.
 
 Run the bridge/graph isolation check with:
 

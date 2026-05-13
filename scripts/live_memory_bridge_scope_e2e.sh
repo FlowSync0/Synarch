@@ -134,25 +134,78 @@ task_payload="$(
 )"
 post_state tasks "$task_payload"
 
-target_memory_payload="$(
-  jq -n \
-    --arg id "memory_bridge_target_${RUN_ID}" \
-    --arg project_id "$TARGET_PROJECT_ID" \
-    --arg source_memory_id "memory_bridge_source_${RUN_ID}" \
-    --arg other_memory_id "memory_bridge_other_${RUN_ID}" \
-    '{
-      id: $id,
-      scope: ("project:" + $project_id),
-      project_id: $project_id,
-      status: "approved",
-      content: "Target project memory with graph relation.",
-      metadata: {related_memory_ids: [$source_memory_id, $other_memory_id]}
-    }'
-)"
-post_memory "$target_memory_payload"
+post_memory "$(memory_payload "memory_bridge_target_${RUN_ID}" "$TARGET_PROJECT_ID" "Target project memory.")"
 post_memory "$(memory_payload "memory_bridge_unrelated_${RUN_ID}" "$TARGET_PROJECT_ID" "Unrelated target project memory.")"
 post_memory "$(memory_payload "memory_bridge_source_${RUN_ID}" "$SOURCE_PROJECT_ID" "Bridged source project memory.")"
 post_memory "$(memory_payload "memory_bridge_other_${RUN_ID}" "$OTHER_PROJECT_ID" "Unbridged other project memory.")"
+
+relation_payload="$(
+  jq -n \
+    --arg source_memory_id "memory_bridge_target_${RUN_ID}" \
+    --arg related_memory_id "memory_bridge_source_${RUN_ID}" \
+    '{
+      source_memory_id: $source_memory_id,
+      related_memory_ids: [$related_memory_id],
+      reason: "The bridged source memory explains the target memory."
+    }'
+)"
+relation_response="$(
+  curl -fsS -X POST "${GATEWAY_URL}/memory-items/relation-proposals" \
+    -H "Content-Type: application/json" \
+    -H "X-Synarch-Actor-Type: user" \
+    -H "X-Synarch-Actor-Id: live-memory-bridge-e2e" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}" \
+    -d "$relation_payload"
+)"
+relation_proposal_id="$(printf "%s" "$relation_response" | jq -r '.proposal_memory.id')"
+
+rejected_relation_payload="$(
+  jq -n \
+    --arg source_memory_id "memory_bridge_target_${RUN_ID}" \
+    --arg related_memory_id "memory_bridge_other_${RUN_ID}" \
+    '{
+      source_memory_id: $source_memory_id,
+      related_memory_ids: [$related_memory_id],
+      reason: "This should fail because the other project is not bridged."
+    }'
+)"
+rejected_status="$(
+  curl -sS -o /tmp/synarch-rejected-relation.json -w "%{http_code}" \
+    -X POST "${GATEWAY_URL}/memory-items/relation-proposals" \
+    -H "Content-Type: application/json" \
+    -H "X-Synarch-Actor-Type: user" \
+    -H "X-Synarch-Actor-Id: live-memory-bridge-e2e" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}" \
+    -d "$rejected_relation_payload"
+)"
+if [ "$rejected_status" != "400" ]; then
+  cat /tmp/synarch-rejected-relation.json >&2
+  exit 1
+fi
+
+curl -fsS -X PATCH "${GATEWAY_URL}/memory-items/${relation_proposal_id}/status" \
+  -H "Content-Type: application/json" \
+  -H "X-Synarch-Actor-Type: user" \
+  -H "X-Synarch-Actor-Id: live-memory-bridge-e2e" \
+  -H "X-Synarch-Trace-Id: ${TRACE_ID}" \
+  -d '{"status":"approved"}' >/dev/null
+
+apply_response="$(
+  curl -fsS -X POST "${GATEWAY_URL}/memory-items/relation-proposals/${relation_proposal_id}/apply" \
+    -H "X-Synarch-Actor-Type: user" \
+    -H "X-Synarch-Actor-Id: live-memory-bridge-e2e" \
+    -H "X-Synarch-Trace-Id: ${TRACE_ID}"
+)"
+
+printf "%s" "$apply_response" | jq -e \
+  --arg source_memory_id "memory_bridge_target_${RUN_ID}" \
+  --arg related_memory_id "memory_bridge_source_${RUN_ID}" \
+  '
+    .source_memory.id == $source_memory_id and
+    (.source_memory.metadata.related_memory_ids == [$related_memory_id]) and
+    (.applied_related_memory_ids == [$related_memory_id]) and
+    (.event.type == "memory.relation_applied")
+  ' >/dev/null
 
 run_response="$(
   curl -fsS -X POST "${GATEWAY_URL}/tasks/run-ready?project_id=${TARGET_PROJECT_ID}&max_tasks=1" \
@@ -167,6 +220,7 @@ printf "%s" "$run_response" | jq -e \
   --arg source_memory_id "memory_bridge_source_${RUN_ID}" \
   --arg unrelated_memory_id "memory_bridge_unrelated_${RUN_ID}" \
   --arg other_memory_id "memory_bridge_other_${RUN_ID}" \
+  --arg relation_proposal_id "$relation_proposal_id" \
   '
     (.runs | length == 1) and
     (.runs[0].task.id == $task_id) and
@@ -176,6 +230,7 @@ printf "%s" "$run_response" | jq -e \
     ([.runs[0].memory_context.items[].id] | index($source_memory_id) == (index($target_memory_id) + 1)) and
     ([.runs[0].memory_context.items[].id] | index($unrelated_memory_id) > index($source_memory_id)) and
     ([.runs[0].memory_context.items[].id] | index($other_memory_id) == null) and
+    ([.runs[0].memory_context.items[].id] | index($relation_proposal_id) == null) and
     (.runs[0].memory_context.summary | contains("1 graph-related items")) and
     (.runs[0].model_call_events[0].payload.memory_allowed_project_ids == [$target_project_id, $source_project_id]) and
     (.runs[0].model_call_events[0].payload.memory_max_related_items == 3)

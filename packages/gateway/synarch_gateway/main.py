@@ -52,6 +52,9 @@ from synarch_models import (
     MemoryEmbeddingBackfillRequest,
     MemoryEmbeddingBackfillResult,
     MemoryItem,
+    MemoryRelationApplicationResult,
+    MemoryRelationProposalRequest,
+    MemoryRelationProposalResult,
     MemoryStatus,
     MemoryStatusUpdate,
     ProjectIntent,
@@ -2470,6 +2473,304 @@ def memory_embedding_backfilled_event(
         },
         trace_id=trace_id,
     )
+
+
+@app.post(
+    "/memory-items/relation-proposals",
+    response_model=MemoryRelationProposalResult,
+    status_code=201,
+)
+def propose_memory_relation(
+    relation_request: MemoryRelationProposalRequest,
+    request: Request,
+    memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
+) -> MemoryRelationProposalResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = memory_reviewer_headers(request, trace_id)
+    try:
+        memory_items = memory_items_by_id(memory_client)
+        source_memory = required_memory_item(
+            memory_items,
+            relation_request.source_memory_id,
+            label="Source memory",
+        )
+        related_memories = [
+            required_memory_item(memory_items, memory_id, label="Related memory")
+            for memory_id in deduplicate_strings(relation_request.related_memory_ids)
+        ]
+        validate_memory_relation(source_memory, related_memories, state_client)
+        related_memory_ids = [memory.id for memory in related_memories]
+        proposal_memory = memory_client.create_memory_item(
+            MemoryItem(
+                scope=source_memory.scope,
+                content=memory_relation_proposal_content(
+                    source_memory.id,
+                    related_memory_ids,
+                    relation_request.reason,
+                ),
+                status=MemoryStatus.proposed,
+                agent_id=source_memory.agent_id,
+                project_id=source_memory.project_id,
+                metadata={
+                    "kind": "memory_relation_proposal",
+                    "source_memory_id": source_memory.id,
+                    "related_memory_ids": related_memory_ids,
+                    "reason": relation_request.reason,
+                },
+            )
+        )
+        event = state_client.create_event(
+            memory_relation_proposed_event(proposal_memory, trace_id),
+            headers=headers,
+        )
+        return MemoryRelationProposalResult(
+            proposal_memory=proposal_memory,
+            event=event,
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory relation proposal dependency unavailable",
+        ) from error
+
+
+@app.post(
+    "/memory-items/relation-proposals/{proposal_id}/apply",
+    response_model=MemoryRelationApplicationResult,
+)
+def apply_memory_relation_proposal(
+    proposal_id: str,
+    request: Request,
+    memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
+) -> MemoryRelationApplicationResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = memory_reviewer_headers(request, trace_id)
+    try:
+        memory_items = memory_items_by_id(memory_client)
+        proposal_memory = required_memory_item(
+            memory_items,
+            proposal_id,
+            label="Relation proposal",
+        )
+        validate_memory_relation_proposal(proposal_memory)
+        source_memory = required_memory_item(
+            memory_items,
+            str(proposal_memory.metadata["source_memory_id"]),
+            label="Source memory",
+        )
+        related_memories = [
+            required_memory_item(memory_items, memory_id, label="Related memory")
+            for memory_id in relation_proposal_related_memory_ids(proposal_memory)
+        ]
+        validate_memory_relation(source_memory, related_memories, state_client)
+        related_memory_ids = [memory.id for memory in related_memories]
+        updated_source_memory = memory_client.create_memory_item(
+            source_memory.model_copy(
+                update={
+                    "metadata": source_memory_metadata_with_relations(
+                        source_memory,
+                        related_memory_ids,
+                    )
+                }
+            )
+        )
+        updated_proposal_memory = memory_client.create_memory_item(
+            proposal_memory.model_copy(
+                update={
+                    "metadata": {
+                        **proposal_memory.metadata,
+                        "applied": True,
+                        "applied_related_memory_ids": related_memory_ids,
+                    }
+                }
+            )
+        )
+        event = state_client.create_event(
+            memory_relation_applied_event(
+                updated_proposal_memory,
+                updated_source_memory,
+                related_memory_ids,
+                trace_id,
+            ),
+            headers=headers,
+        )
+        return MemoryRelationApplicationResult(
+            proposal_memory=updated_proposal_memory,
+            source_memory=updated_source_memory,
+            applied_related_memory_ids=related_memory_ids,
+            event=event,
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory relation application dependency unavailable",
+        ) from error
+
+
+def memory_items_by_id(memory_client: MemoryClient) -> dict[str, MemoryItem]:
+    return {item.id: item for item in memory_client.list_memory_items()}
+
+
+def required_memory_item(
+    memory_items: dict[str, MemoryItem],
+    memory_id: str,
+    *,
+    label: str,
+) -> MemoryItem:
+    item = memory_items.get(memory_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"{label} not found")
+    return item
+
+
+def validate_memory_relation(
+    source_memory: MemoryItem,
+    related_memories: list[MemoryItem],
+    state_client: StateClient,
+) -> None:
+    if source_memory.status != MemoryStatus.approved:
+        raise HTTPException(status_code=400, detail="Source memory must be approved")
+    allowed_project_ids = memory_relation_allowed_project_ids(source_memory, state_client)
+    for related_memory in related_memories:
+        if related_memory.status != MemoryStatus.approved:
+            raise HTTPException(status_code=400, detail="Related memory must be approved")
+        if related_memory.id == source_memory.id:
+            raise HTTPException(status_code=400, detail="Memory cannot relate to itself")
+        if (
+            related_memory.project_id is not None
+            and related_memory.project_id not in allowed_project_ids
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Related memory project is not authorized by an active bridge",
+            )
+
+
+def memory_relation_allowed_project_ids(
+    source_memory: MemoryItem,
+    state_client: StateClient,
+) -> set[str]:
+    if source_memory.project_id is None:
+        return set()
+    project_ids = {source_memory.project_id}
+    for workspace in state_client.list_project_workspaces(
+        project_id=source_memory.project_id,
+        active=True,
+    ):
+        project_ids.update(workspace.bridge_project_ids)
+    return project_ids
+
+
+def validate_memory_relation_proposal(proposal_memory: MemoryItem) -> None:
+    if proposal_memory.metadata.get("kind") != "memory_relation_proposal":
+        raise HTTPException(status_code=400, detail="Memory item is not a relation proposal")
+    if proposal_memory.status != MemoryStatus.approved:
+        raise HTTPException(status_code=409, detail="Relation proposal must be approved first")
+    if not isinstance(proposal_memory.metadata.get("source_memory_id"), str):
+        raise HTTPException(status_code=400, detail="Relation proposal missing source memory")
+    if not relation_proposal_related_memory_ids(proposal_memory):
+        raise HTTPException(status_code=400, detail="Relation proposal missing related memories")
+
+
+def relation_proposal_related_memory_ids(proposal_memory: MemoryItem) -> list[str]:
+    value = proposal_memory.metadata.get("related_memory_ids", [])
+    if not isinstance(value, list):
+        return []
+    return [
+        memory_id
+        for memory_id in value
+        if isinstance(memory_id, str) and memory_id
+    ]
+
+
+def source_memory_metadata_with_relations(
+    source_memory: MemoryItem,
+    related_memory_ids: list[str],
+) -> dict[str, object]:
+    return {
+        **source_memory.metadata,
+        "related_memory_ids": deduplicate_strings(
+            [
+                *relation_metadata_memory_ids(source_memory),
+                *related_memory_ids,
+            ]
+        ),
+    }
+
+
+def relation_metadata_memory_ids(memory_item: MemoryItem) -> list[str]:
+    value = memory_item.metadata.get("related_memory_ids")
+    if not isinstance(value, list):
+        return []
+    return [memory_id for memory_id in value if isinstance(memory_id, str) and memory_id]
+
+
+def memory_relation_proposal_content(
+    source_memory_id: str,
+    related_memory_ids: list[str],
+    reason: str,
+) -> str:
+    related_ids = ", ".join(related_memory_ids)
+    return (
+        f"Proposed memory relation from {source_memory_id} to {related_ids}. "
+        f"Reason: {reason}"
+    )
+
+
+def memory_relation_proposed_event(
+    proposal_memory: MemoryItem,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.memory_relation_proposed,
+        target=proposal_memory.project_id or proposal_memory.scope,
+        payload={
+            "proposal_memory_id": proposal_memory.id,
+            "source_memory_id": proposal_memory.metadata.get("source_memory_id"),
+            "related_memory_ids": relation_proposal_related_memory_ids(proposal_memory),
+            "project_id": proposal_memory.project_id,
+            "agent_id": proposal_memory.agent_id,
+            "status": proposal_memory.status,
+        },
+        trace_id=trace_id,
+    )
+
+
+def memory_relation_applied_event(
+    proposal_memory: MemoryItem,
+    source_memory: MemoryItem,
+    related_memory_ids: list[str],
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.memory_relation_applied,
+        target=source_memory.project_id or source_memory.scope,
+        payload={
+            "proposal_memory_id": proposal_memory.id,
+            "source_memory_id": source_memory.id,
+            "related_memory_ids": related_memory_ids,
+            "project_id": source_memory.project_id,
+            "agent_id": source_memory.agent_id,
+        },
+        trace_id=trace_id,
+    )
+
+
+def deduplicate_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 @app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)

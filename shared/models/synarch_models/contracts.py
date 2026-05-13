@@ -478,6 +478,24 @@ class MemoryEmbeddingBackfillResult(SynarchModel):
     memory_ids: list[str] = Field(default_factory=list)
 
 
+class MemoryRelationProposalRequest(SynarchModel):
+    source_memory_id: str = Field(min_length=1)
+    related_memory_ids: list[str] = Field(min_length=1, max_length=20)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class MemoryRelationProposalResult(SynarchModel):
+    proposal_memory: MemoryItem
+    event: EventRecord
+
+
+class MemoryRelationApplicationResult(SynarchModel):
+    proposal_memory: MemoryItem
+    source_memory: MemoryItem
+    applied_related_memory_ids: list[str] = Field(default_factory=list)
+    event: EventRecord
+
+
 class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None

@@ -4085,6 +4085,211 @@ def test_backfill_memory_embeddings_requires_configured_provider() -> None:
     assert state_client.events == []
 
 
+def test_propose_memory_relation_creates_reviewable_memory_and_event() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    state_client.workspaces.append(
+        ProjectWorkspace(
+            id="workspace-target",
+            project_id="project_target",
+            name="Target workspace",
+            memory_scope="project:project_target",
+            bridge_project_ids=["project_source"],
+            active=True,
+        )
+    )
+    memory_client.items_by_id["memory-source"] = MemoryItem(
+        id="memory-source",
+        scope="project:project_target",
+        content="Source memory.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+    )
+    memory_client.items_by_id["memory-related"] = MemoryItem(
+        id="memory-related",
+        scope="project:project_source",
+        content="Related source memory.",
+        status=MemoryStatus.approved,
+        project_id="project_source",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/relation-proposals",
+            json={
+                "source_memory_id": "memory-source",
+                "related_memory_ids": ["memory-related"],
+                "reason": "The related memory explains the source memory.",
+            },
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_memory_relation_proposal",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    proposal = payload["proposal_memory"]
+    assert proposal["status"] == "proposed"
+    assert proposal["project_id"] == "project_target"
+    assert proposal["metadata"] == {
+        "kind": "memory_relation_proposal",
+        "source_memory_id": "memory-source",
+        "related_memory_ids": ["memory-related"],
+        "reason": "The related memory explains the source memory.",
+    }
+    assert payload["event"]["type"] == "memory.relation_proposed"
+    assert payload["event"]["payload"]["source_memory_id"] == "memory-source"
+    assert [event.type for event in state_client.events] == [
+        EventType.memory_relation_proposed
+    ]
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "hugo"
+
+
+def test_propose_memory_relation_rejects_unbridged_project() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source"] = MemoryItem(
+        id="memory-source",
+        scope="project:project_target",
+        content="Source memory.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+    )
+    memory_client.items_by_id["memory-related"] = MemoryItem(
+        id="memory-related",
+        scope="project:project_other",
+        content="Unbridged memory.",
+        status=MemoryStatus.approved,
+        project_id="project_other",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/relation-proposals",
+            json={
+                "source_memory_id": "memory-source",
+                "related_memory_ids": ["memory-related"],
+                "reason": "This project is not bridged.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Related memory project is not authorized by an active bridge"
+    )
+    assert state_client.events == []
+
+
+def test_apply_memory_relation_proposal_updates_source_metadata_and_records_event() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source"] = MemoryItem(
+        id="memory-source",
+        scope="project:project_target",
+        content="Source memory.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+        metadata={"related_memory_ids": ["memory-existing"]},
+    )
+    memory_client.items_by_id["memory-existing"] = MemoryItem(
+        id="memory-existing",
+        scope="project:project_target",
+        content="Existing related memory.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+    )
+    memory_client.items_by_id["memory-related"] = MemoryItem(
+        id="memory-related",
+        scope="project:project_target",
+        content="New related memory.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+    )
+    memory_client.items_by_id["memory-proposal"] = MemoryItem(
+        id="memory-proposal",
+        scope="project:project_target",
+        content="Proposal.",
+        status=MemoryStatus.approved,
+        project_id="project_target",
+        metadata={
+            "kind": "memory_relation_proposal",
+            "source_memory_id": "memory-source",
+            "related_memory_ids": ["memory-related", "memory-existing"],
+            "reason": "Link source to related memories.",
+        },
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/relation-proposals/memory-proposal/apply",
+            headers={"X-Synarch-Trace-Id": "trace_memory_relation_apply"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["source_memory"]["metadata"]["related_memory_ids"] == [
+        "memory-existing",
+        "memory-related",
+    ]
+    assert payload["proposal_memory"]["metadata"]["applied"] is True
+    assert payload["applied_related_memory_ids"] == [
+        "memory-related",
+        "memory-existing",
+    ]
+    assert payload["event"]["type"] == "memory.relation_applied"
+    assert memory_client.items_by_id["memory-source"].metadata["related_memory_ids"] == [
+        "memory-existing",
+        "memory-related",
+    ]
+    assert [event.type for event in state_client.events] == [
+        EventType.memory_relation_applied
+    ]
+
+
+def test_apply_memory_relation_proposal_requires_approval() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-proposal"] = MemoryItem(
+        id="memory-proposal",
+        scope="project:project_target",
+        content="Proposal.",
+        status=MemoryStatus.proposed,
+        project_id="project_target",
+        metadata={
+            "kind": "memory_relation_proposal",
+            "source_memory_id": "memory-source",
+            "related_memory_ids": ["memory-related"],
+        },
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/relation-proposals/memory-proposal/apply"
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Relation proposal must be approved first"
+    assert state_client.events == []
+
+
 def test_operational_records_are_listed_through_gateway() -> None:
     state_client = FakeStateClient()
     state_client.events.extend(

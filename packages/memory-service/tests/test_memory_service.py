@@ -223,6 +223,18 @@ def test_context_assembly_expands_related_memory_inside_visibility_rules() -> No
             "project_id": "project_hidden",
             "content": "Hidden project memory must not leak through graph links.",
         },
+        {
+            "id": "memory-relation-proposal",
+            "scope": "project:project_target",
+            "project_id": "project_target",
+            "status": "approved",
+            "content": "Relation proposals are governance records, not runtime memory.",
+            "metadata": {
+                "kind": "memory_relation_proposal",
+                "source_memory_id": "memory-seed",
+                "related_memory_ids": ["memory-related"],
+            },
+        },
     ]:
         response = client.post("/memory-items", json=item)
         assert response.status_code == 201

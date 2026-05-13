@@ -108,10 +108,11 @@
     "scripts/live_memory_embedding_backfill_e2e.sh verifies real OpenRouter embedding backfill, 1536D storage, and event traceability",
     "Task runs derive bridged project memory from active workspace bridge_project_ids and pass explicit allowed_project_ids to memory-service",
     "Memory-service expands bounded metadata.related_memory_ids only when related memories are already visible through the same scopes and project bridges",
-    "scripts/live_memory_bridge_scope_e2e.sh verifies target memory and explicitly bridged graph-related source memory are visible while unbridged project memory remains isolated"
+    "Gateway creates reviewable memory_relation_proposal memory items, applies approved proposals to source metadata.related_memory_ids, and keeps proposal records out of runtime context assembly",
+    "scripts/live_memory_bridge_scope_e2e.sh verifies relation proposal, approval, application, target memory, and explicitly bridged graph-related source memory while unbridged project memory remains isolated"
   ],
-  "main_gap": "No memory relation authoring workflow or hierarchical context database yet.",
-  "next_validation": "Add a safe relation-authoring path for proposed memory links.",
+  "main_gap": "No hierarchical context database or relation-proposal dashboard controls yet.",
+  "next_validation": "Add dashboard controls for reviewing and applying memory relation proposals.",
     "source": "docs/roadmap.md"
   },
   {
