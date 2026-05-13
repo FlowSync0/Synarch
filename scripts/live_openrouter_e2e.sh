@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -f .env ]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8000}"
 STATE_SERVICE_URL="${STATE_SERVICE_URL:-http://localhost:8020}"
 MEMORY_SERVICE_URL="${MEMORY_SERVICE_URL:-http://localhost:8030}"
+MODEL_GATEWAY_URL="${MODEL_GATEWAY_URL:-http://localhost:8060}"
+AGENT_RUNTIME_URL="${AGENT_RUNTIME_URL:-http://localhost:8050}"
+TASK_RUNNER_MODEL_ID="${TASK_RUNNER_MODEL_ID:-deepseek/deepseek-v4-flash}"
+OPENROUTER_MODEL_ID="${OPENROUTER_MODEL_ID:-$TASK_RUNNER_MODEL_ID}"
 RUN_ID="${RUN_ID:-$(date +%s)}"
 
 PROJECT_ID="project_live_openrouter_${RUN_ID}"
@@ -49,19 +59,50 @@ patch_json() {
     -d "$payload"
 }
 
+wait_for_health() {
+  local url="$1"
+  for _ in $(seq 1 30); do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  curl -fsS "$url" >/dev/null
+}
+
 require_command curl
 require_command jq
+require_command docker
 
-curl -fsS "${GATEWAY_URL}/healthz" >/dev/null
-curl -fsS "${STATE_SERVICE_URL}/healthz" >/dev/null
-curl -fsS "${MEMORY_SERVICE_URL}/healthz" >/dev/null
+if [ -z "${OPENROUTER_API_KEY:-}" ]; then
+  echo "OPENROUTER_API_KEY is required for the live OpenRouter E2E." >&2
+  exit 1
+fi
 
-if command -v docker >/dev/null 2>&1; then
-  runtime_env="$(docker compose exec -T agent-runtime sh -lc 'printf "%s:%s" "$AGENT_RUNTIME_MODE" "$([ -n "$OPENROUTER_API_KEY" ] && echo present || echo missing)"' 2>/dev/null || true)"
-  if [ -n "$runtime_env" ] && [ "$runtime_env" != "openrouter:present" ]; then
-    echo "agent-runtime is not ready for live OpenRouter tests: ${runtime_env}" >&2
-    exit 1
-  fi
+export AGENT_RUNTIME_MODE=model_gateway
+export MODEL_GATEWAY_MODE=openrouter
+export OPENROUTER_MODEL_ID
+export TASK_RUNNER_PROVIDER_ID=provider-openrouter
+export TASK_RUNNER_MODEL_ID
+export OPENROUTER_API_KEY
+
+docker compose up -d --build model-gateway agent-runtime gateway >/dev/null
+
+wait_for_health "${GATEWAY_URL}/healthz"
+wait_for_health "${STATE_SERVICE_URL}/healthz"
+wait_for_health "${MEMORY_SERVICE_URL}/healthz"
+wait_for_health "${MODEL_GATEWAY_URL}/healthz"
+wait_for_health "${AGENT_RUNTIME_URL}/healthz"
+
+runtime_env="$(docker compose exec -T agent-runtime sh -lc 'printf "%s" "$AGENT_RUNTIME_MODE"' 2>/dev/null || true)"
+model_gateway_env="$(docker compose exec -T model-gateway sh -lc 'printf "%s:%s" "$MODEL_GATEWAY_MODE" "$([ -n "$OPENROUTER_API_KEY" ] && echo present || echo missing)"' 2>/dev/null || true)"
+if [ "$runtime_env" != "model_gateway" ]; then
+  echo "agent-runtime is not ready for model-gateway live tests: ${runtime_env}" >&2
+  exit 1
+fi
+if [ "$model_gateway_env" != "openrouter:present" ]; then
+  echo "model-gateway is not ready for live OpenRouter tests: ${model_gateway_env}" >&2
+  exit 1
 fi
 
 project_payload="$(
@@ -153,6 +194,7 @@ printf "%s" "$run_response" | jq -e \
     (.task.project_id == $project_id) and
     (.task.status == "completed") and
     (.agent_result.status == "completed") and
+    (.agent_result.events_emitted[0].payload.mode == "model-gateway") and
     (.agent_result.summary | type == "string" and contains($marker)) and
     (.agent_result.actions_taken | type == "array" and length > 0) and
     (.agent_result.sub_tasks_created | type == "array" and length >= 2) and
@@ -265,6 +307,7 @@ printf "%s" "$followup_run_response" | jq -e \
     (.task.id == $task_id) and
     (.task.status == "completed") and
     (.agent_result.status == "completed") and
+    (.agent_result.events_emitted[0].payload.mode == "model-gateway") and
     (.memory_context.items | type == "array") and
     (any(.memory_context.items[]; .id == $memory_id)) and
     (all(.memory_context.items[]; .id != $rejected_memory_id)) and
@@ -502,6 +545,7 @@ printf "%s" "$compaction_run_response" | jq -e \
     (.task.id == $task_id) and
     (.task.status == "completed") and
     (.agent_result.status == "completed") and
+    (.agent_result.events_emitted[0].payload.mode == "model-gateway") and
     (.memory_context.items | type == "array") and
     (any(.memory_context.items[]; .id == $compacted_memory_id and (.content | contains("Source memory ids: " + $source_a + ", " + $source_b)))) and
     (all(.memory_context.items[]; .id != $source_a and .id != $source_b)) and

@@ -98,17 +98,17 @@ Run the paid live OpenRouter/DeepSeek slice with:
 make test-live-openrouter
 ```
 
-This creates a real project/task, calls DeepSeek through `agent-runtime`, persists the result through
-the gateway, and asserts the timeline contains child tasks, task events, a scheduler tick, scheduler
-audit, no skipped task claims, no lease recoveries, and a cost record. It also seeds a project memory,
-requires the model to read it, persists a proposed memory candidate, approves that candidate through
-the gateway, runs a follow-up task, and verifies the approved candidate appears in the next task
-context. The same run also rejects a separate proposed memory item and verifies it stays out of the
-follow-up task context. It also creates oversized approved source memories, runs the gateway
-`compact-if-needed` threshold policy, approves the compacted item, runs a real DeepSeek task, and
-verifies the task context contains the compacted source-ID summary while excluding the oversized
-source memories. It is not part of `make verify` because it depends on external provider
-availability and consumes real tokens.
+This creates a real project/task, calls DeepSeek through `agent-runtime` -> `model-gateway`, persists
+the result through the gateway, and asserts the timeline contains child tasks, task events, a
+scheduler tick, scheduler audit, no skipped task claims, no lease recoveries, and a cost record. It
+also seeds a project memory, requires the model to read it, persists a proposed memory candidate,
+approves that candidate through the gateway, runs a follow-up task, and verifies the approved
+candidate appears in the next task context. The same run also rejects a separate proposed memory item
+and verifies it stays out of the follow-up task context. It also creates oversized approved source
+memories, runs the gateway `compact-if-needed` threshold policy, approves the compacted item, runs a
+real DeepSeek task, and verifies the task context contains the compacted source-ID summary while
+excluding the oversized source memories. It is not part of `make verify` because it depends on
+external provider availability and consumes real tokens.
 
 Run the paid live model-gateway/DeepSeek slice with:
 

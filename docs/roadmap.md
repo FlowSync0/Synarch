@@ -429,8 +429,9 @@ Progress:
   assertions.
 - Done: model-gateway can resolve `model_policy_id` through state-service, choose the default model,
   and reject model IDs outside the policy before calling the provider.
-- Next: move the default live OpenRouter task scripts onto model-gateway and add policy-aware
-  provider selection in Gateway configuration.
+- Done: the default paid live OpenRouter task scripts now run DeepSeek through
+  `agent-runtime` -> `model-gateway` instead of the interim direct runtime adapter.
+- Next: add policy-aware provider selection in Gateway configuration.
 
 Definition of done:
 

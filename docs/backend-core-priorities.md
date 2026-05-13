@@ -57,7 +57,8 @@ Local OpenRouter smoke tests should be opt-in:
 
 ```bash
 export OPENROUTER_API_KEY="..."
-export AGENT_RUNTIME_MODE=openrouter
+export AGENT_RUNTIME_MODE=model_gateway
+export MODEL_GATEWAY_MODE=openrouter
 export TASK_RUNNER_PROVIDER_ID=provider-openrouter
 export TASK_RUNNER_MODEL_ID=deepseek/deepseek-v4-flash
 ```

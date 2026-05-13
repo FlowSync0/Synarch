@@ -77,7 +77,8 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   exit 1
 fi
 
-export AGENT_RUNTIME_MODE=openrouter
+export AGENT_RUNTIME_MODE=model_gateway
+export MODEL_GATEWAY_MODE=openrouter
 export OPENROUTER_MODEL_ID
 export TASK_RUNNER_PROVIDER_ID=provider-openrouter
 export TASK_RUNNER_MODEL_ID
@@ -86,11 +87,13 @@ export TASK_RUNNER_EMBEDDING_MODEL_ID
 export OPENROUTER_API_KEY
 export OPENROUTER_BASE_URL
 
-docker compose up -d --build agent-runtime gateway >/dev/null
+docker compose up -d --build model-gateway agent-runtime gateway >/dev/null
 
 wait_for_health "${GATEWAY_URL}/healthz"
 wait_for_health "${STATE_SERVICE_URL}/healthz"
 wait_for_health "${MEMORY_SERVICE_URL}/healthz"
+wait_for_health "http://localhost:8060/healthz"
+wait_for_health "http://localhost:8050/healthz"
 
 project_payload="$(
   jq -n \
@@ -178,6 +181,7 @@ printf "%s" "$batch_response" | jq -e \
     (.runs | length == 1) and
     (.runs[0].task.id == $task_id) and
     (.runs[0].agent_result.status == "completed") and
+    (.runs[0].agent_result.events_emitted[0].payload.mode == "model-gateway") and
     (.runs[0].agent_result.summary | contains($marker)) and
     (.runs[0].memory_context.query_embedding == null) and
     (all(.runs[0].memory_context.items[]; .embedding == null)) and
@@ -201,6 +205,7 @@ jq -n \
     trace_id: $trace_id,
     embedding_model_id: $embedding_model_id,
     selected_memory_item_ids: $batch.runs[0].model_call_events[0].payload.memory_item_ids,
+    runtime_mode: $batch.runs[0].agent_result.events_emitted[0].payload.mode,
     memory_candidate_events: ($batch.runs[0].memory_events | length),
     model_usage: $batch.runs[0].cost_records[0]
   }'
