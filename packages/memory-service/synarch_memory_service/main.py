@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings
 
 from synarch_models import (
     HealthResponse,
+    MemoryCompactionPolicyRequest,
+    MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
     MemoryCompactionResult,
     MemoryContext,
@@ -213,6 +215,47 @@ def compact_memory_items(request: MemoryCompactionRequest) -> MemoryCompactionRe
             status_code=404,
             detail="No approved memory items match compaction request",
         )
+    return create_compaction_result(source_items, request)
+
+
+@app.post("/memory-items/compact-if-needed", response_model=MemoryCompactionPolicyResult)
+def compact_memory_items_if_needed(
+    request: MemoryCompactionPolicyRequest,
+) -> MemoryCompactionPolicyResult:
+    source_items = compactable_memory_items(request)
+    source_tokens = sum(estimated_tokens(item.content) for item in source_items)
+    source_memory_ids = [item.id for item in source_items]
+    if not source_items:
+        return MemoryCompactionPolicyResult(
+            compaction_needed=False,
+            reason="no_approved_memory_items",
+            threshold_tokens=request.min_source_tokens,
+        )
+    if source_tokens <= request.min_source_tokens:
+        return MemoryCompactionPolicyResult(
+            compaction_needed=False,
+            reason="source_tokens_within_threshold",
+            threshold_tokens=request.min_source_tokens,
+            source_memory_ids=source_memory_ids,
+            source_count=len(source_items),
+            source_tokens=source_tokens,
+        )
+    compaction = create_compaction_result(source_items, request)
+    return MemoryCompactionPolicyResult(
+        compaction_needed=True,
+        reason="source_tokens_exceed_threshold",
+        threshold_tokens=request.min_source_tokens,
+        source_memory_ids=source_memory_ids,
+        source_count=len(source_items),
+        source_tokens=source_tokens,
+        compaction=compaction,
+    )
+
+
+def create_compaction_result(
+    source_items: list[MemoryItem],
+    request: MemoryCompactionRequest,
+) -> MemoryCompactionResult:
     compacted_item = STORE.create(
         MemoryItem(
             scope=request.scope,

@@ -15,6 +15,7 @@ from synarch_models import (
     EventType,
     GoalEnvelope,
     LocalWorldView,
+    MemoryCompactionPolicyRequest,
     MemoryContext,
     MemoryItem,
     MemoryStatus,
@@ -44,6 +45,14 @@ def test_goal_envelope_defaults() -> None:
 
     assert envelope.priority == "medium"
     assert envelope.requester == "local-user"
+
+
+def test_memory_compaction_policy_request_defaults() -> None:
+    request = MemoryCompactionPolicyRequest(scope="project:demo")
+
+    assert request.status == "proposed"
+    assert request.min_source_tokens == 1200
+    assert request.max_source_items == 20
 
 
 def test_agent_result_is_serializable() -> None:

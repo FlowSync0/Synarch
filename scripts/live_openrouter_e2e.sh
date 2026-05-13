@@ -357,7 +357,7 @@ curl -fsS -X POST "${MEMORY_SERVICE_URL}/memory-items" \
   -H "Content-Type: application/json" \
   -d "$source_memory_payload_b" >/dev/null
 
-compaction_payload="$(
+compaction_policy_payload="$(
   jq -n \
     --arg project_id "$COMPACTION_PROJECT_ID" \
     '{
@@ -365,13 +365,14 @@ compaction_payload="$(
       agent_id: "agent-ops-sourcing",
       project_id: $project_id,
       status: "proposed",
+      min_source_tokens: 2400,
       max_source_items: 10,
       max_summary_chars: 200
     }'
 )"
 
-compaction_response="$(post_json "${GATEWAY_URL}/memory-items/compact" "$compaction_payload")"
-compacted_memory_id="$(printf "%s" "$compaction_response" | jq -r '.compacted_item.id')"
+compaction_response="$(post_json "${GATEWAY_URL}/memory-items/compact-if-needed" "$compaction_policy_payload")"
+compacted_memory_id="$(printf "%s" "$compaction_response" | jq -r '.compaction.compacted_item.id')"
 if [ -z "$compacted_memory_id" ] || [ "$compacted_memory_id" = "null" ]; then
   echo "Could not find compacted memory id in compaction response" >&2
   exit 1
@@ -381,11 +382,14 @@ printf "%s" "$compaction_response" | jq -e \
   --arg source_a "$COMPACTION_SOURCE_ID_A" \
   --arg source_b "$COMPACTION_SOURCE_ID_B" \
   '
-    (.compacted_item.status == "proposed") and
+    (.compaction_needed == true) and
+    (.reason == "source_tokens_exceed_threshold") and
+    (.threshold_tokens == 2400) and
+    (.compaction.compacted_item.status == "proposed") and
     (.source_memory_ids == [$source_a, $source_b]) and
     (.source_count == 2) and
     (.source_tokens > 2400) and
-    (.compacted_item.content | contains("Source memory ids: " + $source_a + ", " + $source_b))
+    (.compaction.compacted_item.content | contains("Source memory ids: " + $source_a + ", " + $source_b))
   ' >/dev/null
 
 patch_json "${GATEWAY_URL}/memory-items/${compacted_memory_id}/status" \

@@ -281,3 +281,90 @@ def test_compact_memory_items_creates_proposed_item_with_source_provenance() -> 
     assert compacted_item["id"] not in [
         item["id"] for item in context_response.json()["items"]
     ]
+
+
+def test_compact_memory_items_if_needed_creates_policy_candidate_above_threshold() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-large-a",
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "content": "A" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-large-b",
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "content": "B" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-policy-proposed",
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "content": "Proposed memory is excluded from policy source tokens.",
+            "status": "proposed",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    response = client.post(
+        "/memory-items/compact-if-needed",
+        json={
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+            "max_summary_chars": 200,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compaction_needed"] is True
+    assert payload["reason"] == "source_tokens_exceed_threshold"
+    assert payload["threshold_tokens"] == 40
+    assert payload["source_memory_ids"] == ["memory-large-a", "memory-large-b"]
+    assert payload["source_count"] == 2
+    assert payload["source_tokens"] == 50
+    compacted_item = payload["compaction"]["compacted_item"]
+    assert compacted_item["status"] == "proposed"
+    assert "Source memory ids: memory-large-a, memory-large-b" in compacted_item["content"]
+
+
+def test_compact_memory_items_if_needed_skips_when_sources_fit_threshold() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/memory-items",
+        json={
+            "id": "memory-small",
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "content": "Small fact.",
+            "status": "approved",
+        },
+    )
+    assert response.status_code == 201
+
+    response = client.post(
+        "/memory-items/compact-if-needed",
+        json={
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "min_source_tokens": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compaction_needed"] is False
+    assert payload["reason"] == "source_tokens_within_threshold"
+    assert payload["threshold_tokens"] == 100
+    assert payload["source_memory_ids"] == ["memory-small"]
+    assert payload["compaction"] is None
+
+    items_response = client.get("/memory-items?project_id=project_policy")
+    assert [item["id"] for item in items_response.json()] == ["memory-small"]

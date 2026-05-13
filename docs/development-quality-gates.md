@@ -102,14 +102,16 @@ audit, no skipped task claims, no lease recoveries, and a cost record. It also s
 requires the model to read it, persists a proposed memory candidate, approves that candidate through
 the gateway, runs a follow-up task, and verifies the approved candidate appears in the next task
 context. The same run also rejects a separate proposed memory item and verifies it stays out of the
-follow-up task context. It also creates oversized approved source memories, compacts them through
-the gateway, approves the compacted item, runs a real DeepSeek task, and verifies the task context
-contains the compacted source-ID summary while excluding the oversized source memories. It is not
-part of `make verify` because it depends on external provider availability and consumes real tokens.
+follow-up task context. It also creates oversized approved source memories, runs the gateway
+`compact-if-needed` threshold policy, approves the compacted item, runs a real DeepSeek task, and
+verifies the task context contains the compacted source-ID summary while excluding the oversized
+source memories. It is not part of `make verify` because it depends on external provider
+availability and consumes real tokens.
 
-Deterministic memory compaction is covered by the normal backend tests. The memory-service test
-asserts that only approved source memories are compacted and that source IDs stay visible; the
-gateway test asserts `memory.compacted` is emitted with source IDs and token estimates.
+Deterministic memory compaction and the threshold policy are covered by the normal backend tests.
+The memory-service tests assert that only approved source memories are compacted, source IDs stay
+visible, and compaction is skipped below threshold; the gateway tests assert `memory.compacted` is
+emitted only when a compaction is actually created.
 
 Run one scheduler tick with:
 

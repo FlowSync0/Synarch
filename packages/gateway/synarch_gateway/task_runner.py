@@ -15,6 +15,8 @@ from synarch_models import (
     EventRecord,
     EventType,
     LocalWorldView,
+    MemoryCompactionPolicyRequest,
+    MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
     MemoryCompactionResult,
     MemoryContext,
@@ -80,6 +82,10 @@ class MemoryClient(Protocol):
     def compact_memory_items(
         self, request: MemoryCompactionRequest
     ) -> MemoryCompactionResult: ...
+
+    def compact_memory_items_if_needed(
+        self, request: MemoryCompactionPolicyRequest
+    ) -> MemoryCompactionPolicyResult: ...
 
 
 class AgentRuntimeClient(Protocol):
@@ -186,6 +192,16 @@ class HttpMemoryClient:
             self.timeout_seconds,
         )
         return MemoryCompactionResult.model_validate(response)
+
+    def compact_memory_items_if_needed(
+        self, request: MemoryCompactionPolicyRequest
+    ) -> MemoryCompactionPolicyResult:
+        response = post_json(
+            f"{self.base_url.rstrip('/')}/memory-items/compact-if-needed",
+            request.model_dump(mode="json"),
+            self.timeout_seconds,
+        )
+        return MemoryCompactionPolicyResult.model_validate(response)
 
 
 @dataclass(frozen=True)

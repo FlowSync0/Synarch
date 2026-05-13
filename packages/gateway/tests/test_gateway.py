@@ -36,6 +36,8 @@ from synarch_models import (
     EventRecord,
     EventType,
     LocalWorldView,
+    MemoryCompactionPolicyRequest,
+    MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
     MemoryCompactionResult,
     MemoryContext,
@@ -970,6 +972,47 @@ class FakeMemoryClient:
             source_memory_ids=[item.id for item in source_items],
             source_count=len(source_items),
             source_tokens=sum(max(1, (len(item.content) + 3) // 4) for item in source_items),
+        )
+
+    def compact_memory_items_if_needed(
+        self, request: MemoryCompactionPolicyRequest
+    ) -> MemoryCompactionPolicyResult:
+        compaction_request = MemoryCompactionRequest(
+            scope=request.scope,
+            project_id=request.project_id,
+            agent_id=request.agent_id,
+            status=request.status,
+            max_source_items=request.max_source_items,
+            max_summary_chars=request.max_summary_chars,
+        )
+        source_items = [
+            item
+            for item in self.list_memory_items(
+                scope=request.scope,
+                agent_id=request.agent_id,
+                project_id=request.project_id,
+                status=MemoryStatus.approved,
+            )
+        ][: request.max_source_items]
+        source_tokens = sum(max(1, (len(item.content) + 3) // 4) for item in source_items)
+        if source_tokens <= request.min_source_tokens:
+            return MemoryCompactionPolicyResult(
+                compaction_needed=False,
+                reason="source_tokens_within_threshold",
+                threshold_tokens=request.min_source_tokens,
+                source_memory_ids=[item.id for item in source_items],
+                source_count=len(source_items),
+                source_tokens=source_tokens,
+            )
+        compaction = self.compact_memory_items(compaction_request)
+        return MemoryCompactionPolicyResult(
+            compaction_needed=True,
+            reason="source_tokens_exceed_threshold",
+            threshold_tokens=request.min_source_tokens,
+            source_memory_ids=compaction.source_memory_ids,
+            source_count=compaction.source_count,
+            source_tokens=compaction.source_tokens,
+            compaction=compaction,
         )
 
 
@@ -4112,6 +4155,92 @@ def test_compact_memory_items_records_gateway_event() -> None:
     }
     assert state_client.events[0].trace_id == "trace_memory_compaction_test"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "hugo"
+
+
+def test_compact_memory_items_if_needed_records_event_when_threshold_exceeded() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="A" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-source-b"] = MemoryItem(
+        id="memory-source-b",
+        scope="project:project_demo",
+        content="B" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compact-if-needed",
+            json={
+                "scope": "project:project_demo",
+                "project_id": "project_demo",
+                "min_source_tokens": 10,
+            },
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_memory_policy_test",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compaction_needed"] is True
+    assert payload["reason"] == "source_tokens_exceed_threshold"
+    assert payload["compaction"]["compacted_item"]["id"] == "memory-compacted"
+    assert payload["source_memory_ids"] == ["memory-source-a", "memory-source-b"]
+    assert [event.type for event in state_client.events] == ["memory.compacted"]
+    assert state_client.events[0].payload["memory_id"] == "memory-compacted"
+    assert state_client.events[0].payload["source_memory_ids"] == [
+        "memory-source-a",
+        "memory-source-b",
+    ]
+    assert state_client.events[0].trace_id == "trace_memory_policy_test"
+
+
+def test_compact_memory_items_if_needed_skips_event_when_under_threshold() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="Short source fact.",
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compact-if-needed",
+            json={
+                "scope": "project:project_demo",
+                "project_id": "project_demo",
+                "min_source_tokens": 100,
+            },
+            headers={"X-Synarch-Trace-Id": "trace_memory_policy_skip_test"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["compaction_needed"] is False
+    assert payload["reason"] == "source_tokens_within_threshold"
+    assert payload["compaction"] is None
+    assert state_client.events == []
 
 
 def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -> None:

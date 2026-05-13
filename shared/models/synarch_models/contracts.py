@@ -420,6 +420,20 @@ class MemoryCompactionResult(SynarchModel):
     source_tokens: int = 0
 
 
+class MemoryCompactionPolicyRequest(MemoryCompactionRequest):
+    min_source_tokens: int = Field(default=1200, ge=1)
+
+
+class MemoryCompactionPolicyResult(SynarchModel):
+    compaction_needed: bool
+    reason: str
+    threshold_tokens: int
+    source_memory_ids: list[str] = Field(default_factory=list)
+    source_count: int = 0
+    source_tokens: int = 0
+    compaction: MemoryCompactionResult | None = None
+
+
 class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None
