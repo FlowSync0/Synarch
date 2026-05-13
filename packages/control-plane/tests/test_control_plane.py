@@ -175,6 +175,42 @@ def test_state_service_source_404_becomes_control_plane_404(
     assert response.status_code == 404
 
 
+def test_agent_model_policy_update_forwards_to_state_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+    updated_agent = AGENTS[3].model_copy(update={"model_policy_id": "policy-dev-updated"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["path"] = request.url.path
+        captured["actor_id"] = request.headers["x-synarch-actor-id"]
+        captured["trace_id"] = request.headers["x-synarch-trace-id"]
+        payload = json.loads(request.content)
+        assert payload == {"model_policy_id": "policy-dev-updated"}
+        return httpx.Response(200, json=updated_agent.model_dump(mode="json"))
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "patch", client.patch)
+    set_agent_source(StateServiceAgentSource("http://state-service:8020"))
+
+    response = TestClient(app).patch(
+        "/agents/agent-dev/model-policy",
+        headers={
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": "trace_control_model_policy_update",
+        },
+        json={"model_policy_id": "policy-dev-updated"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["model_policy_id"] == "policy-dev-updated"
+    assert captured == {
+        "path": "/agents/agent-dev/model-policy",
+        "actor_id": "local-user",
+        "trace_id": "trace_control_model_policy_update",
+    }
+
+
 def test_world_view_includes_state_backed_services_and_model_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -7,6 +7,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentModelPolicyUpdate,
     AgentStatus,
     HealthResponse,
     LocalWorldView,
@@ -196,6 +197,24 @@ def list_agents() -> list[AgentDefinition]:
 @app.get("/agents/{agent_id}", response_model=AgentDefinition)
 def read_agent(agent_id: str) -> AgentDefinition:
     return get_agent_or_404(agent_id)
+
+
+@app.patch("/agents/{agent_id}/model-policy", response_model=AgentDefinition)
+def update_agent_model_policy(
+    agent_id: str,
+    update: AgentModelPolicyUpdate,
+    request: Request,
+) -> AgentDefinition:
+    try:
+        return AGENT_SOURCE.update_agent_model_policy(
+            agent_id,
+            update,
+            headers=source_request_headers(request),
+        )
+    except AgentSourceRequestError as error:
+        raise_source_error(error)
+    except AgentSourceUnavailable as error:
+        raise HTTPException(status_code=502, detail="Agent source unavailable") from error
 
 
 @app.get("/agents/{agent_id}/world-view", response_model=LocalWorldView)

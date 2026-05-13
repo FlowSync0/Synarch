@@ -9,6 +9,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentModelPolicyUpdate,
     AgentProjectAssignment,
     AgentSoul,
     ModelPolicy,
@@ -44,6 +45,14 @@ class AgentSource(Protocol):
     def list_skills(self) -> list[SkillDefinition]: ...
 
     def get_model_policy(self, policy_id: str) -> ModelPolicy | None: ...
+
+    def update_agent_model_policy(
+        self,
+        agent_id: str,
+        update: AgentModelPolicyUpdate,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> AgentDefinition: ...
 
     def list_agent_lifecycle_requests(
         self,
@@ -98,6 +107,15 @@ class SeedAgentSource:
             (policy for policy in self.model_policies if policy.id == policy_id),
             None,
         )
+
+    def update_agent_model_policy(
+        self,
+        agent_id: str,
+        update: AgentModelPolicyUpdate,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> AgentDefinition:
+        raise AgentSourceUnavailable("State service is required for model policy updates")
 
     def list_agent_lifecycle_requests(
         self,
@@ -194,6 +212,25 @@ class StateServiceAgentSource:
         if response is None:
             return None
         return ModelPolicy.model_validate(response.json())
+
+    def update_agent_model_policy(
+        self,
+        agent_id: str,
+        update: AgentModelPolicyUpdate,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> AgentDefinition:
+        try:
+            response = httpx.patch(
+                f"{self.base_url.rstrip('/')}/agents/{agent_id}/model-policy",
+                json=update.model_dump(mode="json"),
+                headers=headers,
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as error:
+            raise AgentSourceUnavailable(str(error)) from error
+        self._raise_for_write_status(response)
+        return AgentDefinition.model_validate(response.json())
 
     def list_agent_lifecycle_requests(
         self,

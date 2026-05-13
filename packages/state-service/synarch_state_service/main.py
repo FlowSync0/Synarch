@@ -11,6 +11,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentModelPolicyUpdate,
     AgentProjectAssignment,
     AgentResult,
     AgentSoul,
@@ -1005,6 +1006,62 @@ def list_agents(division: str | None = None) -> list[AgentDefinition]:
 @app.get("/agents/{agent_id}", response_model=AgentDefinition)
 def read_agent(agent_id: str) -> AgentDefinition:
     return read_record(REPOSITORIES.agents, agent_id, "agent")
+
+
+@app.patch("/agents/{agent_id}/model-policy", response_model=AgentDefinition)
+def update_agent_model_policy(
+    agent_id: str,
+    update: AgentModelPolicyUpdate,
+    request: Request,
+) -> AgentDefinition:
+    audit_context = audit_context_from_request(request)
+    current_agent = read_record(REPOSITORIES.agents, agent_id, "agent")
+    if update.model_policy_id is not None and not REPOSITORIES.model_policies.exists(
+        update.model_policy_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model policy: {update.model_policy_id}",
+        )
+    if current_agent.model_policy_id == update.model_policy_id:
+        return current_agent
+
+    updated_agent = current_agent.model_copy(
+        update={
+            "model_policy_id": update.model_policy_id,
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    record = update_record(REPOSITORIES.agents, agent_id, updated_agent, "agent")
+    create_domain_event(
+        EventRecord(
+            type=EventType.agent_updated,
+            source_agent_id=agent_event_source(
+                audit_context.actor_type,
+                audit_context.actor_id,
+            )
+            if audit_context is not None
+            else None,
+            target=record.id,
+            payload={
+                "changed_fields": ["model_policy_id"],
+                "previous_model_policy_id": current_agent.model_policy_id,
+                "model_policy_id": record.model_policy_id,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="agent.model_policy_updated",
+        target_type="agent",
+        target_id=record.id,
+        payload={
+            "previous_model_policy_id": current_agent.model_policy_id,
+            "model_policy_id": record.model_policy_id,
+        },
+    )
+    return record
 
 
 @app.post("/agent-souls", response_model=AgentSoul, status_code=201)

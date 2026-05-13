@@ -110,6 +110,10 @@ class AgentDefinition(SynarchModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class AgentModelPolicyUpdate(SynarchModel):
+    model_policy_id: str | None = None
+
+
 class AgentSoul(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("agent_soul"))
     agent_id: str

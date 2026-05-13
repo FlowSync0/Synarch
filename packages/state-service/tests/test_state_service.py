@@ -2553,6 +2553,103 @@ def test_state_change_rejects_unknown_actor_type_before_writing() -> None:
     assert client.get("/projects").json() == []
 
 
+def test_agent_model_policy_can_be_updated_and_audited() -> None:
+    client = TestClient(app)
+    trace_id = "trace_agent_model_policy_update"
+    provider_response = client.post(
+        "/model-providers",
+        json={
+            "id": "provider-agent-policy-test",
+            "name": "Agent Policy Provider",
+            "provider_type": "local",
+        },
+    )
+    assert provider_response.status_code == 201
+    for model_id in ["model-agent-policy-a", "model-agent-policy-b"]:
+        model_response = client.post(
+            "/model-definitions",
+            json={
+                "id": model_id,
+                "provider_id": "provider-agent-policy-test",
+                "display_name": model_id,
+            },
+        )
+        assert model_response.status_code == 201
+    for policy_id, model_id in [
+        ("policy-agent-a", "model-agent-policy-a"),
+        ("policy-agent-b", "model-agent-policy-b"),
+    ]:
+        policy_response = client.post(
+            "/model-policies",
+            json={
+                "id": policy_id,
+                "name": policy_id,
+                "default_model_id": model_id,
+                "allowed_model_ids": [model_id],
+            },
+        )
+        assert policy_response.status_code == 201
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-policy-target",
+            "name": "Policy Target",
+            "role": "Validate model policy update",
+            "division": "dev",
+            "model_policy_id": "policy-agent-a",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    update_response = client.patch(
+        "/agents/agent-policy-target/model-policy",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={"model_policy_id": "policy-agent-b"},
+    )
+
+    assert update_response.status_code == 200
+    assert update_response.json()["model_policy_id"] == "policy-agent-b"
+    events_response = client.get("/events", params={"trace_id": trace_id})
+    assert events_response.status_code == 200
+    events = events_response.json()
+    assert [event["type"] for event in events] == ["agent.updated"]
+    assert events[0]["payload"] == {
+        "changed_fields": ["model_policy_id"],
+        "previous_model_policy_id": "policy-agent-a",
+        "model_policy_id": "policy-agent-b",
+    }
+    audit_response = client.get("/audit-logs", params={"trace_id": trace_id})
+    assert audit_response.status_code == 200
+    assert audit_response.json()[0]["action"] == "agent.model_policy_updated"
+
+
+def test_agent_model_policy_update_rejects_unknown_policy() -> None:
+    client = TestClient(app)
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-policy-reject",
+            "name": "Policy Reject",
+            "role": "Reject unknown policy",
+            "division": "dev",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    update_response = client.patch(
+        "/agents/agent-policy-reject/model-policy",
+        json={"model_policy_id": "policy-missing"},
+    )
+
+    assert update_response.status_code == 400
+    assert update_response.json()["detail"] == "Unknown model policy: policy-missing"
+    assert client.get("/agents/agent-policy-reject").json()["model_policy_id"] is None
+
+
 def test_company_state_cost_and_audit_flow() -> None:
     client = TestClient(app)
     trace_id = "trace_state_company_flow"
