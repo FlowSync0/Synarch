@@ -2606,6 +2606,90 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
 
 
+def test_run_next_task_includes_workspace_bridge_memory_scope() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_target",
+            title="Target project",
+            goal="Use explicitly bridged memory only.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.workspaces.append(
+        ProjectWorkspace(
+            id="workspace-target",
+            project_id="project_target",
+            name="Target workspace",
+            memory_scope="project:project_target",
+            bridge_project_ids=["project_source"],
+            active=True,
+        )
+    )
+    state_client.workspaces.append(
+        ProjectWorkspace(
+            id="workspace-inactive",
+            project_id="project_target",
+            name="Inactive target workspace",
+            memory_scope="project:project_target_old",
+            bridge_project_ids=["project_archived"],
+            active=False,
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            project_id="project_target",
+            title="Ready task",
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Bridge scope is explicit."],
+        )
+    )
+    memory_client = FakeMemoryClient(
+        context_items=[
+            MemoryItem(
+                id="memory-bridged",
+                scope="project:project_source",
+                content="Source project context.",
+                status=MemoryStatus.approved,
+                project_id="project_source",
+            )
+        ]
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=memory_client,
+        runtime=FakeAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_bridge_memory_test"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert memory_client.contexts[0].allowed_scopes == [
+        "global",
+        "division:dev",
+        "agent:agent-dev",
+        "project:project_target",
+        "project:project_source",
+    ]
+    assert memory_client.contexts[0].allowed_project_ids == [
+        "project_target",
+        "project_source",
+    ]
+    started_payload = response.json()["model_call_events"][0]["payload"]
+    assert started_payload["memory_allowed_project_ids"] == [
+        "project_target",
+        "project_source",
+    ]
+
+
 def test_run_next_task_uses_query_embedding_without_sending_vector_to_runtime() -> None:
     state_client = FakeStateClient()
     state_client.projects.append(

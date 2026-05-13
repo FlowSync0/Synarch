@@ -132,6 +132,62 @@ def test_context_assembly_filters_by_scope_agent_and_project() -> None:
     assert "4 memory items" in context["summary"]
 
 
+def test_context_assembly_requires_explicit_bridge_project_ids() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-target-project",
+            "scope": "project:project_target",
+            "project_id": "project_target",
+            "content": "Target project memory.",
+        },
+        {
+            "id": "memory-bridged-project",
+            "scope": "project:project_source",
+            "project_id": "project_source",
+            "content": "Source project memory visible only through a bridge.",
+        },
+        {
+            "id": "memory-other-project",
+            "scope": "project:project_other",
+            "project_id": "project_other",
+            "content": "Other project memory must stay isolated.",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    without_bridge_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "project_id": "project_target",
+            "token_budget": 200,
+            "allowed_scopes": ["project:project_target", "project:project_source"],
+        },
+    )
+    with_bridge_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "project_id": "project_target",
+            "token_budget": 200,
+            "allowed_scopes": ["project:project_target", "project:project_source"],
+            "allowed_project_ids": ["project_target", "project_source"],
+        },
+    )
+
+    assert without_bridge_response.status_code == 200
+    assert [item["id"] for item in without_bridge_response.json()["items"]] == [
+        "memory-target-project"
+    ]
+    assert with_bridge_response.status_code == 200
+    assert [item["id"] for item in with_bridge_response.json()["items"]] == [
+        "memory-target-project",
+        "memory-bridged-project",
+    ]
+
+
 def test_context_assembly_enforces_token_budget() -> None:
     client = TestClient(app)
     short_response = client.post(

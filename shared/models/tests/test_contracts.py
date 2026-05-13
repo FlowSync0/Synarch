@@ -79,10 +79,16 @@ def test_memory_context_can_carry_query_embedding() -> None:
     context = MemoryContext(
         agent_id="agent-dev",
         project_id="project_demo",
+        allowed_project_ids=["project_demo", "project_source"],
         query_embedding=[0.0, 1.0],
     )
 
+    assert context.allowed_project_ids == ["project_demo", "project_source"]
     assert context.query_embedding == [0.0, 1.0]
+    assert context.model_dump(mode="json")["allowed_project_ids"] == [
+        "project_demo",
+        "project_source",
+    ]
     assert context.model_dump(mode="json")["query_embedding"] == [0.0, 1.0]
 
 

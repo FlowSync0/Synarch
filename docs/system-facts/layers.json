@@ -105,10 +105,12 @@
     "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context",
     "Gateway can backfill embeddings for approved memories that lack vectors and emits memory.embedding_backfilled",
     "memory_embedding_worker runs embedding backfill as a bounded tick or loop",
-    "scripts/live_memory_embedding_backfill_e2e.sh verifies real OpenRouter embedding backfill, 1536D storage, and event traceability"
+    "scripts/live_memory_embedding_backfill_e2e.sh verifies real OpenRouter embedding backfill, 1536D storage, and event traceability",
+    "Task runs derive bridged project memory from active workspace bridge_project_ids and pass explicit allowed_project_ids to memory-service",
+    "scripts/live_memory_bridge_scope_e2e.sh verifies target memory and explicitly bridged source memory are visible while unbridged project memory remains isolated"
   ],
   "main_gap": "No graph retrieval or hierarchical context database yet.",
-  "next_validation": "Add graph retrieval or hierarchical context isolation for multi-project memory.",
+  "next_validation": "Add graph retrieval for explicit memory relationships inside already-authorized project scopes.",
     "source": "docs/roadmap.md"
   },
   {

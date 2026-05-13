@@ -380,7 +380,7 @@ def is_visible(item: MemoryItem, request: MemoryContext) -> bool:
         return False
     if item.agent_id is not None and item.agent_id != request.agent_id:
         return False
-    return item.project_id is None or item.project_id == request.project_id
+    return item.project_id is None or item.project_id in allowed_project_ids(request)
 
 
 def compactable_memory_items(request: MemoryCompactionRequest) -> list[MemoryItem]:
@@ -461,16 +461,28 @@ def default_allowed_scopes(request: MemoryContext) -> set[str]:
     return scopes
 
 
+def allowed_project_ids(request: MemoryContext) -> set[str]:
+    project_ids = set(request.allowed_project_ids)
+    if request.project_id is not None:
+        project_ids.add(request.project_id)
+    return project_ids
+
+
 def scope_rank(item: MemoryItem, request: MemoryContext) -> int:
     if request.project_id is not None and item.scope == f"project:{request.project_id}":
         return 0
     if item.scope == f"agent:{request.agent_id}":
         return 1
-    if item.scope.startswith("division:"):
+    if (
+        item.project_id in allowed_project_ids(request)
+        and item.scope == f"project:{item.project_id}"
+    ):
         return 2
-    if item.scope == GLOBAL_SCOPE:
+    if item.scope.startswith("division:"):
         return 3
-    return 4
+    if item.scope == GLOBAL_SCOPE:
+        return 4
+    return 5
 
 
 def memory_rank(item: MemoryItem, request: MemoryContext) -> tuple[int, float, int, datetime, str]:

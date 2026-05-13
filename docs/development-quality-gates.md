@@ -238,6 +238,16 @@ Run the live OpenRouter backfill check with:
 scripts/live_memory_embedding_backfill_e2e.sh
 ```
 
+Project memory can cross project boundaries only through active workspace bridges. Gateway expands
+active `ProjectWorkspace.bridge_project_ids` into `MemoryContext.allowed_project_ids`, and
+memory-service still rejects project memory whose project ID is not explicitly allowed.
+
+Run the bridge-isolation check with:
+
+```bash
+scripts/live_memory_bridge_scope_e2e.sh
+```
+
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
 

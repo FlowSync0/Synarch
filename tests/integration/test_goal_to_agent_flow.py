@@ -82,6 +82,25 @@ class StateServiceTestClient:
             raise StateServiceRequestError(response.status_code, response.json())
         return ProjectWorkspace.model_validate(response.json())
 
+    def list_project_workspaces(
+        self,
+        *,
+        project_id: str | None = None,
+        active: bool | None = None,
+    ) -> list[ProjectWorkspace]:
+        params: dict[str, str] = {}
+        if project_id is not None:
+            params["project_id"] = project_id
+        if active is not None:
+            params["active"] = str(active).lower()
+        response = self.client.get("/project-workspaces", params=params)
+        if response.status_code != 200:
+            raise StateServiceRequestError(response.status_code, response.json())
+        return [
+            ProjectWorkspace.model_validate(workspace)
+            for workspace in response.json()
+        ]
+
     def create_agent_project_assignment(
         self,
         assignment: AgentProjectAssignment,

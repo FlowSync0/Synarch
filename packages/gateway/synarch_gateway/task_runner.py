@@ -473,13 +473,24 @@ class TaskRunner:
             raise
         project = self.state.get_project(started_task.project_id)
         world_view = self.control_plane.get_world_view(started_task.assigned_agent_id)
+        bridge_project_ids = bridge_project_ids_for_run(
+            self.state,
+            project_id=started_task.project_id,
+        )
         query_embedding = self.query_embedding_for_task(started_task, project)
         memory_context = self.memory.assemble_context(
             MemoryContext(
                 agent_id=started_task.assigned_agent_id,
                 project_id=started_task.project_id,
                 token_budget=self.memory_token_budget,
-                allowed_scopes=memory_scopes_for_run(started_task, world_view),
+                allowed_scopes=memory_scopes_for_run(
+                    started_task,
+                    world_view,
+                    bridge_project_ids=bridge_project_ids,
+                ),
+                allowed_project_ids=deduplicate(
+                    [started_task.project_id, *bridge_project_ids]
+                ),
                 query_embedding=query_embedding,
             )
         )
@@ -1037,13 +1048,31 @@ def estimated_tokens(*texts: str) -> int:
     return max(1, (sum(len(text) for text in texts) + 3) // 4)
 
 
-def memory_scopes_for_run(task: TaskRecord, world_view: LocalWorldView) -> list[str]:
-    return [
+def bridge_project_ids_for_run(
+    state: StateClient,
+    *,
+    project_id: str,
+) -> list[str]:
+    bridge_project_ids: list[str] = []
+    for workspace in state.list_project_workspaces(project_id=project_id, active=True):
+        bridge_project_ids.extend(workspace.bridge_project_ids)
+    return deduplicate(bridge_project_ids)
+
+
+def memory_scopes_for_run(
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    *,
+    bridge_project_ids: list[str] | None = None,
+) -> list[str]:
+    scopes = [
         "global",
         f"division:{world_view.division}",
         f"agent:{world_view.agent_id}",
         f"project:{task.project_id}",
     ]
+    scopes.extend(f"project:{project_id}" for project_id in bridge_project_ids or [])
+    return deduplicate(scopes)
 
 
 def memory_query_text(task: TaskRecord, project: ProjectRecord | None) -> str:
@@ -1091,6 +1120,7 @@ def model_call_started_event(
             "memory_tokens_used": memory_context.tokens_used,
             "memory_token_budget": memory_context.token_budget,
             "memory_allowed_scopes": memory_context.allowed_scopes,
+            "memory_allowed_project_ids": memory_context.allowed_project_ids,
             "memory_query_embedding_used": memory_query_embedding_used,
             "memory_query_embedding_dimensions": memory_query_embedding_dimensions,
             "input_tokens_estimate": estimated_tokens(

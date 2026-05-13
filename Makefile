@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter test-live-memory-embedding scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker memory-embedding-backfill-tick memory-embedding-backfill-loop memory-embedding-backfill-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter test-live-memory-embedding test-live-memory-bridge scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker memory-embedding-backfill-tick memory-embedding-backfill-loop memory-embedding-backfill-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -47,6 +47,9 @@ test-live-openrouter:
 
 test-live-memory-embedding:
 	scripts/live_memory_embedding_backfill_e2e.sh
+
+test-live-memory-bridge:
+	scripts/live_memory_bridge_scope_e2e.sh
 
 scheduler-tick:
 	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)"
