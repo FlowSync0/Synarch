@@ -70,6 +70,7 @@ import {
   type CredentialAccessRequest,
   type MemoryStatus,
   type ProjectTimeline,
+  type TaskSkipRecord,
   type TaskRunBatchResult,
   type TaskRunResult,
   type TaskRecord,
@@ -414,9 +415,16 @@ type TimelineViewModel = {
   time: string;
   label: string;
   target: string;
+  detail?: string;
   tone: Tone;
   icon: typeof Activity;
   source: "api" | "sample";
+};
+
+type TaskSkipTimelineRecord = TaskSkipRecord & {
+  event_id: string;
+  timestamp: string;
+  trace_id?: string | null;
 };
 
 type TraceViewModel = {
@@ -911,7 +919,12 @@ function taskCost(timeline: ProjectTimeline, taskId: string): number {
 }
 
 function eventBelongsToTask(event: EventRecord, taskId: string): boolean {
-  return event.target === taskId || event.payload.task_id === taskId;
+  return (
+    event.target === taskId ||
+    event.payload.task_id === taskId ||
+    payloadStringArray(event.payload, "skipped_task_ids").includes(taskId) ||
+    taskSkipsFromPayload(event.payload).some((skip) => skip.task_id === taskId)
+  );
 }
 
 function traceIdForEvent(event: EventRecord): string {
@@ -1016,6 +1029,72 @@ function payloadString(payload: Record<string, unknown>, key: string): string | 
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function payloadStringArray(payload: Record<string, unknown>, key: string): string[] {
+  const value = payload[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+function taskSkipsFromPayload(payload: Record<string, unknown>): TaskSkipRecord[] {
+  const value = payload.skipped_tasks;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) {
+      return [];
+    }
+    const candidate = item as Record<string, unknown>;
+    if (
+      typeof candidate.task_id !== "string" ||
+      typeof candidate.category !== "string" ||
+      typeof candidate.reason !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        task_id: candidate.task_id,
+        category: candidate.category,
+        reason: candidate.reason
+      }
+    ];
+  });
+}
+
+function taskSkipRecordsForTask(
+  timeline: ProjectTimeline,
+  taskId: string
+): TaskSkipTimelineRecord[] {
+  return timeline.events
+    .flatMap((event) =>
+      taskSkipsFromPayload(event.payload)
+        .filter((skip) => skip.task_id === taskId)
+        .map((skip) => ({
+          ...skip,
+          event_id: event.id,
+          timestamp: event.timestamp,
+          trace_id: event.trace_id
+        }))
+    )
+    .sort(
+      (left, right) =>
+        new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime()
+    );
+}
+
+function schedulerSkipDetail(event: EventRecord): string | null {
+  const skips = taskSkipsFromPayload(event.payload);
+  if (skips.length === 0) {
+    return null;
+  }
+  const [firstSkip] = skips;
+  const suffix = skips.length > 1 ? ` +${skips.length - 1}` : "";
+  return `${firstSkip.category}: ${firstSkip.reason}${suffix}`;
+}
+
 function eventBelongsToConnectorJob(
   event: EventRecord,
   jobId: string,
@@ -1062,6 +1141,9 @@ function taskResultSummary(task: TaskRecord): string {
 }
 
 function eventTone(event: EventRecord): Tone {
+  if (event.type === "scheduler.tick" && taskSkipsFromPayload(event.payload).length > 0) {
+    return "warn";
+  }
   if (event.type.includes("failed")) {
     return "risk";
   }
@@ -1078,6 +1160,9 @@ function eventTone(event: EventRecord): Tone {
 }
 
 function eventIcon(event: EventRecord): typeof Activity {
+  if (event.type === "scheduler.tick" && taskSkipsFromPayload(event.payload).length > 0) {
+    return AlertTriangle;
+  }
   if (event.type.startsWith("approval")) {
     return ShieldCheck;
   }
@@ -1097,11 +1182,17 @@ function eventIcon(event: EventRecord): typeof Activity {
 }
 
 function eventRow(event: EventRecord): TimelineViewModel {
+  const skippedTasks = taskSkipsFromPayload(event.payload);
+  const detail = schedulerSkipDetail(event);
   return {
     id: event.id,
     time: formatLifecycleAge(event.timestamp),
-    label: event.type,
+    label:
+      event.type === "scheduler.tick" && skippedTasks.length > 0
+        ? `scheduler.tick / ${skippedTasks.length} skipped`
+        : event.type,
     target: event.target ?? event.source_agent_id ?? event.trace_id ?? "system",
+    detail: detail ?? undefined,
     tone: eventTone(event),
     icon: eventIcon(event),
     source: "api"
@@ -1599,6 +1690,9 @@ export default function DashboardPage() {
     projectTimelineEvents.find((event) => event.id === selectedTimelineEventId) ??
     projectTimelineEvents[0] ??
     null;
+  const selectedTimelineEventSkips = selectedTimelineEvent
+    ? taskSkipsFromPayload(selectedTimelineEvent.payload)
+    : [];
   const selectedEventCostRecords =
     projectTimelineQuery.isSuccess && selectedTimelineEvent
       ? projectTimelineQuery.data.cost_records.filter(
@@ -2831,13 +2925,15 @@ export default function DashboardPage() {
                     <p className="mt-1 text-xs text-muted">La timeline ne retourne pas encore de task.</p>
                   </article>
                 ) : null}
-                {projectTimelineTasks.map((task) => (
-                  <article
-                    key={task.id}
-                    className={`grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_180px] ${
-                      effectiveFocusedTaskId === task.id ? "bg-info-soft/35" : ""
-                    }`}
-                  >
+                {projectTimelineTasks.map((task) => {
+                  const taskSkips = taskSkipRecordsForTask(projectTimelineQuery.data, task.id);
+                  return (
+                    <article
+                      key={task.id}
+                      className={`grid gap-3 px-4 py-4 xl:grid-cols-[minmax(0,1fr)_180px] ${
+                        effectiveFocusedTaskId === task.id ? "bg-info-soft/35" : ""
+                      }`}
+                    >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border">
@@ -2868,6 +2964,29 @@ export default function DashboardPage() {
                             >
                               {criterion}
                             </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {taskSkips.length > 0 ? (
+                        <div className="mt-3 grid gap-1.5 rounded-md border border-warn/25 bg-warn-soft p-2">
+                          {taskSkips.slice(0, 2).map((skip) => (
+                            <button
+                              key={`${skip.event_id}-${skip.category}`}
+                              className="min-w-0 text-left"
+                              type="button"
+                              onClick={() => {
+                                setFocusedTimelineTaskId(task.id);
+                                setSelectedTimelineTraceId(skip.trace_id ?? "");
+                                setSelectedTimelineEventId(skip.event_id);
+                              }}
+                            >
+                              <p className="truncate text-[11px] font-semibold text-warn">
+                                skipped {skip.category} / {traceLabel(skip.trace_id ?? "no-trace")}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-muted">
+                                {skip.reason}
+                              </p>
+                            </button>
                           ))}
                         </div>
                       ) : null}
@@ -2942,8 +3061,9 @@ export default function DashboardPage() {
                         </button>
                       </div>
                     </div>
-                  </article>
-                ))}
+                    </article>
+                  );
+                })}
                 {projectTimelineEvents.length > 0 ? (
                   <div className="grid gap-2 px-4 py-3">
                     <p className="text-[11px] font-semibold uppercase text-muted">Derniers events</p>
@@ -2980,6 +3100,18 @@ export default function DashboardPage() {
                           {selectedTimelineEvent.id} / {traceLabel(traceIdForEvent(selectedTimelineEvent))}
                         </span>
                       </div>
+                      {selectedTimelineEventSkips.length > 0 ? (
+                        <div className="mt-2 grid gap-1.5 rounded-md border border-warn/25 bg-warn-soft p-2">
+                          {selectedTimelineEventSkips.map((skip) => (
+                            <div key={`${skip.task_id}-${skip.category}`}>
+                              <p className="truncate text-[11px] font-semibold text-warn">
+                                {skip.task_id} / {skip.category}
+                              </p>
+                              <p className="mt-0.5 text-[11px] text-muted">{skip.reason}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
                       <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
                         {formatPayload(selectedTimelineEvent.payload)}
                       </pre>
@@ -4345,6 +4477,9 @@ export default function DashboardPage() {
                         <span className="shrink-0 text-xs text-muted">{event.time}</span>
                       </div>
                       <p className="mt-1 truncate text-xs text-muted">{event.target}</p>
+                      {event.detail ? (
+                        <p className="mt-1 truncate text-[11px] text-warn">{event.detail}</p>
+                      ) : null}
                     </div>
                   </article>
                 );
