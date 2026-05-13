@@ -84,6 +84,15 @@ agent-proposed org changes require human approval
 
 This can later be relaxed for low-risk sandbox organizations.
 
+Implemented baseline:
+
+- `AgentResult.lifecycle_requests_created` lets an employee IA propose create/update/deactivate
+  requests as typed output.
+- Gateway normalizes each proposal so the requester is the executing agent, status is `requested`,
+  and `requires_human_approval` stays true before writing to state-service.
+- Agent runtime retries once with a corrective prompt when a lifecycle task mentions a proposal in
+  prose but omits the required structured `lifecycle_requests_created` payload.
+
 ## Priority 4: Service Registry and Permissions
 
 Each service/tool/provider must be visible as structured state:

@@ -15,8 +15,11 @@ from synarch_gateway.main import (
 from synarch_gateway.state_client import StateServiceRequestError, StateServiceUnavailable
 from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable, next_ready_task
 from synarch_models import (
+    AgentDefinition,
+    AgentLifecycleRequest,
     AgentProjectAssignment,
     AgentResult,
+    AgentSoul,
     AgentTaskRequest,
     AiProviderType,
     AuditLogRecord,
@@ -85,6 +88,7 @@ class FakeStateClient:
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
+        self.agent_lifecycle_requests: list[AgentLifecycleRequest] = []
         self.credential_access_requests: list[CredentialAccessRequest] = []
         self.credential_grants: list[CredentialGrant] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
@@ -478,6 +482,16 @@ class FakeStateClient:
         self.headers.append(headers)
         self.audit_logs.append(audit)
         return audit
+
+    def create_agent_lifecycle_request(
+        self,
+        lifecycle_request: AgentLifecycleRequest,
+        *,
+        headers: dict[str, str],
+    ) -> AgentLifecycleRequest:
+        self.headers.append(headers)
+        self.agent_lifecycle_requests.append(lifecycle_request)
+        return lifecycle_request
 
     def create_credential_access_request(
         self,
@@ -1244,6 +1258,48 @@ class SubTaskAgentRuntimeClient:
                 ),
             ],
             summary="Created the next supplier workflow slices.",
+        )
+
+
+class LifecycleProposingAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        proposed_agent = AgentDefinition(
+            id="agent-ops-sourcing-researcher",
+            name="IA Ops Researcher",
+            role="Supplier research specialist",
+            division="ops",
+            manager_id=request.world_view.agent_id,
+            created_by=request.world_view.agent_id,
+        )
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Proposed a bounded specialist for supplier research"],
+            lifecycle_requests_created=[
+                AgentLifecycleRequest(
+                    action="create_agent",
+                    requested_by_type="user",
+                    requested_by_id="malicious-client-value",
+                    reason="Supplier sourcing needs a dedicated research worker.",
+                    proposed_agent=proposed_agent,
+                    proposed_soul=AgentSoul(
+                        agent_id=proposed_agent.id,
+                        identity="Ops sourcing researcher",
+                        mission="Research suppliers with traceable source evidence.",
+                        responsibilities=["Find supplier directories", "Record source evidence"],
+                        boundaries=["Do not contact suppliers without approved credentials"],
+                        escalation_rules=["Escalate missing credentials to the manager"],
+                        created_by=request.world_view.agent_id,
+                    ),
+                    requires_human_approval=False,
+                )
+            ],
+            summary="Requested creation of a supplier research worker.",
         )
 
 
@@ -2933,6 +2989,67 @@ def test_run_next_task_persists_agent_created_sub_tasks() -> None:
         parent_task.id,
         parent_task.id,
     ]
+
+
+def test_run_next_task_persists_agent_proposed_lifecycle_request() -> None:
+    state_client = FakeStateClient()
+    parent_task = TaskRecord(
+        id="task_lifecycle_parent",
+        project_id="project_sourcing",
+        title="Assess staffing for supplier sourcing",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=["Org changes are proposed, not applied directly."],
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_sourcing",
+            title="Supplier sourcing",
+            goal="Find reliable suppliers for a motor in China.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(parent_task)
+    runtime_client = LifecycleProposingAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(
+            {
+                "agent-ops-sourcing": LocalWorldView(
+                    agent_id="agent-ops-sourcing",
+                    role="Ops sourcing manager",
+                    division="ops",
+                )
+            }
+        ),
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_lifecycle_proposal"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    lifecycle_requests = payload["lifecycle_requests_created"]
+    assert [request["action"] for request in lifecycle_requests] == ["create_agent"]
+    assert lifecycle_requests[0]["requested_by_type"] == "agent"
+    assert lifecycle_requests[0]["requested_by_id"] == "agent-ops-sourcing"
+    assert lifecycle_requests[0]["status"] == "requested"
+    assert lifecycle_requests[0]["requires_human_approval"] is True
+    assert (
+        lifecycle_requests[0]["proposed_agent"]["id"]
+        == "agent-ops-sourcing-researcher"
+    )
+    assert state_client.agent_lifecycle_requests == [
+        AgentLifecycleRequest.model_validate(lifecycle_requests[0])
+    ]
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
 
 
 def test_run_next_task_executes_agent_requested_tool_call() -> None:

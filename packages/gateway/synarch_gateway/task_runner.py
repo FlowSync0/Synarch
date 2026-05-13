@@ -6,6 +6,7 @@ import httpx
 
 from synarch_models import (
     ActorType,
+    AgentLifecycleRequest,
     AgentResult,
     AgentTaskRequest,
     ApprovalStatus,
@@ -689,6 +690,11 @@ class TaskRunner:
             trace_id=trace_id,
             headers=headers,
         )
+        lifecycle_requests_created = self.persist_lifecycle_requests(
+            world_view=world_view,
+            agent_result=agent_result,
+            headers=headers,
+        )
         return TaskRunResult(
             trace_id=trace_id,
             task=recorded_task,
@@ -699,6 +705,7 @@ class TaskRunner:
             model_call_events=[started_event, completed_event],
             created_sub_tasks=created_sub_tasks,
             sub_task_events=sub_task_events,
+            lifecycle_requests_created=lifecycle_requests_created,
             memory_events=memory_events,
             tool_results=tool_results,
             cost_records=[cost_record],
@@ -880,6 +887,35 @@ class TaskRunner:
                 )
             )
         return created_tasks, events
+
+    def persist_lifecycle_requests(
+        self,
+        *,
+        world_view: LocalWorldView,
+        agent_result: AgentResult,
+        headers: dict[str, str],
+    ) -> list[AgentLifecycleRequest]:
+        created_requests: list[AgentLifecycleRequest] = []
+        for lifecycle_request in agent_result.lifecycle_requests_created:
+            normalized_request = lifecycle_request.model_copy(
+                update={
+                    "requested_by_type": ActorType.agent.value,
+                    "requested_by_id": world_view.agent_id,
+                    "status": ApprovalStatus.requested.value,
+                    "requires_human_approval": True,
+                }
+            )
+            try:
+                created_requests.append(
+                    self.state.create_agent_lifecycle_request(
+                        normalized_request,
+                        headers=headers,
+                    )
+                )
+            except StateServiceRequestError as error:
+                if error.status_code != 409:
+                    raise
+        return created_requests
 
 
 def tool_call_for_task(

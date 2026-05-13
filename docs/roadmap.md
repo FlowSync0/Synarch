@@ -192,6 +192,8 @@ Progress:
 - Done: gateway exposes project split application through the same public orchestration boundary.
 - Done: task runner persists `AgentResult.sub_tasks_created` as child tasks with dependency links
   and `task.created` events.
+- Done: task runner persists `AgentResult.lifecycle_requests_created` as approval-gated lifecycle
+  requests, forcing agent-proposed org changes through human approval.
 - Next: connect costs and service health to live APIs.
 
 Definition of done:

@@ -2126,6 +2126,10 @@ def task_result_payload(result: AgentResult) -> dict[str, Any]:
         "sub_tasks_created": [
             task_draft.model_dump(mode="json") for task_draft in result.sub_tasks_created
         ],
+        "lifecycle_requests_created": [
+            lifecycle_request.model_dump(mode="json")
+            for lifecycle_request in result.lifecycle_requests_created
+        ],
         "events_emitted": [event.model_dump(mode="json") for event in result.events_emitted],
         "memory_candidates": [
             memory_item.model_dump(mode="json") for memory_item in result.memory_candidates

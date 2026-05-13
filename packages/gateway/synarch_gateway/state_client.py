@@ -5,6 +5,7 @@ from typing import Any, Protocol
 import httpx
 
 from synarch_models import (
+    AgentLifecycleRequest,
     AgentProjectAssignment,
     AgentResult,
     AuditLogRecord,
@@ -193,6 +194,13 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> AuditLogRecord: ...
+
+    def create_agent_lifecycle_request(
+        self,
+        lifecycle_request: AgentLifecycleRequest,
+        *,
+        headers: dict[str, str],
+    ) -> AgentLifecycleRequest: ...
 
     def create_credential_access_request(
         self,
@@ -524,6 +532,19 @@ class HttpStateClient:
     ) -> AuditLogRecord:
         response = self._post("/audit-logs", audit.model_dump(mode="json"), headers)
         return AuditLogRecord.model_validate(response.json())
+
+    def create_agent_lifecycle_request(
+        self,
+        lifecycle_request: AgentLifecycleRequest,
+        *,
+        headers: dict[str, str],
+    ) -> AgentLifecycleRequest:
+        response = self._post(
+            "/agent-lifecycle-requests",
+            lifecycle_request.model_dump(mode="json"),
+            headers,
+        )
+        return AgentLifecycleRequest.model_validate(response.json())
 
     def create_credential_access_request(
         self,

@@ -9,8 +9,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
+    ActorType,
+    AgentLifecycleRequest,
     AgentResult,
     AgentTaskRequest,
+    ApprovalStatus,
     EventRecord,
     EventType,
     HealthResponse,
@@ -96,7 +99,48 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
 
     provider_id = request.provider_id or settings.openrouter_provider_id
     model_id = request.model_id or settings.openrouter_model_id
-    payload = openrouter_payload(request, model_id)
+    messages = agent_messages(request)
+    body = post_openrouter_chat_completion(
+        api_key=api_key,
+        payload=openrouter_payload(request, model_id, messages=messages),
+    )
+    usage = model_usage_from_response(body, provider_id, model_id)
+    content = content_from_openrouter_body(body)
+    result = agent_result_from_model_content(
+        request=request,
+        content=content,
+        usage=usage,
+        mode="openrouter",
+        provider_id=provider_id,
+        model_id=model_id,
+    )
+    if not lifecycle_repair_required(request, result):
+        return result
+
+    repair_body = post_openrouter_chat_completion(
+        api_key=api_key,
+        payload=openrouter_payload(
+            request,
+            model_id,
+            messages=lifecycle_repair_messages(request, messages, content),
+        ),
+    )
+    repair_usage = model_usage_from_response(repair_body, provider_id, model_id)
+    return agent_result_from_model_content(
+        request=request,
+        content=content_from_openrouter_body(repair_body),
+        usage=combine_model_usage(usage, repair_usage),
+        mode="openrouter",
+        provider_id=provider_id,
+        model_id=model_id,
+    )
+
+
+def post_openrouter_chat_completion(
+    *,
+    api_key: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     try:
         response = httpx.post(
             f"{settings.openrouter_base_url.rstrip('/')}/chat/completions",
@@ -119,27 +163,41 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
     body = response.json()
     if not isinstance(body, dict):
         raise HTTPException(status_code=502, detail="OpenRouter returned an invalid response")
-    raw_choices = body.get("choices")
-    choices = raw_choices if isinstance(raw_choices, list) and raw_choices else [{}]
-    first_choice = choices[0] if isinstance(choices[0], dict) else {}
-    message = first_choice.get("message", {})
-    if not isinstance(message, dict):
-        message = {}
-    usage = model_usage_from_response(body, provider_id, model_id)
-    content = message.get("content") or ""
-    if not isinstance(content, str):
-        content = ""
-    return agent_result_from_model_content(
-        request=request,
-        content=content,
-        usage=usage,
-        mode="openrouter",
-        provider_id=provider_id,
-        model_id=model_id,
-    )
+    return body
 
 
 def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
+    messages = agent_messages(request)
+    completion = post_model_gateway_completion(request, messages)
+    result = agent_result_from_model_content(
+        request=request,
+        content=completion.content,
+        usage=completion.usage,
+        mode="model-gateway",
+        provider_id=completion.provider_id,
+        model_id=completion.model_id,
+    )
+    if not lifecycle_repair_required(request, result):
+        return result
+
+    repair_completion = post_model_gateway_completion(
+        request,
+        lifecycle_repair_messages(request, messages, completion.content),
+    )
+    return agent_result_from_model_content(
+        request=request,
+        content=repair_completion.content,
+        usage=combine_model_usage(completion.usage, repair_completion.usage),
+        mode="model-gateway",
+        provider_id=repair_completion.provider_id,
+        model_id=repair_completion.model_id,
+    )
+
+
+def post_model_gateway_completion(
+    request: AgentTaskRequest,
+    messages: list[ModelMessage],
+) -> ModelCompletionResponse:
     completion_request = ModelCompletionRequest(
         agent_id=request.world_view.agent_id,
         purpose="agent_task",
@@ -148,7 +206,7 @@ def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
         model_policy_id=model_policy_id_from_world_view(request),
         task_id=request.task.id,
         project_id=request.task.project_id,
-        messages=agent_messages(request),
+        messages=messages,
         max_output_tokens=request.max_output_tokens,
         metadata={"runtime": "agent-runtime"},
     )
@@ -170,15 +228,7 @@ def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
             },
         )
 
-    completion = ModelCompletionResponse.model_validate(response.json())
-    return agent_result_from_model_content(
-        request=request,
-        content=completion.content,
-        usage=completion.usage,
-        mode="model-gateway",
-        provider_id=completion.provider_id,
-        model_id=completion.model_id,
-    )
+    return ModelCompletionResponse.model_validate(response.json())
 
 
 def agent_result_from_model_content(
@@ -210,6 +260,7 @@ def agent_result_from_model_content(
         status=status,
         actions_taken=parsed_actions(parsed),
         sub_tasks_created=parsed_sub_tasks(parsed, request),
+        lifecycle_requests_created=parsed_lifecycle_requests(parsed, request),
         tool_calls_requested=parsed_tool_calls(parsed, request),
         events_emitted=[event],
         memory_candidates=parsed_memory_candidates(parsed, request),
@@ -225,7 +276,7 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
             content=(
                 "You are a Synarch AI employee. Return only valid JSON with keys "
                 "status, summary, actions_taken, sub_tasks_created, and "
-                "memory_candidates, tool_calls_requested. "
+                "memory_candidates, tool_calls_requested, lifecycle_requests_created. "
                 "status must be one of completed, needs_review, blocked, failed. "
                 "sub_tasks_created must be a list of small debuggable task objects "
                 "with title, description, assigned_agent_id, depends_on, "
@@ -235,6 +286,12 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "when it is in world_view.permissions.allowed_tools and you need "
                 "external evidence before finalizing. If tool_results are present, "
                 "use them and return a final answer with no new tool calls. "
+                "lifecycle_requests_created must be empty unless an org change is "
+                "required; proposed org changes stay requested and require human approval. "
+                "For create_agent, include proposed_agent and, when useful, proposed_soul. "
+                "For update_agent or deactivate_agent, include target_agent_id. "
+                "Do not claim a lifecycle request was created in summary or actions_taken "
+                "unless the lifecycle_requests_created array contains the request object. "
                 "For web.fetch, arguments must include url and may include max_bytes. "
                 "Keep the answer operational and auditable."
             ),
@@ -270,10 +327,15 @@ def model_policy_id_from_world_view(request: AgentTaskRequest) -> str | None:
     return None
 
 
-def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, Any]:
+def openrouter_payload(
+    request: AgentTaskRequest,
+    model_id: str,
+    *,
+    messages: list[ModelMessage],
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_id,
-        "messages": [message.model_dump(mode="json") for message in agent_messages(request)],
+        "messages": [message.model_dump(mode="json") for message in messages],
         "max_tokens": request.max_output_tokens or settings.openrouter_max_output_tokens,
         "temperature": 0.2,
     }
@@ -287,6 +349,78 @@ def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, An
     if reasoning:
         payload["reasoning"] = reasoning
     return payload
+
+
+def content_from_openrouter_body(body: dict[str, Any]) -> str:
+    raw_choices = body.get("choices")
+    choices = raw_choices if isinstance(raw_choices, list) and raw_choices else [{}]
+    first_choice = choices[0] if isinstance(choices[0], dict) else {}
+    message = first_choice.get("message", {})
+    if not isinstance(message, dict):
+        message = {}
+    content = message.get("content") or ""
+    if not isinstance(content, str):
+        return ""
+    return content
+
+
+def lifecycle_repair_required(
+    request: AgentTaskRequest,
+    result: AgentResult,
+) -> bool:
+    if result.lifecycle_requests_created:
+        return False
+    return task_requests_lifecycle_change(request)
+
+
+def task_requests_lifecycle_change(request: AgentTaskRequest) -> bool:
+    text = " ".join(
+        [
+            request.task.title,
+            request.task.description,
+            " ".join(request.task.acceptance_criteria),
+        ]
+    ).lower()
+    if "lifecycle_requests_created" in text:
+        return True
+    if "lifecycle" not in text:
+        return False
+    return any(
+        action in text
+        for action in ("create_agent", "update_agent", "deactivate_agent")
+    )
+
+
+def lifecycle_repair_messages(
+    request: AgentTaskRequest,
+    messages: list[ModelMessage],
+    previous_content: str,
+) -> list[ModelMessage]:
+    return [
+        *messages,
+        ModelMessage(role="assistant", content=previous_content),
+        ModelMessage(
+            role="user",
+            content=(
+                "Your previous JSON failed validation: the task requires a lifecycle "
+                "proposal, but lifecycle_requests_created was empty or missing. "
+                "Return corrected JSON only. Include exactly one object in "
+                "lifecycle_requests_created with action, reason, proposed_agent, "
+                "and proposed_soul when action is create_agent."
+            ),
+        ),
+    ]
+
+
+def combine_model_usage(first: ModelUsage, second: ModelUsage) -> ModelUsage:
+    return ModelUsage(
+        provider_id=second.provider_id,
+        model_id=second.model_id,
+        input_tokens=first.input_tokens + second.input_tokens,
+        output_tokens=first.output_tokens + second.output_tokens,
+        total_cost=round(first.total_cost + second.total_cost, 8),
+        currency=second.currency,
+    )
 
 
 def parse_agent_json(content: str) -> dict[str, Any]:
@@ -394,6 +528,78 @@ def parsed_tool_calls(
             )
         )
     return tool_calls
+
+
+def parsed_lifecycle_requests(
+    parsed: dict[str, Any],
+    request: AgentTaskRequest,
+) -> list[AgentLifecycleRequest]:
+    raw_requests = raw_lifecycle_requests(parsed)
+    if isinstance(raw_requests, dict):
+        raw_requests = [raw_requests]
+    if not isinstance(raw_requests, list):
+        return []
+
+    lifecycle_requests: list[AgentLifecycleRequest] = []
+    for raw_request in raw_requests:
+        if not isinstance(raw_request, dict):
+            continue
+        normalized = normalized_lifecycle_request(raw_request, request)
+        try:
+            lifecycle_requests.append(AgentLifecycleRequest.model_validate(normalized))
+        except ValueError:
+            continue
+    return lifecycle_requests
+
+
+def raw_lifecycle_requests(parsed: dict[str, Any]) -> Any:
+    for key in (
+        "lifecycle_requests_created",
+        "lifecycle_request_created",
+        "lifecycle_requests",
+        "agent_lifecycle_requests",
+        "agent_lifecycle_request",
+    ):
+        raw_requests = parsed.get(key)
+        if raw_requests:
+            return raw_requests
+    return []
+
+
+def normalized_lifecycle_request(
+    raw_request: dict[str, Any],
+    request: AgentTaskRequest,
+) -> dict[str, Any]:
+    normalized = dict(raw_request)
+    normalized["requested_by_type"] = ActorType.agent.value
+    normalized["requested_by_id"] = request.world_view.agent_id
+    normalized["status"] = ApprovalStatus.requested.value
+    normalized["requires_human_approval"] = True
+    normalized["reason"] = string_value(normalized.get("reason")).strip()
+
+    proposed_agent = normalized.get("proposed_agent")
+    if isinstance(proposed_agent, dict):
+        proposed_agent = {
+            **proposed_agent,
+            "created_by": proposed_agent.get("created_by") or request.world_view.agent_id,
+        }
+        normalized["proposed_agent"] = proposed_agent
+
+    proposed_soul = normalized.get("proposed_soul")
+    if isinstance(proposed_soul, dict):
+        proposed_soul = {
+            **proposed_soul,
+            "created_by": proposed_soul.get("created_by") or request.world_view.agent_id,
+        }
+        if not proposed_soul.get("agent_id") and isinstance(proposed_agent, dict):
+            proposed_soul["agent_id"] = proposed_agent.get("id")
+        if not proposed_soul.get("agent_id") and isinstance(
+            normalized.get("target_agent_id"), str
+        ):
+            proposed_soul["agent_id"] = normalized["target_agent_id"]
+        normalized["proposed_soul"] = proposed_soul
+
+    return normalized
 
 
 def parsed_memory_candidates(

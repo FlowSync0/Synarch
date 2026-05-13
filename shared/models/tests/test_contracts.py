@@ -1,5 +1,8 @@
 from synarch_models import (
+    AgentDefinition,
+    AgentLifecycleRequest,
     AgentResult,
+    AgentSoul,
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
@@ -125,6 +128,27 @@ def test_agent_result_is_serializable() -> None:
         task_id=task.id,
         status=TaskStatus.completed,
         events_emitted=[event],
+        lifecycle_requests_created=[
+            AgentLifecycleRequest(
+                action="create_agent",
+                requested_by_type="agent",
+                requested_by_id="agent-dev",
+                reason="Create a specialist for a bounded workstream.",
+                proposed_agent=AgentDefinition(
+                    id="agent-specialist",
+                    name="IA Specialist",
+                    role="Bounded specialist",
+                    division="dev",
+                    manager_id="agent-dev",
+                ),
+                proposed_soul=AgentSoul(
+                    agent_id="agent-specialist",
+                    identity="Bounded specialist",
+                    mission="Handle one narrow workstream with traceable output.",
+                    created_by="agent-dev",
+                ),
+            )
+        ],
         tool_calls_requested=[
             ToolCallRequest(
                 agent_id="agent-dev",
@@ -147,6 +171,11 @@ def test_agent_result_is_serializable() -> None:
 
     assert payload["status"] == "completed"
     assert payload["events_emitted"][0]["type"] == "task.completed"
+    assert payload["lifecycle_requests_created"][0]["action"] == "create_agent"
+    assert (
+        payload["lifecycle_requests_created"][0]["proposed_soul"]["agent_id"]
+        == "agent-specialist"
+    )
     assert payload["tool_calls_requested"][0]["tool_name"] == "event.emit"
     assert payload["model_usage"]["model_id"] == "deepseek/deepseek-v4-flash"
 

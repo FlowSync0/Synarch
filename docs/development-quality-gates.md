@@ -63,6 +63,7 @@ GoalEnvelope
   -> Memory Context Assembly
   -> Agent Runtime AgentResult
   -> Task Runner child TaskRecord persistence when an agent proposes sub_tasks_created
+  -> Task Runner approval-gated lifecycle request persistence when an agent proposes org changes
   -> Optional bounded ready-task batch through Gateway /tasks/run-ready
   -> Atomic task claim through state-service start endpoint
   -> Expired task lease recovery before each bounded ready-task batch

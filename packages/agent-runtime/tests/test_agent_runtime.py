@@ -97,6 +97,21 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
                                 '"service_id":"connector-supplier-web",'
                                 '"reason":"Fetch source evidence.",'
                                 '"arguments":{"url":"https://example.com"}}],'
+                                '"lifecycle_request_created":{'
+                                '"action":"create_agent",'
+                                '"requested_by_type":"user",'
+                                '"requested_by_id":"wrong-actor",'
+                                '"reason":"Need a bounded sourcing researcher.",'
+                                '"requires_human_approval":false,'
+                                '"proposed_agent":{'
+                                '"id":"agent-sourcing-researcher",'
+                                '"name":"IA Sourcing Researcher",'
+                                '"role":"Supplier research specialist",'
+                                '"division":"ops",'
+                                '"manager_id":"agent-dev"},'
+                                '"proposed_soul":{'
+                                '"identity":"Sourcing researcher",'
+                                '"mission":"Find suppliers with source evidence."}},'
                                 '"memory_candidates":["Remember supplier MOQ constraint."]}'
                             )
                         }
@@ -148,6 +163,21 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
     assert payload["tool_calls_requested"][0]["tool_name"] == "web.fetch"
     assert payload["tool_calls_requested"][0]["service_id"] == "connector-supplier-web"
     assert payload["tool_calls_requested"][0]["arguments"] == {"url": "https://example.com"}
+    assert payload["lifecycle_requests_created"][0]["requested_by_type"] == "agent"
+    assert payload["lifecycle_requests_created"][0]["requested_by_id"] == "agent-dev"
+    assert payload["lifecycle_requests_created"][0]["requires_human_approval"] is True
+    assert (
+        payload["lifecycle_requests_created"][0]["proposed_agent"]["created_by"]
+        == "agent-dev"
+    )
+    assert (
+        payload["lifecycle_requests_created"][0]["proposed_soul"]["agent_id"]
+        == "agent-sourcing-researcher"
+    )
+    assert (
+        payload["lifecycle_requests_created"][0]["proposed_soul"]["created_by"]
+        == "agent-dev"
+    )
     assert payload["memory_candidates"][0]["content"] == "Remember supplier MOQ constraint."
     assert payload["model_usage"] == {
         "provider_id": "provider-openrouter",
@@ -157,6 +187,115 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
         "total_cost": 0.00002,
         "currency": "USD",
     }
+
+
+def test_runtime_repairs_missing_lifecycle_request_from_openrouter(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(json)
+        messages = json["messages"]
+        assert isinstance(messages, list)
+        if len(calls) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    '{"status":"completed",'
+                                    '"summary":"Lifecycle request created.",'
+                                    '"actions_taken":["Mentioned lifecycle request"],'
+                                    '"sub_tasks_created":[],'
+                                    '"tool_calls_requested":[],'
+                                    '"memory_candidates":[]}'
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 80, "completion_tokens": 20},
+                },
+                request=httpx.Request("POST", url),
+            )
+        assert len(messages) == 4
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"status":"completed",'
+                                '"summary":"Corrected lifecycle request.",'
+                                '"actions_taken":["Returned typed lifecycle request"],'
+                                '"sub_tasks_created":[],'
+                                '"tool_calls_requested":[],'
+                                '"lifecycle_requests_created":[{'
+                                '"action":"create_agent",'
+                                '"requested_by_type":"user",'
+                                '"requested_by_id":"wrong-actor",'
+                                '"reason":"Need a sourcing researcher.",'
+                                '"proposed_agent":{'
+                                '"id":"agent-sourcing-researcher",'
+                                '"name":"IA Sourcing Researcher",'
+                                '"role":"Supplier research specialist",'
+                                '"division":"ops",'
+                                '"manager_id":"agent-ops-sourcing"},'
+                                '"proposed_soul":{'
+                                '"identity":"Sourcing researcher",'
+                                '"mission":"Find suppliers with source evidence."}}],'
+                                '"memory_candidates":[]}'
+                            )
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 90, "completion_tokens": 40},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_lifecycle_repair",
+                "project_id": "project_demo",
+                "title": "Propose lifecycle worker",
+                "description": "Use lifecycle_requests_created to create_agent.",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "acceptance_criteria": ["A lifecycle request is returned as typed JSON."],
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(calls) == 2
+    assert payload["summary"] == "Corrected lifecycle request."
+    assert payload["lifecycle_requests_created"][0]["requested_by_type"] == "agent"
+    assert payload["lifecycle_requests_created"][0]["requested_by_id"] == "agent-ops-sourcing"
+    assert payload["model_usage"]["input_tokens"] == 170
+    assert payload["model_usage"]["output_tokens"] == 60
 
 
 def test_runtime_can_call_model_gateway_with_fake_response(

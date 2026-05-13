@@ -822,6 +822,7 @@ class AgentResult(SynarchModel):
     status: TaskStatus
     actions_taken: list[str] = Field(default_factory=list)
     sub_tasks_created: list[TaskDraft] = Field(default_factory=list)
+    lifecycle_requests_created: list[AgentLifecycleRequest] = Field(default_factory=list)
     events_emitted: list[EventRecord] = Field(default_factory=list)
     memory_candidates: list[MemoryItem] = Field(default_factory=list)
     tool_calls_requested: list[ToolCallRequest] = Field(default_factory=list)
@@ -840,6 +841,7 @@ class TaskRunResult(SynarchModel):
     model_call_events: list[EventRecord] = Field(default_factory=list)
     created_sub_tasks: list[TaskRecord] = Field(default_factory=list)
     sub_task_events: list[EventRecord] = Field(default_factory=list)
+    lifecycle_requests_created: list[AgentLifecycleRequest] = Field(default_factory=list)
     memory_events: list[EventRecord] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     cost_records: list[CostRecord] = Field(default_factory=list)
