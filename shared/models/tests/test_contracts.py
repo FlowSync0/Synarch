@@ -66,6 +66,17 @@ def test_memory_compaction_plan_request_defaults() -> None:
     assert request.max_scopes == 20
 
 
+def test_memory_context_can_carry_query_embedding() -> None:
+    context = MemoryContext(
+        agent_id="agent-dev",
+        project_id="project_demo",
+        query_embedding=[0.0, 1.0],
+    )
+
+    assert context.query_embedding == [0.0, 1.0]
+    assert context.model_dump(mode="json")["query_embedding"] == [0.0, 1.0]
+
+
 def test_agent_result_is_serializable() -> None:
     task = TaskRecord(
         project_id="project_demo",

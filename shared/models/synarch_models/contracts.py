@@ -468,6 +468,7 @@ class MemoryContext(SynarchModel):
     project_id: str | None = None
     token_budget: int = 4000
     allowed_scopes: list[str] = Field(default_factory=list)
+    query_embedding: list[float] | None = None
     items: list[MemoryItem] = Field(default_factory=list)
     summary: str = ""
     tokens_used: int = 0

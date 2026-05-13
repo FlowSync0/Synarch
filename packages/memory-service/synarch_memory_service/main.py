@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Protocol
 
 import psycopg
@@ -28,6 +30,7 @@ from synarch_models import (
 app = FastAPI(title="Synarch Memory Service", version="0.1.0")
 
 GLOBAL_SCOPE = "global"
+EMBEDDING_DIMENSIONS = 1536
 
 
 class Settings(BaseSettings):
@@ -186,6 +189,7 @@ def reset_memory_items() -> None:
 
 @app.post("/memory-items", response_model=MemoryItem, status_code=201)
 def create_memory_item(item: MemoryItem) -> MemoryItem:
+    validate_embedding_dimensions(item.embedding, label="Memory embedding")
     return STORE.create(item)
 
 
@@ -338,11 +342,12 @@ def create_compaction_result(
 
 @app.post("/context/assemble", response_model=MemoryContext)
 def assemble_context(request: MemoryContext) -> MemoryContext:
+    validate_embedding_dimensions(request.query_embedding, label="Query embedding")
     selected: list[MemoryItem] = []
     tokens_used = 0
     for item in sorted(
         (item for item in STORE.list_items() if is_visible(item, request)),
-        key=lambda item: (scope_rank(item, request), item.created_at),
+        key=lambda item: memory_rank(item, request),
     ):
         item_tokens = estimated_tokens(item.content)
         if tokens_used + item_tokens > request.token_budget:
@@ -350,9 +355,11 @@ def assemble_context(request: MemoryContext) -> MemoryContext:
         selected.append(item)
         tokens_used += item_tokens
 
+    ranking = "semantic vector ranking" if request.query_embedding is not None else "scope ranking"
     summary = (
         "Deterministic context assembly selected "
-        f"{len(selected)} memory items using {tokens_used}/{request.token_budget} estimated tokens."
+        f"{len(selected)} memory items using {tokens_used}/{request.token_budget} "
+        f"estimated tokens with {ranking}."
     )
     return request.model_copy(
         update={"items": selected, "summary": summary, "tokens_used": tokens_used}
@@ -458,6 +465,41 @@ def scope_rank(item: MemoryItem, request: MemoryContext) -> int:
     if item.scope == GLOBAL_SCOPE:
         return 3
     return 4
+
+
+def memory_rank(item: MemoryItem, request: MemoryContext) -> tuple[int, float, int, datetime, str]:
+    similarity = cosine_similarity(request.query_embedding, item.embedding)
+    if similarity is None:
+        return (1, 0.0, scope_rank(item, request), item.created_at, item.id)
+    return (0, -similarity, scope_rank(item, request), item.created_at, item.id)
+
+
+def cosine_similarity(
+    query_embedding: list[float] | None,
+    item_embedding: list[float] | None,
+) -> float | None:
+    if query_embedding is None or item_embedding is None:
+        return None
+    if len(query_embedding) == 0 or len(query_embedding) != len(item_embedding):
+        return None
+
+    dot_product = sum(
+        query * item
+        for query, item in zip(query_embedding, item_embedding, strict=True)
+    )
+    query_norm = math.sqrt(sum(value * value for value in query_embedding))
+    item_norm = math.sqrt(sum(value * value for value in item_embedding))
+    if query_norm == 0.0 or item_norm == 0.0:
+        return None
+    return dot_product / (query_norm * item_norm)
+
+
+def validate_embedding_dimensions(embedding: list[float] | None, *, label: str) -> None:
+    if embedding is not None and len(embedding) != EMBEDDING_DIMENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} must have {EMBEDDING_DIMENSIONS} dimensions",
+        )
 
 
 def estimated_tokens(content: str) -> int:

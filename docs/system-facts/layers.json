@@ -77,9 +77,12 @@
     "name": "Memory & Context Layer",
     "status": "partial",
     "exists_now": [
-      "PostgreSQL-backed memory_items",
-      "Scoped context assembly",
-      "Deterministic ranking and token budget enforcement",
+    "PostgreSQL-backed memory_items",
+    "Scoped context assembly",
+    "Optional query_embedding cosine ranking inside scoped context assembly",
+    "Memory-service validates embeddings as 1536-dimensional vectors before storage or vector ranking",
+    "scripts/live_memory_vector_context_e2e.sh verifies vector ranking and bad embedding rejection",
+    "Deterministic ranking and token budget enforcement",
       "Gateway persists agent memory candidates as proposed and emits memory.candidate_created",
       "Proposed and rejected memories are excluded from context assembly",
       "Gateway and dashboard can approve or reject memory candidates",
@@ -97,8 +100,8 @@
     "memory_compaction_worker can plan candidate scopes before executing compact-if-needed",
     "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
   ],
-  "main_gap": "No semantic/vector retrieval, graph retrieval, or hierarchical context database yet.",
-  "next_validation": "Add semantic/vector retrieval behind the existing scoped context contract and verify provenance remains explicit.",
+  "main_gap": "No embedding generation/provider, graph retrieval, or hierarchical context database yet.",
+  "next_validation": "Wire task-level query embeddings into context assembly and verify provenance remains explicit.",
     "source": "docs/roadmap.md"
   },
   {

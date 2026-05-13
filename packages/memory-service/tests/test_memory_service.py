@@ -9,6 +9,21 @@ def clean_memory_service() -> None:
     reset_memory_items()
 
 
+def test_create_memory_item_rejects_wrong_embedding_dimension() -> None:
+    response = TestClient(app).post(
+        "/memory-items",
+        json={
+            "id": "memory-invalid-embedding",
+            "scope": "global",
+            "content": "Invalid vector dimensions should be rejected before storage.",
+            "embedding": [1.0, 0.0],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Memory embedding must have 1536 dimensions"
+
+
 def test_context_assembly_filters_by_scope_agent_and_project() -> None:
     client = TestClient(app)
     project_id = "project_invoice"
@@ -112,6 +127,81 @@ def test_context_assembly_enforces_token_budget() -> None:
     context = context_response.json()
     assert [item["id"] for item in context["items"]] == ["memory-short"]
     assert context["tokens_used"] <= 3
+
+
+def test_context_assembly_ranks_by_query_embedding_after_scope_filters() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-project-vector-miss",
+            "scope": "project:project_semantic",
+            "project_id": "project_semantic",
+            "content": "This fact is visible but points to a different vector direction.",
+            "embedding": embedding_axis(0),
+        },
+        {
+            "id": "memory-project-vector-match",
+            "scope": "project:project_semantic",
+            "project_id": "project_semantic",
+            "content": "This fact should rank first for the query vector.",
+            "embedding": embedding_axis(1),
+        },
+        {
+            "id": "memory-global-no-vector",
+            "scope": "global",
+            "content": "This fallback fact has no embedding.",
+        },
+        {
+            "id": "memory-other-project-vector-match",
+            "scope": "project:project_other",
+            "project_id": "project_other",
+            "content": "This fact matches the vector but belongs to another project.",
+            "embedding": embedding_axis(1),
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "project_id": "project_semantic",
+            "token_budget": 200,
+            "allowed_scopes": ["project:project_semantic", "global"],
+            "query_embedding": embedding_axis(1),
+        },
+    )
+
+    assert context_response.status_code == 200
+    context = context_response.json()
+    assert [item["id"] for item in context["items"]] == [
+        "memory-project-vector-match",
+        "memory-project-vector-miss",
+        "memory-global-no-vector",
+    ]
+    assert "semantic vector ranking" in context["summary"]
+
+
+def test_context_assembly_rejects_wrong_query_embedding_dimension() -> None:
+    response = TestClient(app).post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "token_budget": 200,
+            "allowed_scopes": ["global"],
+            "query_embedding": [0.0, 1.0],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Query embedding must have 1536 dimensions"
+
+
+def embedding_axis(index: int) -> list[float]:
+    embedding = [0.0] * 1536
+    embedding[index] = 1.0
+    return embedding
 
 
 def test_list_memory_items_filters_by_project_and_status() -> None:

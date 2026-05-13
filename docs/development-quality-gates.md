@@ -30,7 +30,7 @@ The README's nine layers remain useful as an architecture map. For implementatio
 | 3 | Control plane | Agent registry, permissions, and `LocalWorldView` are deterministic | control-plane tests |
 | 4 | Goal to project slice | User goal becomes project, tasks, routing decision | cross-service integration test |
 | 5 | Agent runtime stub | One deterministic division agent returns `AgentResult` | agent-runtime test |
-| 6 | Memory baseline | Context assembly respects agent/project scope and token budget | memory integration test |
+| 6 | Memory baseline | Context assembly respects agent/project scope, token budget, and optional vector ranking | memory integration test |
 | 7 | Event backbone | NATS publishes domain events and timeline can replay them | event integration test |
 | 8 | Observability | Every request has trace ID across gateway, state, memory, runtime | trace assertion test |
 | 9 | First real AI workflow | Finance invoice flow extracts JSON and flags exceptions | eval suite |
@@ -191,6 +191,17 @@ Run the active/inactive workspace scope check with:
 
 ```bash
 PYTHON=./.venv/bin/python scripts/live_memory_compaction_scope_e2e.sh
+```
+
+The memory-service also supports optional vector ranking inside the same scoped context contract:
+send `query_embedding` on `/context/assemble` and only already-visible memory items are re-ranked
+by cosine similarity. Without `query_embedding`, context assembly uses the deterministic scope/time
+ranking.
+
+Run the live vector-ranking check with:
+
+```bash
+scripts/live_memory_vector_context_e2e.sh
 ```
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
