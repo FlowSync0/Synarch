@@ -80,8 +80,12 @@
     "PostgreSQL-backed memory_items",
     "Scoped context assembly",
     "Optional query_embedding cosine ranking inside scoped context assembly",
+    "Gateway can generate task query embeddings through OpenRouter before context assembly",
+    "Gateway embeds new memory candidates before persisting them when the embedding provider is configured",
+    "Gateway strips query and item embeddings before sending memory_context to the chat runtime",
     "Memory-service validates embeddings as 1536-dimensional vectors before storage or vector ranking",
     "scripts/live_memory_vector_context_e2e.sh verifies vector ranking and bad embedding rejection",
+    "scripts/live_openrouter_task_embedding_e2e.sh verifies real OpenRouter task embeddings, semantic memory order, and embedded memory candidates",
     "Deterministic ranking and token budget enforcement",
       "Gateway persists agent memory candidates as proposed and emits memory.candidate_created",
       "Proposed and rejected memories are excluded from context assembly",
@@ -100,8 +104,8 @@
     "memory_compaction_worker can plan candidate scopes before executing compact-if-needed",
     "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
   ],
-  "main_gap": "No embedding generation/provider, graph retrieval, or hierarchical context database yet.",
-  "next_validation": "Wire task-level query embeddings into context assembly and verify provenance remains explicit.",
+  "main_gap": "No background embedding backfill, graph retrieval, or hierarchical context database yet.",
+  "next_validation": "Add a bounded backfill worker for approved memories that lack embeddings.",
     "source": "docs/roadmap.md"
   },
   {

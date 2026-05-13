@@ -204,6 +204,18 @@ Run the live vector-ranking check with:
 scripts/live_memory_vector_context_e2e.sh
 ```
 
+When `TASK_RUNNER_EMBEDDING_PROVIDER_ID=provider-openrouter` and
+`TASK_RUNNER_EMBEDDING_MODEL_ID=openai/text-embedding-3-small` are set, Gateway generates a real
+OpenRouter query embedding before `/context/assemble` and embeds new memory candidates before
+persistence. It strips query and item embeddings before sending `memory_context` to the chat runtime
+so vector retrieval does not inflate prompt tokens.
+
+Run the live task-embedding check with:
+
+```bash
+scripts/live_openrouter_task_embedding_e2e.sh
+```
+
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
 

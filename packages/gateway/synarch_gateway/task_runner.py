@@ -98,6 +98,10 @@ class AgentRuntimeClient(Protocol):
     def run_task(self, request: AgentTaskRequest) -> AgentResult: ...
 
 
+class QueryEmbeddingProvider(Protocol):
+    def embed_text(self, text: str) -> list[float]: ...
+
+
 class ToolRunner(Protocol):
     def call_tool(
         self,
@@ -235,6 +239,56 @@ class HttpAgentRuntimeClient:
 
 
 @dataclass(frozen=True)
+class OpenRouterQueryEmbeddingProvider:
+    api_key: str
+    model_id: str
+    provider_id: str = "provider-openrouter"
+    base_url: str = "https://openrouter.ai/api/v1"
+    timeout_seconds: float = 20.0
+    expected_dimensions: int = 1536
+
+    def embed_text(self, text: str) -> list[float]:
+        try:
+            response = httpx.post(
+                f"{self.base_url.rstrip('/')}/embeddings",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model_id,
+                    "input": text,
+                    "encoding_format": "float",
+                },
+                timeout=self.timeout_seconds,
+            )
+        except httpx.HTTPError as error:
+            raise TaskRunnerUnavailable("Query embedding request failed") from error
+
+        if response.status_code >= 400:
+            raise TaskRunnerUnavailable(
+                f"Query embedding provider returned {response.status_code}"
+            )
+
+        body = response.json()
+        raw_data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(raw_data, list) or not raw_data:
+            raise TaskRunnerUnavailable("Query embedding provider returned no data")
+        first_item = raw_data[0]
+        raw_embedding = first_item.get("embedding") if isinstance(first_item, dict) else None
+        if not isinstance(raw_embedding, list):
+            raise TaskRunnerUnavailable("Query embedding provider returned no embedding")
+
+        embedding = [float(value) for value in raw_embedding]
+        if len(embedding) != self.expected_dimensions:
+            raise TaskRunnerUnavailable(
+                "Query embedding provider returned "
+                f"{len(embedding)} dimensions, expected {self.expected_dimensions}"
+            )
+        return embedding
+
+
+@dataclass(frozen=True)
 class TaskRunner:
     state: StateClient
     control_plane: ControlPlaneClient
@@ -247,6 +301,7 @@ class TaskRunner:
     output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
     tool_runner: ToolRunner | None = None
     tool_readiness: ToolReadinessChecker | None = None
+    query_embedding_provider: QueryEmbeddingProvider | None = None
     max_tool_rounds: int = 1
 
     def run_next(self, *, trace_id: str, headers: dict[str, str]) -> TaskRunResult:
@@ -418,14 +473,18 @@ class TaskRunner:
             raise
         project = self.state.get_project(started_task.project_id)
         world_view = self.control_plane.get_world_view(started_task.assigned_agent_id)
+        query_embedding = self.query_embedding_for_task(started_task, project)
         memory_context = self.memory.assemble_context(
             MemoryContext(
                 agent_id=started_task.assigned_agent_id,
                 project_id=started_task.project_id,
                 token_budget=self.memory_token_budget,
                 allowed_scopes=memory_scopes_for_run(started_task, world_view),
+                query_embedding=query_embedding,
             )
         )
+        query_embedding_dimensions = len(query_embedding) if query_embedding is not None else 0
+        memory_context = memory_context_without_embeddings(memory_context)
         started_event = self.state.create_event(
             model_call_started_event(
                 task=started_task,
@@ -434,6 +493,8 @@ class TaskRunner:
                 provider_id=self.provider_id,
                 model_id=self.model_id,
                 trace_id=trace_id,
+                memory_query_embedding_used=query_embedding is not None,
+                memory_query_embedding_dimensions=query_embedding_dimensions,
             ),
             headers=headers,
         )
@@ -550,6 +611,18 @@ class TaskRunner:
             cost_records=[cost_record],
         )
 
+    def query_embedding_for_task(
+        self,
+        task: TaskRecord,
+        project: ProjectRecord | None,
+    ) -> list[float] | None:
+        if self.query_embedding_provider is None:
+            return None
+        try:
+            return self.query_embedding_provider.embed_text(memory_query_text(task, project))
+        except TaskRunnerUnavailable:
+            return None
+
     def record_task_start_rejection(
         self,
         *,
@@ -657,7 +730,9 @@ class TaskRunner:
     ) -> list[EventRecord]:
         events: list[EventRecord] = []
         for candidate in agent_result.memory_candidates:
-            memory_item = self.memory.create_memory_item(candidate)
+            memory_item = self.memory.create_memory_item(
+                self.memory_candidate_with_embedding(candidate)
+            )
             events.append(
                 self.state.create_event(
                     memory_candidate_created_event(
@@ -670,6 +745,15 @@ class TaskRunner:
                 )
             )
         return events
+
+    def memory_candidate_with_embedding(self, candidate: MemoryItem) -> MemoryItem:
+        if self.query_embedding_provider is None or candidate.embedding is not None:
+            return candidate
+        try:
+            embedding = self.query_embedding_provider.embed_text(candidate.content)
+        except TaskRunnerUnavailable:
+            return candidate
+        return candidate.model_copy(update={"embedding": embedding})
 
     def persist_sub_tasks(
         self,
@@ -962,6 +1046,26 @@ def memory_scopes_for_run(task: TaskRecord, world_view: LocalWorldView) -> list[
     ]
 
 
+def memory_query_text(task: TaskRecord, project: ProjectRecord | None) -> str:
+    parts = [task.title, task.description]
+    if project is not None:
+        parts.extend([project.title, project.goal])
+    parts.extend(task.acceptance_criteria)
+    return "\n".join(part.strip() for part in parts if part.strip())
+
+
+def memory_context_without_embeddings(context: MemoryContext) -> MemoryContext:
+    return context.model_copy(
+        update={
+            "query_embedding": None,
+            "items": [
+                item.model_copy(update={"embedding": None})
+                for item in context.items
+            ],
+        }
+    )
+
+
 def model_call_started_event(
     *,
     task: TaskRecord,
@@ -970,6 +1074,8 @@ def model_call_started_event(
     provider_id: str,
     model_id: str,
     trace_id: str,
+    memory_query_embedding_used: bool = False,
+    memory_query_embedding_dimensions: int = 0,
 ) -> EventRecord:
     return EventRecord(
         type=EventType.model_call_started,
@@ -985,6 +1091,8 @@ def model_call_started_event(
             "memory_tokens_used": memory_context.tokens_used,
             "memory_token_budget": memory_context.token_budget,
             "memory_allowed_scopes": memory_context.allowed_scopes,
+            "memory_query_embedding_used": memory_query_embedding_used,
+            "memory_query_embedding_dimensions": memory_query_embedding_dimensions,
             "input_tokens_estimate": estimated_tokens(
                 task.model_dump_json(),
                 world_view.model_dump_json(),
@@ -1061,6 +1169,9 @@ def memory_candidate_created_event(
             "memory_id": memory_item.id,
             "scope": memory_item.scope,
             "status": memory_item.status,
+            "embedding_dimensions": len(memory_item.embedding)
+            if memory_item.embedding is not None
+            else 0,
         },
         trace_id=trace_id,
     )

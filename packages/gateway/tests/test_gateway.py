@@ -1124,6 +1124,20 @@ class FakeMemoryClient:
         )
 
 
+class FakeQueryEmbeddingProvider:
+    provider_id = "provider-test-embedding"
+    model_id = "model-test-embedding"
+
+    def __init__(self) -> None:
+        self.texts: list[str] = []
+
+    def embed_text(self, text: str) -> list[float]:
+        self.texts.append(text)
+        embedding = [0.0] * 1536
+        embedding[min(len(self.texts) - 1, 1535)] = 1.0
+        return embedding
+
+
 class FakeAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -2590,6 +2604,73 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_run_next_task_uses_query_embedding_without_sending_vector_to_runtime() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_demo",
+            title="Demo project",
+            goal="Deliver a verified backend slice.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            project_id="project_demo",
+            title="Ready task",
+            description="Use semantic memory retrieval before execution.",
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Ready task can produce a recorded result."],
+        )
+    )
+    memory_client = FakeMemoryClient(
+        context_items=[
+            MemoryItem(
+                id="memory-embedded",
+                scope="project:project_demo",
+                project_id="project_demo",
+                content="Embedded memory should be visible without its vector.",
+                embedding=[1.0] + [0.0] * 1535,
+            )
+        ]
+    )
+    runtime_client = FakeAgentRuntimeClient()
+    embedding_provider = FakeQueryEmbeddingProvider()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=memory_client,
+        runtime=runtime_client,
+        query_embedding_provider=embedding_provider,
+    )
+
+    result = runner.run_next(
+        trace_id="trace_gateway_embedding_test",
+        headers={
+            "x-synarch-actor-type": "service",
+            "x-synarch-actor-id": "gateway-task-runner",
+            "x-synarch-trace-id": "trace_gateway_embedding_test",
+        },
+    )
+
+    assert "Ready task" in embedding_provider.texts[0]
+    assert "Deliver a verified backend slice." in embedding_provider.texts[0]
+    assert memory_client.contexts[0].query_embedding == [1.0] + [0.0] * 1535
+    assert result.memory_context.query_embedding is None
+    assert result.memory_context.items[0].embedding is None
+    assert runtime_client.requests[0].memory_context is not None
+    assert runtime_client.requests[0].memory_context.query_embedding is None
+    assert runtime_client.requests[0].memory_context.items[0].embedding is None
+    assert embedding_provider.texts[1] == (
+        "Remember that this project needs explicit acceptance criteria."
+    )
+    assert memory_client.items[0].embedding == [0.0, 1.0] + [0.0] * 1534
+    started_payload = result.model_call_events[0].payload
+    assert started_payload["memory_query_embedding_used"] is True
+    assert started_payload["memory_query_embedding_dimensions"] == 1536
+    assert result.memory_events[0].payload["embedding_dimensions"] == 1536
 
 
 def test_run_next_task_persists_agent_created_sub_tasks() -> None:

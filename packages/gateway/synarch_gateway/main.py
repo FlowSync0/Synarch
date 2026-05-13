@@ -1,4 +1,5 @@
 import ipaddress
+import os
 import socket
 import time
 from dataclasses import dataclass
@@ -90,6 +91,7 @@ from .task_runner import (
     HttpMemoryClient,
     MemoryClient,
     NoReadyTask,
+    OpenRouterQueryEmbeddingProvider,
     TaskRunner,
     TaskRunnerRequestError,
     TaskRunnerUnavailable,
@@ -172,6 +174,11 @@ class Settings(BaseSettings):
     task_runner_model_id: str = LOCAL_RUNTIME_MODEL_ID
     task_runner_input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
     task_runner_output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
+    task_runner_embedding_provider_id: str = ""
+    task_runner_embedding_model_id: str = ""
+    task_runner_embedding_timeout_seconds: float = 20.0
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key_env_var: str = "OPENROUTER_API_KEY"
     web_fetch_timeout_seconds: float = 10.0
     web_fetch_max_bytes: int = 50_000
     web_fetch_max_redirects: int = 5
@@ -224,6 +231,23 @@ def get_task_runner() -> TaskRunner:
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
         tool_runner=GatewayToolRunner(),
         tool_readiness=GatewayToolReadinessChecker(),
+        query_embedding_provider=get_query_embedding_provider(),
+    )
+
+
+def get_query_embedding_provider() -> OpenRouterQueryEmbeddingProvider | None:
+    if settings.task_runner_embedding_provider_id != "provider-openrouter":
+        return None
+    if not settings.task_runner_embedding_model_id:
+        return None
+    api_key = os.getenv(settings.openrouter_api_key_env_var)
+    if not api_key:
+        return None
+    return OpenRouterQueryEmbeddingProvider(
+        api_key=api_key,
+        model_id=settings.task_runner_embedding_model_id,
+        base_url=settings.openrouter_base_url,
+        timeout_seconds=settings.task_runner_embedding_timeout_seconds,
     )
 
 
