@@ -404,6 +404,22 @@ class MemoryStatusUpdate(SynarchModel):
     status: MemoryStatus
 
 
+class MemoryCompactionRequest(SynarchModel):
+    scope: str
+    project_id: str | None = None
+    agent_id: str | None = None
+    status: MemoryStatus = MemoryStatus.proposed
+    max_source_items: int = Field(default=20, ge=1, le=100)
+    max_summary_chars: int = Field(default=1200, ge=200, le=10000)
+
+
+class MemoryCompactionResult(SynarchModel):
+    compacted_item: MemoryItem
+    source_memory_ids: list[str] = Field(default_factory=list)
+    source_count: int = 0
+    source_tokens: int = 0
+
+
 class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None

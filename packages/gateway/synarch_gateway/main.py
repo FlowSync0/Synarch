@@ -42,6 +42,8 @@ from synarch_models import (
     GoalSubmissionResult,
     HealthResponse,
     LocalWorldView,
+    MemoryCompactionRequest,
+    MemoryCompactionResult,
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
@@ -2239,6 +2241,53 @@ def audit_belongs_to_project(
         or audit.target_id in task_ids
         or audit.payload.get("project_id") == project_id
         or audit.trace_id in trace_ids
+    )
+
+
+@app.post("/memory-items/compact", response_model=MemoryCompactionResult, status_code=201)
+def compact_memory_items(
+    compaction_request: MemoryCompactionRequest,
+    request: Request,
+    memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
+) -> MemoryCompactionResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = memory_reviewer_headers(request, trace_id)
+    try:
+        result = memory_client.compact_memory_items(compaction_request)
+        state_client.create_event(
+            memory_compacted_event(result, trace_id),
+            headers=headers,
+        )
+        return result
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory compaction dependency unavailable",
+        ) from error
+
+
+def memory_compacted_event(
+    result: MemoryCompactionResult,
+    trace_id: str,
+) -> EventRecord:
+    compacted_item = result.compacted_item
+    return EventRecord(
+        type=EventType.memory_compacted,
+        target=compacted_item.project_id or compacted_item.scope,
+        payload={
+            "memory_id": compacted_item.id,
+            "scope": compacted_item.scope,
+            "status": compacted_item.status,
+            "project_id": compacted_item.project_id,
+            "agent_id": compacted_item.agent_id,
+            "source_memory_ids": result.source_memory_ids,
+            "source_count": result.source_count,
+            "source_tokens": result.source_tokens,
+        },
+        trace_id=trace_id,
     )
 
 

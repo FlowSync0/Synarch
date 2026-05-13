@@ -84,10 +84,12 @@
       "Proposed and rejected memories are excluded from context assembly",
       "Gateway and dashboard can approve or reject memory candidates",
       "Live OpenRouter E2E verifies approved memory appears in the next task context",
-      "Live OpenRouter E2E verifies rejected memory stays out of the next task context"
+      "Live OpenRouter E2E verifies rejected memory stays out of the next task context",
+      "Memory-service can create deterministic proposed compaction items with source memory IDs",
+      "Gateway emits memory.compacted with source IDs, source count, and source token estimate"
     ],
-    "main_gap": "No compaction, vector search, graph retrieval, or hierarchical context database.",
-    "next_validation": "Add memory compaction for long-running projects without losing provenance.",
+    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or automated compaction policy.",
+    "next_validation": "Approve a compacted memory item and verify constrained context keeps the compacted summary with source IDs preserved.",
     "source": "docs/roadmap.md"
   },
   {

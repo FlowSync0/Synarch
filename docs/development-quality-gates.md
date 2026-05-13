@@ -105,6 +105,10 @@ context. The same run also rejects a separate proposed memory item and verifies 
 follow-up task context. It is not part of `make verify` because it depends on external provider
 availability and consumes real tokens.
 
+Deterministic memory compaction is covered by the normal backend tests. The memory-service test
+asserts that only approved source memories are compacted and that source IDs stay visible; the
+gateway test asserts `memory.compacted` is emitted with source IDs and token estimates.
+
 Run one scheduler tick with:
 
 ```bash

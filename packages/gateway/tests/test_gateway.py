@@ -36,6 +36,8 @@ from synarch_models import (
     EventRecord,
     EventType,
     LocalWorldView,
+    MemoryCompactionRequest,
+    MemoryCompactionResult,
     MemoryContext,
     MemoryItem,
     MemoryStatus,
@@ -940,6 +942,35 @@ class FakeMemoryClient:
         updated = item.model_copy(update={"status": update.status})
         self.items_by_id[item_id] = updated
         return updated
+
+    def compact_memory_items(
+        self, request: MemoryCompactionRequest
+    ) -> MemoryCompactionResult:
+        source_items = [
+            item
+            for item in self.list_memory_items(
+                scope=request.scope,
+                agent_id=request.agent_id,
+                project_id=request.project_id,
+                status=MemoryStatus.approved,
+            )
+        ][: request.max_source_items]
+        compacted_item = self.create_memory_item(
+            MemoryItem(
+                id="memory-compacted",
+                scope=request.scope,
+                content="Compacted: " + ", ".join(item.id for item in source_items),
+                status=request.status,
+                agent_id=request.agent_id,
+                project_id=request.project_id,
+            )
+        )
+        return MemoryCompactionResult(
+            compacted_item=compacted_item,
+            source_memory_ids=[item.id for item in source_items],
+            source_count=len(source_items),
+            source_tokens=sum(max(1, (len(item.content) + 3) // 4) for item in source_items),
+        )
 
 
 class FakeAgentRuntimeClient:
@@ -4027,6 +4058,59 @@ def test_update_memory_item_status_records_gateway_event() -> None:
         "agent_id": "agent-dev",
     }
     assert state_client.events[0].trace_id == "trace_memory_review_test"
+    assert state_client.headers[-1]["x-synarch-actor-id"] == "hugo"
+
+
+def test_compact_memory_items_records_gateway_event() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="First source fact.",
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-source-b"] = MemoryItem(
+        id="memory-source-b",
+        scope="project:project_demo",
+        content="Second source fact.",
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compact",
+            json={"scope": "project:project_demo", "project_id": "project_demo"},
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_memory_compaction_test",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["compacted_item"]["id"] == "memory-compacted"
+    assert payload["source_memory_ids"] == ["memory-source-a", "memory-source-b"]
+    assert [event.type for event in state_client.events] == ["memory.compacted"]
+    assert state_client.events[0].target == "project_demo"
+    assert state_client.events[0].payload == {
+        "memory_id": "memory-compacted",
+        "scope": "project:project_demo",
+        "status": "proposed",
+        "project_id": "project_demo",
+        "agent_id": None,
+        "source_memory_ids": ["memory-source-a", "memory-source-b"],
+        "source_count": 2,
+        "source_tokens": payload["source_tokens"],
+    }
+    assert state_client.events[0].trace_id == "trace_memory_compaction_test"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "hugo"
 
 

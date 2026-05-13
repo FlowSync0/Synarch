@@ -210,3 +210,74 @@ def test_proposed_memory_is_excluded_until_approved() -> None:
         },
     )
     assert rejected_context_response.json()["items"] == []
+
+
+def test_compact_memory_items_creates_proposed_item_with_source_provenance() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-source-a",
+            "scope": "project:project_compaction",
+            "project_id": "project_compaction",
+            "content": "Supplier A requires a signed NDA before sending pricing.",
+            "status": "approved",
+        },
+        {
+            "id": "memory-source-b",
+            "scope": "project:project_compaction",
+            "project_id": "project_compaction",
+            "content": "Supplier B can ship samples in three weeks.",
+            "status": "approved",
+        },
+        {
+            "id": "memory-proposed",
+            "scope": "project:project_compaction",
+            "project_id": "project_compaction",
+            "content": "Proposed memory must not be compacted.",
+            "status": "proposed",
+        },
+        {
+            "id": "memory-other-project",
+            "scope": "project:project_other",
+            "project_id": "project_other",
+            "content": "Other project memory must not be compacted.",
+            "status": "approved",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    response = client.post(
+        "/memory-items/compact",
+        json={
+            "scope": "project:project_compaction",
+            "project_id": "project_compaction",
+            "max_source_items": 10,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["source_memory_ids"] == ["memory-source-a", "memory-source-b"]
+    assert payload["source_count"] == 2
+    assert payload["source_tokens"] > 0
+    compacted_item = payload["compacted_item"]
+    assert compacted_item["status"] == "proposed"
+    assert compacted_item["scope"] == "project:project_compaction"
+    assert compacted_item["project_id"] == "project_compaction"
+    assert "Source memory ids: memory-source-a, memory-source-b" in compacted_item["content"]
+    assert "[memory-source-a]" in compacted_item["content"]
+    assert "[memory-source-b]" in compacted_item["content"]
+
+    context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-ops",
+            "project_id": "project_compaction",
+            "token_budget": 400,
+            "allowed_scopes": ["project:project_compaction"],
+        },
+    )
+    assert compacted_item["id"] not in [
+        item["id"] for item in context_response.json()["items"]
+    ]

@@ -10,6 +10,8 @@ from pydantic_settings import BaseSettings
 
 from synarch_models import (
     HealthResponse,
+    MemoryCompactionRequest,
+    MemoryCompactionResult,
     MemoryContext,
     MemoryItem,
     MemoryStatus,
@@ -203,6 +205,31 @@ def list_memory_items(
     return items
 
 
+@app.post("/memory-items/compact", response_model=MemoryCompactionResult, status_code=201)
+def compact_memory_items(request: MemoryCompactionRequest) -> MemoryCompactionResult:
+    source_items = compactable_memory_items(request)
+    if not source_items:
+        raise HTTPException(
+            status_code=404,
+            detail="No approved memory items match compaction request",
+        )
+    compacted_item = STORE.create(
+        MemoryItem(
+            scope=request.scope,
+            content=compacted_memory_content(source_items, request),
+            status=request.status,
+            agent_id=request.agent_id,
+            project_id=request.project_id,
+        )
+    )
+    return MemoryCompactionResult(
+        compacted_item=compacted_item,
+        source_memory_ids=[item.id for item in source_items],
+        source_count=len(source_items),
+        source_tokens=sum(estimated_tokens(item.content) for item in source_items),
+    )
+
+
 @app.post("/context/assemble", response_model=MemoryContext)
 def assemble_context(request: MemoryContext) -> MemoryContext:
     selected: list[MemoryItem] = []
@@ -237,6 +264,21 @@ def is_visible(item: MemoryItem, request: MemoryContext) -> bool:
     return item.project_id is None or item.project_id == request.project_id
 
 
+def compactable_memory_items(request: MemoryCompactionRequest) -> list[MemoryItem]:
+    items = [
+        item
+        for item in STORE.list_items()
+        if item.status == MemoryStatus.approved and item.scope == request.scope
+    ]
+    if request.project_id is not None:
+        items = [item for item in items if item.project_id == request.project_id]
+    if request.agent_id is not None:
+        items = [item for item in items if item.agent_id == request.agent_id]
+    return sorted(items, key=lambda item: (item.created_at, item.id))[
+        : request.max_source_items
+    ]
+
+
 def default_allowed_scopes(request: MemoryContext) -> set[str]:
     scopes = {GLOBAL_SCOPE, f"agent:{request.agent_id}"}
     if request.project_id is not None:
@@ -258,6 +300,28 @@ def scope_rank(item: MemoryItem, request: MemoryContext) -> int:
 
 def estimated_tokens(content: str) -> int:
     return max(1, (len(content) + 3) // 4)
+
+
+def compacted_memory_content(
+    source_items: list[MemoryItem],
+    request: MemoryCompactionRequest,
+) -> str:
+    lines = [
+        f"Compacted memory for scope {request.scope}.",
+        "Source memory ids: " + ", ".join(item.id for item in source_items),
+        "Source facts:",
+    ]
+    lines.extend(
+        f"- [{item.id}] {single_line(item.content)}" for item in source_items
+    )
+    content = "\n".join(lines)
+    if len(content) <= request.max_summary_chars:
+        return content
+    return content[: request.max_summary_chars - 3].rstrip() + "..."
+
+
+def single_line(content: str) -> str:
+    return " ".join(content.split())
 
 
 def normalize_postgres_dsn(database_url: str) -> str:

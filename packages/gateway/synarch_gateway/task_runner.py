@@ -15,6 +15,8 @@ from synarch_models import (
     EventRecord,
     EventType,
     LocalWorldView,
+    MemoryCompactionRequest,
+    MemoryCompactionResult,
     MemoryContext,
     MemoryItem,
     MemoryStatus,
@@ -74,6 +76,10 @@ class MemoryClient(Protocol):
     ) -> list[MemoryItem]: ...
 
     def update_memory_status(self, item_id: str, update: MemoryStatusUpdate) -> MemoryItem: ...
+
+    def compact_memory_items(
+        self, request: MemoryCompactionRequest
+    ) -> MemoryCompactionResult: ...
 
 
 class AgentRuntimeClient(Protocol):
@@ -170,6 +176,16 @@ class HttpMemoryClient:
             self.timeout_seconds,
         )
         return MemoryItem.model_validate(response)
+
+    def compact_memory_items(
+        self, request: MemoryCompactionRequest
+    ) -> MemoryCompactionResult:
+        response = post_json(
+            f"{self.base_url.rstrip('/')}/memory-items/compact",
+            request.model_dump(mode="json"),
+            self.timeout_seconds,
+        )
+        return MemoryCompactionResult.model_validate(response)
 
 
 @dataclass(frozen=True)
