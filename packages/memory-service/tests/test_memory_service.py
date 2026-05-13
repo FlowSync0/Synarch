@@ -362,6 +362,32 @@ def test_compact_memory_items_if_needed_creates_policy_candidate_above_threshold
     assert duplicate_payload["existing_compacted_item"]["id"] == compacted_item["id"]
     assert duplicate_payload["compaction"] is None
 
+    approve_response = client.patch(
+        f"/memory-items/{compacted_item['id']}/status",
+        json={"status": "approved"},
+    )
+    assert approve_response.status_code == 200
+
+    approved_duplicate_response = client.post(
+        "/memory-items/compact-if-needed",
+        json={
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+            "max_summary_chars": 200,
+        },
+    )
+    assert approved_duplicate_response.status_code == 200
+    approved_duplicate_payload = approved_duplicate_response.json()
+    assert approved_duplicate_payload["reason"] == "matching_compaction_exists"
+    assert approved_duplicate_payload["source_memory_ids"] == [
+        "memory-large-a",
+        "memory-large-b",
+    ]
+    assert approved_duplicate_payload["existing_compacted_item"]["id"] == compacted_item["id"]
+    assert approved_duplicate_payload["compaction"] is None
+
     items_response = client.get("/memory-items?project_id=project_policy")
     compacted_items = [
         item

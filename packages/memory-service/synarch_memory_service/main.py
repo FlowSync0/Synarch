@@ -330,6 +330,7 @@ def compactable_memory_items(request: MemoryCompactionRequest) -> list[MemoryIte
         item
         for item in STORE.list_items()
         if item.status == MemoryStatus.approved and item.scope == request.scope
+        and item.metadata.get("kind") != "compaction"
     ]
     if request.project_id is not None:
         items = [item for item in items if item.project_id == request.project_id]

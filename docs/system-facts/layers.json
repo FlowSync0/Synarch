@@ -90,10 +90,11 @@
       "Memory-service and gateway expose compact-if-needed threshold policy",
       "Compacted memories persist structured source provenance in MemoryItem.metadata",
       "compact-if-needed suppresses duplicate proposed or approved compactions for the same source IDs",
+      "memory_compaction_worker runs compact-if-needed as a bounded tick or loop for a configured scope",
       "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
     ],
-    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or scheduled compaction runner.",
-    "next_validation": "Run the compaction policy from an automated worker path and keep duplicate suppression intact.",
+    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or project-wide compaction planning.",
+    "next_validation": "Add project-wide compaction planning so a worker can discover overloaded scopes instead of being configured one scope at a time.",
     "source": "docs/roadmap.md"
   },
   {

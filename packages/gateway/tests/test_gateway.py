@@ -956,6 +956,7 @@ class FakeMemoryClient:
                 project_id=request.project_id,
                 status=MemoryStatus.approved,
             )
+            if item.metadata.get("kind") != "compaction"
         ][: request.max_source_items]
         compacted_item = self.create_memory_item(
             MemoryItem(
@@ -1001,6 +1002,7 @@ class FakeMemoryClient:
                 project_id=request.project_id,
                 status=MemoryStatus.approved,
             )
+            if item.metadata.get("kind") != "compaction"
         ][: request.max_source_items]
         source_tokens = sum(max(1, (len(item.content) + 3) // 4) for item in source_items)
         if source_tokens <= request.min_source_tokens:

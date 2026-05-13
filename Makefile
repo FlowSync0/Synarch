@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -8,6 +8,9 @@ SYNARCH_SCHEDULER_MAX_TASKS ?= 3
 SYNARCH_SCHEDULER_INTERVAL_SECONDS ?= 30
 SYNARCH_CONNECTOR_JOB_MAX_JOBS ?= 3
 SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS ?= 30
+SYNARCH_MEMORY_COMPACTION_SCOPE ?=
+SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS ?= 1200
+SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS ?= 300
 
 install-backend:
 	$(PYTHON) -m pip install --upgrade pip
@@ -52,6 +55,15 @@ connector-job-loop:
 
 connector-job-worker:
 	docker compose up --build connector-job-worker
+
+memory-compaction-tick:
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)"
+
+memory-compaction-loop:
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --loop --interval-seconds "$(SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS)"
+
+memory-compaction-worker:
+	docker compose up --build memory-compaction-worker
 
 lint:
 	$(PYTHON) -m ruff check .

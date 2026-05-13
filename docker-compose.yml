@@ -92,6 +92,28 @@ services:
     depends_on:
       - gateway
 
+  memory-compaction-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/gateway
+    command: python -m synarch_gateway.memory_compaction_worker --loop
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      SYNARCH_MEMORY_COMPACTION_WORKER_ID: ${SYNARCH_MEMORY_COMPACTION_WORKER_ID:-memory-compaction-worker-1}
+      SYNARCH_MEMORY_COMPACTION_SCOPE: ${SYNARCH_MEMORY_COMPACTION_SCOPE:-}
+      SYNARCH_MEMORY_COMPACTION_PROJECT_ID: ${SYNARCH_MEMORY_COMPACTION_PROJECT_ID:-}
+      SYNARCH_MEMORY_COMPACTION_AGENT_ID: ${SYNARCH_MEMORY_COMPACTION_AGENT_ID:-}
+      SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS: ${SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS:-1200}
+      SYNARCH_MEMORY_COMPACTION_MAX_SOURCE_ITEMS: ${SYNARCH_MEMORY_COMPACTION_MAX_SOURCE_ITEMS:-20}
+      SYNARCH_MEMORY_COMPACTION_MAX_SUMMARY_CHARS: ${SYNARCH_MEMORY_COMPACTION_MAX_SUMMARY_CHARS:-1200}
+      SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS: ${SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS:-300}
+      SYNARCH_MEMORY_COMPACTION_TIMEOUT_SECONDS: ${SYNARCH_MEMORY_COMPACTION_TIMEOUT_SECONDS:-60}
+    depends_on:
+      - gateway
+
   control-plane:
     build:
       context: .

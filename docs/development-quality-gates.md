@@ -111,8 +111,9 @@ availability and consumes real tokens.
 Deterministic memory compaction and the threshold policy are covered by the normal backend tests.
 The memory-service tests assert that only approved source memories are compacted, source IDs stay
 visible in both content and structured metadata, compaction is skipped below threshold, and duplicate
-compaction requests reuse the existing proposed item. The gateway tests assert `memory.compacted` is
-emitted only when a compaction is actually created.
+compaction requests reuse the existing proposed or approved item without recompacting compacted
+summaries as sources. The gateway tests assert `memory.compacted` is emitted only when a compaction
+is actually created.
 
 Run one scheduler tick with:
 
@@ -163,6 +164,22 @@ bounded follow-up loop after N recorded runs.
 
 Failed connector runs can use `metadata.failure_cooldown_seconds` to delay the next retry. A job can
 also declare `metadata.max_failures` to stop after a bounded number of failed runs.
+
+Run one memory compaction policy tick for a known scope with:
+
+```bash
+SYNARCH_MEMORY_COMPACTION_SCOPE=project:project_demo make memory-compaction-tick
+```
+
+For a local loop, use `make memory-compaction-loop`. For the Docker worker service, use:
+
+```bash
+SYNARCH_MEMORY_COMPACTION_SCOPE=project:project_demo make memory-compaction-worker
+```
+
+This worker is intentionally scope-configured for now. It calls Gateway `compact-if-needed`, so
+duplicate suppression and `memory.compacted` event emission stay centralized in the gateway and
+memory-service.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
