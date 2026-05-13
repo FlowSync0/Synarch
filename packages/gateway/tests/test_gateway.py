@@ -2627,6 +2627,63 @@ def test_run_task_by_id_executes_requested_task() -> None:
     assert state_client.tasks[1].status == TaskStatus.needs_review
 
 
+def test_run_task_by_id_records_skip_event_when_agent_is_inactive() -> None:
+    state_client = InactiveAgentStateClient("task_inactive_targeted")
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_inactive_targeted",
+            title="Inactive targeted run",
+            goal="Record a targeted run rejection in the project timeline.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_inactive_targeted",
+            project_id="project_inactive_targeted",
+            title="Assigned to inactive agent",
+            assigned_agent_id="agent-retired",
+            acceptance_criteria=["The task remains queued."],
+        )
+    )
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=FakeMemoryClient(),
+        runtime=FakeAgentRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/task_inactive_targeted/run",
+            headers={"X-Synarch-Trace-Id": "trace_targeted_inactive_skip"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent is not active: agent-retired"
+    assert state_client.tasks[0].status == TaskStatus.queued
+    assert [event.type for event in state_client.events] == [EventType.task_skipped]
+    assert state_client.events[0].target == "project_inactive_targeted"
+    assert state_client.events[0].trace_id == "trace_targeted_inactive_skip"
+    assert state_client.events[0].payload["skipped_tasks"] == [
+        {
+            "task_id": "task_inactive_targeted",
+            "category": "inactive_agent",
+            "reason": "Task assigned agent is inactive.",
+        }
+    ]
+    assert state_client.events[0].payload["skipped_task_ids"] == [
+        "task_inactive_targeted"
+    ]
+    assert state_client.events[0].payload["status_code"] == 409
+    assert [audit.action for audit in state_client.audit_logs] == ["task.run_skipped"]
+    assert state_client.audit_logs[0].target_id == "task_inactive_targeted"
+    assert state_client.audit_logs[0].trace_id == "trace_targeted_inactive_skip"
+
+
 def test_run_ready_tasks_executes_project_chain_until_no_ready_task() -> None:
     state_client = FakeStateClient()
     state_client.projects.extend(

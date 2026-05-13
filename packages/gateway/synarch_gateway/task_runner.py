@@ -358,7 +358,16 @@ class TaskRunner:
         headers: dict[str, str],
     ) -> TaskRunResult:
         task = self.state.get_task(task_id)
-        started_task = self.state.start_task(task.id, headers=headers)
+        try:
+            started_task = self.state.start_task(task.id, headers=headers)
+        except StateServiceRequestError as error:
+            self.record_task_start_rejection(
+                task=task,
+                error=error,
+                trace_id=trace_id,
+                headers=headers,
+            )
+            raise
         project = self.state.get_project(started_task.project_id)
         world_view = self.control_plane.get_world_view(started_task.assigned_agent_id)
         memory_context = self.memory.assemble_context(
@@ -491,6 +500,35 @@ class TaskRunner:
             memory_events=memory_events,
             tool_results=tool_results,
             cost_records=[cost_record],
+        )
+
+    def record_task_start_rejection(
+        self,
+        *,
+        task: TaskRecord,
+        error: StateServiceRequestError,
+        trace_id: str,
+        headers: dict[str, str],
+    ) -> None:
+        skipped_task = task_start_skip_record_from_error(task, error)
+        self.state.create_event(
+            task_run_skipped_event(
+                task=task,
+                skipped_task=skipped_task,
+                error=error,
+                trace_id=trace_id,
+            ),
+            headers=headers,
+        )
+        self.state.create_audit_log(
+            task_run_skipped_audit(
+                task=task,
+                skipped_task=skipped_task,
+                error=error,
+                trace_id=trace_id,
+                headers=headers,
+            ),
+            headers=headers,
         )
 
     def run_agent_task_with_tools(
@@ -769,6 +807,50 @@ def inactive_agent_skip_reason_from_error(error: StateServiceRequestError) -> st
     return "Task assigned agent is inactive."
 
 
+def task_start_skip_record_from_error(
+    task: TaskRecord,
+    error: StateServiceRequestError,
+) -> TaskSkipRecord:
+    inactive_agent_skip_reason = inactive_agent_skip_reason_from_error(error)
+    if inactive_agent_skip_reason is not None:
+        return TaskSkipRecord(
+            task_id=task.id,
+            category="inactive_agent",
+            reason=inactive_agent_skip_reason,
+        )
+
+    detail = str(error.detail)
+    if detail.startswith("Task is already "):
+        return TaskSkipRecord(
+            task_id=task.id,
+            category="claim_conflict",
+            reason="Task was already claimed by another scheduler.",
+        )
+    if detail.startswith("Task dependencies are not completed:"):
+        return TaskSkipRecord(
+            task_id=task.id,
+            category="dependency_not_ready",
+            reason=detail,
+        )
+    if detail.startswith("Task retry backoff has not elapsed:"):
+        return TaskSkipRecord(
+            task_id=task.id,
+            category="retry_backoff",
+            reason=detail,
+        )
+    if detail == "Task reached max attempts":
+        return TaskSkipRecord(
+            task_id=task.id,
+            category="max_attempts",
+            reason=detail,
+        )
+    return TaskSkipRecord(
+        task_id=task.id,
+        category="start_rejected",
+        reason=detail,
+    )
+
+
 def cost_record_for_run(
     *,
     task: TaskRecord,
@@ -934,6 +1016,69 @@ def memory_candidate_created_event(
         },
         trace_id=trace_id,
     )
+
+
+def task_run_skipped_event(
+    *,
+    task: TaskRecord,
+    skipped_task: TaskSkipRecord,
+    error: StateServiceRequestError,
+    trace_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.task_skipped,
+        source_agent_id=task.assigned_agent_id,
+        target=task.project_id,
+        payload=task_run_skipped_payload(
+            task=task,
+            skipped_task=skipped_task,
+            error=error,
+        ),
+        trace_id=trace_id,
+    )
+
+
+def task_run_skipped_audit(
+    *,
+    task: TaskRecord,
+    skipped_task: TaskSkipRecord,
+    error: StateServiceRequestError,
+    trace_id: str,
+    headers: dict[str, str],
+) -> AuditLogRecord:
+    return AuditLogRecord(
+        actor_type=headers.get("x-synarch-actor-type", ActorType.service.value),
+        actor_id=headers.get("x-synarch-actor-id", "gateway-task-runner"),
+        action="task.run_skipped",
+        target_type="task",
+        target_id=task.id,
+        payload=task_run_skipped_payload(
+            task=task,
+            skipped_task=skipped_task,
+            error=error,
+        ),
+        trace_id=trace_id,
+    )
+
+
+def task_run_skipped_payload(
+    *,
+    task: TaskRecord,
+    skipped_task: TaskSkipRecord,
+    error: StateServiceRequestError,
+) -> dict[str, object]:
+    return {
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "assigned_agent_id": task.assigned_agent_id,
+        "status_code": error.status_code,
+        "detail": error.detail,
+        "category": skipped_task.category,
+        "reason": skipped_task.reason,
+        "skipped_task_ids": [task.id],
+        "skipped_tasks": [skipped_task.model_dump(mode="json")],
+        "skipped_task_count": 1,
+    }
 
 
 def scheduler_tick_event(batch_result: TaskRunBatchResult) -> EventRecord:

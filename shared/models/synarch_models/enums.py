@@ -43,6 +43,7 @@ class EventType(StrEnum):
     task_started = "task.started"
     task_heartbeat = "task.heartbeat"
     task_lease_expired = "task.lease_expired"
+    task_skipped = "task.skipped"
     task_reviewed = "task.reviewed"
     task_completed = "task.completed"
     task_blocked = "task.blocked"
