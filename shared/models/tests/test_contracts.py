@@ -157,6 +157,7 @@ def test_model_completion_contract_carries_messages_and_usage() -> None:
         purpose="agent_task",
         provider_id="provider-openrouter",
         model_id="deepseek/deepseek-v4-flash",
+        model_policy_id="policy-openrouter-deepseek-v4-flash",
         task_id="task_model_gateway",
         project_id="project_model_gateway",
         messages=[
@@ -183,6 +184,7 @@ def test_model_completion_contract_carries_messages_and_usage() -> None:
 
     assert request_payload["messages"][0]["role"] == "system"
     assert request_payload["purpose"] == "agent_task"
+    assert request_payload["model_policy_id"] == "policy-openrouter-deepseek-v4-flash"
     assert response_payload["usage"]["input_tokens"] == 20
     assert response_payload["content"] == '{"status":"needs_review"}'
 

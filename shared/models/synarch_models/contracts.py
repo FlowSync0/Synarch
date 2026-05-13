@@ -631,6 +631,7 @@ class ModelCompletionRequest(SynarchModel):
     messages: list[ModelMessage] = Field(min_length=1)
     provider_id: str | None = None
     model_id: str | None = None
+    model_policy_id: str | None = None
     task_id: str | None = None
     project_id: str | None = None
     trace_id: str = Field(default_factory=lambda: new_id("trace"))

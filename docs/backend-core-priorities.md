@@ -47,6 +47,8 @@ Current interim slice:
 - agent-runtime can run in `AGENT_RUNTIME_MODE=openrouter`
 - model-gateway can run in deterministic `MODEL_GATEWAY_MODE=fake`
 - agent-runtime can call model-gateway with `AGENT_RUNTIME_MODE=model_gateway`
+- model-gateway can resolve `model_policy_id` from state-service and reject disallowed models before
+  a provider call
 - OpenRouter calls use `OPENROUTER_API_KEY` from the environment, never committed config
 - default test model is `deepseek/deepseek-v4-flash`
 - runtime returns `ModelUsage`; gateway converts it into durable `CostRecord`

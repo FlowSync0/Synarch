@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -9,9 +10,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
+    AiProviderType,
     HealthResponse,
     ModelCompletionRequest,
     ModelCompletionResponse,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
     ModelUsage,
 )
 
@@ -20,6 +25,8 @@ app = FastAPI(title="Synarch Model Gateway", version="0.1.0")
 
 class Settings(BaseSettings):
     model_gateway_mode: str = "fake"
+    state_service_url: str | None = None
+    state_service_timeout_seconds: float = 5.0
     fake_provider_id: str = "provider-model-gateway-fake"
     fake_model_id: str = "model-gateway-fake-json"
     fake_input_cost_per_million_tokens: float = 0.0
@@ -42,6 +49,19 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+@dataclass(frozen=True)
+class ModelRoute:
+    provider_id: str
+    model_id: str
+    provider_type: AiProviderType | str
+    base_url: str | None = None
+    api_key_env_var: str | None = None
+    input_cost_per_million_tokens: float = 0.0
+    output_cost_per_million_tokens: float = 0.0
+    currency: str = "USD"
+    model_policy_id: str | None = None
+
+
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="model-gateway")
@@ -60,8 +80,7 @@ def complete_model_call(request: ModelCompletionRequest) -> ModelCompletionRespo
 
 
 def fake_completion(request: ModelCompletionRequest) -> ModelCompletionResponse:
-    provider_id = request.provider_id or settings.fake_provider_id
-    model_id = request.model_id or settings.fake_model_id
+    route = fake_model_route(request)
     content = json.dumps(
         {
             "status": "needs_review",
@@ -74,37 +93,37 @@ def fake_completion(request: ModelCompletionRequest) -> ModelCompletionResponse:
         separators=(",", ":"),
     )
     usage = usage_from_counts(
-        provider_id=provider_id,
-        model_id=model_id,
+        provider_id=route.provider_id,
+        model_id=route.model_id,
         input_tokens=estimated_tokens(*(message.content for message in request.messages)),
         output_tokens=estimated_tokens(content),
-        input_cost_per_million_tokens=settings.fake_input_cost_per_million_tokens,
-        output_cost_per_million_tokens=settings.fake_output_cost_per_million_tokens,
-        currency=settings.fake_currency,
+        input_cost_per_million_tokens=route.input_cost_per_million_tokens,
+        output_cost_per_million_tokens=route.output_cost_per_million_tokens,
+        currency=route.currency,
     )
     return ModelCompletionResponse(
-        provider_id=provider_id,
-        model_id=model_id,
+        provider_id=route.provider_id,
+        model_id=route.model_id,
         content=content,
         usage=usage,
-        raw_response={"mode": "fake"},
+        raw_response={"mode": "fake", "model_policy_id": route.model_policy_id},
     )
 
 
 def openrouter_completion(request: ModelCompletionRequest) -> ModelCompletionResponse:
-    api_key = os.getenv(settings.openrouter_api_key_env_var)
+    route = openrouter_model_route(request)
+    api_key_env_var = route.api_key_env_var or settings.openrouter_api_key_env_var
+    api_key = os.getenv(api_key_env_var)
     if not api_key:
         raise HTTPException(
             status_code=503,
-            detail=f"{settings.openrouter_api_key_env_var} is not configured",
+            detail=f"{api_key_env_var} is not configured",
         )
 
-    provider_id = request.provider_id or settings.openrouter_provider_id
-    model_id = request.model_id or settings.openrouter_model_id
-    payload = openrouter_payload(request, model_id)
+    payload = openrouter_payload(request, route.model_id)
     try:
         response = httpx.post(
-            f"{settings.openrouter_base_url.rstrip('/')}/chat/completions",
+            f"{(route.base_url or settings.openrouter_base_url).rstrip('/')}/chat/completions",
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -125,12 +144,121 @@ def openrouter_completion(request: ModelCompletionRequest) -> ModelCompletionRes
     if not isinstance(body, dict):
         raise HTTPException(status_code=502, detail="OpenRouter returned an invalid response")
     return ModelCompletionResponse(
-        provider_id=provider_id,
-        model_id=model_id,
+        provider_id=route.provider_id,
+        model_id=route.model_id,
         content=content_from_openrouter_body(body),
-        usage=usage_from_openrouter_body(body, provider_id, model_id),
-        raw_response={"id": body.get("id"), "provider": body.get("provider")},
+        usage=usage_from_openrouter_body(body, route),
+        raw_response={
+            "id": body.get("id"),
+            "provider": body.get("provider"),
+            "model_policy_id": route.model_policy_id,
+        },
     )
+
+
+def fake_model_route(request: ModelCompletionRequest) -> ModelRoute:
+    state_route = state_model_route(request)
+    if state_route is not None:
+        return state_route
+    return ModelRoute(
+        provider_id=request.provider_id or settings.fake_provider_id,
+        model_id=request.model_id or settings.fake_model_id,
+        provider_type=AiProviderType.local,
+        input_cost_per_million_tokens=settings.fake_input_cost_per_million_tokens,
+        output_cost_per_million_tokens=settings.fake_output_cost_per_million_tokens,
+        currency=settings.fake_currency,
+        model_policy_id=request.model_policy_id,
+    )
+
+
+def openrouter_model_route(request: ModelCompletionRequest) -> ModelRoute:
+    state_route = state_model_route(request)
+    if state_route is not None:
+        if state_route.provider_type != AiProviderType.openrouter:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model policy resolved non-OpenRouter provider: {state_route.provider_id}",
+            )
+        return state_route
+    return ModelRoute(
+        provider_id=request.provider_id or settings.openrouter_provider_id,
+        model_id=request.model_id or settings.openrouter_model_id,
+        provider_type=AiProviderType.openrouter,
+        base_url=settings.openrouter_base_url,
+        api_key_env_var=settings.openrouter_api_key_env_var,
+        input_cost_per_million_tokens=settings.openrouter_input_cost_per_million_tokens,
+        output_cost_per_million_tokens=settings.openrouter_output_cost_per_million_tokens,
+        currency=settings.openrouter_currency,
+        model_policy_id=request.model_policy_id,
+    )
+
+
+def state_model_route(request: ModelCompletionRequest) -> ModelRoute | None:
+    if not settings.state_service_url or not request.model_policy_id:
+        return None
+
+    policy = get_state_model_policy(request.model_policy_id)
+    selected_model_id = request.model_id or policy.default_model_id
+    allowed_model_ids = {policy.default_model_id, *policy.allowed_model_ids}
+    if selected_model_id not in allowed_model_ids:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Model {selected_model_id} is not allowed by policy "
+                f"{request.model_policy_id}"
+            ),
+        )
+
+    model = get_state_model_definition(selected_model_id)
+    if not model.enabled:
+        raise HTTPException(status_code=403, detail=f"Model is disabled: {selected_model_id}")
+    provider = get_state_model_provider(model.provider_id)
+    if not provider.enabled:
+        raise HTTPException(status_code=403, detail=f"Model provider is disabled: {provider.id}")
+    return ModelRoute(
+        provider_id=provider.id,
+        model_id=model.id,
+        provider_type=provider.provider_type,
+        base_url=provider.base_url,
+        api_key_env_var=provider.api_key_env_var,
+        input_cost_per_million_tokens=model.input_cost_per_million_tokens,
+        output_cost_per_million_tokens=model.output_cost_per_million_tokens,
+        currency=model.currency,
+        model_policy_id=policy.id,
+    )
+
+
+def get_state_model_policy(policy_id: str) -> ModelPolicy:
+    body = state_get(f"/model-policies/{policy_id}")
+    return ModelPolicy.model_validate(body)
+
+
+def get_state_model_definition(model_id: str) -> ModelDefinition:
+    body = state_get(f"/model-definitions/{model_id}")
+    return ModelDefinition.model_validate(body)
+
+
+def get_state_model_provider(provider_id: str) -> ModelProviderConfig:
+    body = state_get(f"/model-providers/{provider_id}")
+    return ModelProviderConfig.model_validate(body)
+
+
+def state_get(path: str) -> Any:
+    if not settings.state_service_url:
+        raise HTTPException(status_code=500, detail="STATE_SERVICE_URL is not configured")
+    try:
+        response = httpx.get(
+            f"{settings.state_service_url.rstrip('/')}{path}",
+            timeout=settings.state_service_timeout_seconds,
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="State service request failed") from error
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={"state_status": response.status_code, "error": response_detail(response)},
+        )
+    return response.json()
 
 
 def openrouter_payload(request: ModelCompletionRequest, model_id: str) -> dict[str, Any]:
@@ -163,11 +291,7 @@ def content_from_openrouter_body(body: dict[str, Any]) -> str:
     return content if isinstance(content, str) else ""
 
 
-def usage_from_openrouter_body(
-    body: dict[str, Any],
-    provider_id: str,
-    model_id: str,
-) -> ModelUsage:
+def usage_from_openrouter_body(body: dict[str, Any], route: ModelRoute) -> ModelUsage:
     raw_usage = body.get("usage", {})
     usage = raw_usage if isinstance(raw_usage, dict) else {}
     input_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
@@ -175,15 +299,15 @@ def usage_from_openrouter_body(
     total_cost = usage.get("cost") or usage.get("total_cost")
     if total_cost is None:
         total_cost = (
-            input_tokens * settings.openrouter_input_cost_per_million_tokens / 1_000_000
-        ) + (output_tokens * settings.openrouter_output_cost_per_million_tokens / 1_000_000)
+            input_tokens * route.input_cost_per_million_tokens / 1_000_000
+        ) + (output_tokens * route.output_cost_per_million_tokens / 1_000_000)
     return ModelUsage(
-        provider_id=provider_id,
-        model_id=model_id,
+        provider_id=route.provider_id,
+        model_id=route.model_id,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_cost=round(float(total_cost), 8),
-        currency=settings.openrouter_currency,
+        currency=route.currency,
     )
 
 

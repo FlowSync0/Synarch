@@ -427,8 +427,10 @@ Progress:
 - Done: `scripts/live_model_gateway_openrouter_e2e.sh` verifies a real Gateway task run through
   agent-runtime -> model-gateway -> OpenRouter/DeepSeek with trace, cost, and memory candidate
   assertions.
-- Next: route provider/model selection from state-backed `ModelPolicy` into model-gateway and move
-  live OpenRouter task execution onto this boundary.
+- Done: model-gateway can resolve `model_policy_id` through state-service, choose the default model,
+  and reject model IDs outside the policy before calling the provider.
+- Next: move the default live OpenRouter task scripts onto model-gateway and add policy-aware
+  provider selection in Gateway configuration.
 
 Definition of done:
 

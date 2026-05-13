@@ -255,6 +255,7 @@ services:
       APP_MODULE: synarch_model_gateway.main:app
       PORT: 8060
       MODEL_GATEWAY_MODE: ${MODEL_GATEWAY_MODE:-fake}
+      STATE_SERVICE_URL: http://state-service:8020
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_MODEL_ID: ${OPENROUTER_MODEL_ID:-deepseek/deepseek-v4-flash}
       OPENROUTER_MAX_OUTPUT_TOKENS: ${OPENROUTER_MAX_OUTPUT_TOKENS:-1800}
@@ -266,6 +267,9 @@ services:
       OPENROUTER_OUTPUT_COST_PER_MILLION_TOKENS: ${OPENROUTER_OUTPUT_COST_PER_MILLION_TOKENS:-0}
     ports:
       - "8060:8060"
+    depends_on:
+      state-service:
+        condition: service_healthy
 
   agent-runtime:
     build:

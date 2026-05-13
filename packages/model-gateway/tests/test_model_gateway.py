@@ -46,6 +46,103 @@ def test_fake_completion_returns_deterministic_usage(monkeypatch: MonkeyPatch) -
     assert payload["usage"]["total_cost"] > 0
 
 
+def test_fake_completion_resolves_state_model_policy(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(model_gateway_main.settings, "model_gateway_mode", "fake")
+    monkeypatch.setattr(model_gateway_main.settings, "state_service_url", "http://state-service:8020")
+
+    def fake_get(url: str, *, timeout: float) -> httpx.Response:
+        assert timeout == model_gateway_main.settings.state_service_timeout_seconds
+        if url.endswith("/model-policies/policy-openrouter"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "policy-openrouter",
+                    "name": "OpenRouter default",
+                    "default_model_id": "deepseek/deepseek-v4-flash",
+                    "allowed_model_ids": ["deepseek/deepseek-v4-flash"],
+                },
+                request=httpx.Request("GET", url),
+            )
+        if url.endswith("/model-definitions/deepseek/deepseek-v4-flash"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "deepseek/deepseek-v4-flash",
+                    "provider_id": "provider-openrouter",
+                    "display_name": "DeepSeek V4 Flash",
+                    "input_cost_per_million_tokens": 0.10,
+                    "output_cost_per_million_tokens": 0.20,
+                },
+                request=httpx.Request("GET", url),
+            )
+        if url.endswith("/model-providers/provider-openrouter"):
+            return httpx.Response(
+                200,
+                json={
+                    "id": "provider-openrouter",
+                    "name": "OpenRouter",
+                    "provider_type": "openrouter",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "api_key_env_var": "OPENROUTER_API_KEY",
+                },
+                request=httpx.Request("GET", url),
+            )
+        raise AssertionError(f"Unexpected state URL: {url}")
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    response = TestClient(app).post(
+        "/model-calls/complete",
+        json={
+            "agent_id": "agent-dev",
+            "purpose": "agent_task",
+            "model_policy_id": "policy-openrouter",
+            "messages": [{"role": "user", "content": "Plan this task."}],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["provider_id"] == "provider-openrouter"
+    assert payload["model_id"] == "deepseek/deepseek-v4-flash"
+    assert payload["raw_response"]["model_policy_id"] == "policy-openrouter"
+    assert payload["usage"]["total_cost"] > 0
+
+
+def test_model_policy_rejects_disallowed_model(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(model_gateway_main.settings, "model_gateway_mode", "fake")
+    monkeypatch.setattr(model_gateway_main.settings, "state_service_url", "http://state-service:8020")
+
+    def fake_get(url: str, *, timeout: float) -> httpx.Response:
+        assert timeout == model_gateway_main.settings.state_service_timeout_seconds
+        return httpx.Response(
+            200,
+            json={
+                "id": "policy-openrouter",
+                "name": "OpenRouter default",
+                "default_model_id": "deepseek/deepseek-v4-flash",
+                "allowed_model_ids": ["deepseek/deepseek-v4-flash"],
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    response = TestClient(app).post(
+        "/model-calls/complete",
+        json={
+            "agent_id": "agent-dev",
+            "purpose": "agent_task",
+            "model_policy_id": "policy-openrouter",
+            "model_id": "other/model",
+            "messages": [{"role": "user", "content": "Plan this task."}],
+        },
+    )
+
+    assert response.status_code == 403
+    assert "not allowed by policy" in response.json()["detail"]
+
+
 def test_openrouter_completion_normalizes_provider_response(
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -176,6 +176,7 @@ def test_runtime_can_call_model_gateway_with_fake_response(
         assert json["purpose"] == "agent_task"
         assert json["provider_id"] == "provider-openrouter"
         assert json["model_id"] == "deepseek/deepseek-v4-flash"
+        assert json["model_policy_id"] == "policy-openrouter-deepseek-v4-flash"
         messages = json["messages"]
         assert isinstance(messages, list)
         first_message = messages[0]
@@ -225,6 +226,7 @@ def test_runtime_can_call_model_gateway_with_fake_response(
                 "agent_id": "agent-dev",
                 "role": "Code and infra",
                 "division": "dev",
+                "policies": ["model_policy:policy-openrouter-deepseek-v4-flash"],
             },
         },
     )

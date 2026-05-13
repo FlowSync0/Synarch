@@ -145,6 +145,7 @@ def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
         purpose="agent_task",
         provider_id=request.provider_id,
         model_id=request.model_id,
+        model_policy_id=model_policy_id_from_world_view(request),
         task_id=request.task.id,
         project_id=request.task.project_id,
         messages=agent_messages(request),
@@ -259,6 +260,14 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
             ),
         ),
     ]
+
+
+def model_policy_id_from_world_view(request: AgentTaskRequest) -> str | None:
+    prefix = "model_policy:"
+    for policy in request.world_view.policies:
+        if policy.startswith(prefix):
+            return policy.removeprefix(prefix)
+    return None
 
 
 def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, Any]:
