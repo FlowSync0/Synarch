@@ -4,6 +4,7 @@ import type {
   EventRecord,
   ProjectRecord
 } from "./state-service-api";
+import type { AgentLifecycleRequest } from "./control-plane-api";
 
 export type TaskStatus =
   | "draft"
@@ -303,12 +304,14 @@ export type TaskRunResult = {
     task_id: string;
     status: TaskStatus;
     summary: string;
+    lifecycle_requests_created: AgentLifecycleRequest[];
     tool_calls_requested?: ToolCallRequest[];
     tool_results?: ToolResult[];
   };
   model_call_events: EventRecord[];
   created_sub_tasks: TaskRecord[];
   sub_task_events: EventRecord[];
+  lifecycle_requests_created: AgentLifecycleRequest[];
   memory_events: EventRecord[];
   tool_results: ToolResult[];
   cost_records: CostRecord[];

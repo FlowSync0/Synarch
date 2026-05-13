@@ -646,6 +646,14 @@ function lifecycleApprovalRow(request: AgentLifecycleRequest): ApprovalViewModel
   };
 }
 
+function lifecycleRequestTarget(request: AgentLifecycleRequest): string {
+  return request.proposed_agent?.name ?? request.target_agent_id ?? request.id;
+}
+
+function lifecycleRequestDetail(request: AgentLifecycleRequest): string {
+  return request.proposed_agent?.id ?? request.target_agent_id ?? "no target";
+}
+
 function credentialApprovalRow(request: CredentialAccessRequest): ApprovalViewModel {
   const scopes =
     request.requested_scopes.length > 0
@@ -1373,6 +1381,9 @@ export default function DashboardPage() {
       setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
@@ -1387,6 +1398,9 @@ export default function DashboardPage() {
       setSelectedTimelineEventId("");
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
@@ -3061,6 +3075,46 @@ export default function DashboardPage() {
                         )}
                       </div>
                     </div>
+                    {selectedProjectLastTaskRun.lifecycle_requests_created.length > 0 ? (
+                      <div className="grid gap-2 rounded-md border border-accent/15 bg-accent-soft/40 p-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[11px] font-semibold uppercase text-accent">
+                            Lifecycle proposals created
+                          </p>
+                          <span className="rounded-md bg-white px-2 py-0.5 text-[11px] font-semibold text-accent ring-1 ring-accent/15">
+                            {selectedProjectLastTaskRun.lifecycle_requests_created.length}
+                          </span>
+                        </div>
+                        <div className="grid gap-2 xl:grid-cols-2">
+                          {selectedProjectLastTaskRun.lifecycle_requests_created.map((request) => (
+                            <article
+                              key={request.id}
+                              className="min-w-0 rounded-md border border-border bg-white p-2"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-muted ring-1 ring-border">
+                                  {request.action}
+                                </span>
+                                <span
+                                  className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${approvalStatusClass[request.status]}`}
+                                >
+                                  {request.status}
+                                </span>
+                              </div>
+                              <p className="mt-1 truncate text-xs font-medium text-ink">
+                                {lifecycleRequestTarget(request)}
+                              </p>
+                              <p className="mt-0.5 truncate text-[11px] text-muted">
+                                {request.id} / {lifecycleRequestDetail(request)}
+                              </p>
+                              <BalancedText className="mt-1 text-[11px] text-muted" font="400 11px Inter Variable" lineHeight={15}>
+                                {request.reason}
+                              </BalancedText>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
                 {focusedTimelineTask ? (
@@ -3398,6 +3452,23 @@ export default function DashboardPage() {
                           tools {run.tool_results.length}:{" "}
                           {run.tool_results.map((toolResult) => toolResult.tool_name).join(", ")}
                         </p>
+                      ) : null}
+                      {run.lifecycle_requests_created.length > 0 ? (
+                        <div className="grid gap-1.5 rounded-md border border-accent/15 bg-white p-2">
+                          <p className="text-[11px] font-semibold text-accent">
+                            lifecycle proposals {run.lifecycle_requests_created.length}
+                          </p>
+                          {run.lifecycle_requests_created.slice(0, 3).map((request) => (
+                            <div key={request.id} className="min-w-0">
+                              <p className="truncate text-[11px] font-medium text-ink">
+                                {request.action} / {lifecycleRequestTarget(request)}
+                              </p>
+                              <p className="truncate text-[11px] text-muted">
+                                {request.id} / {request.status}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
                       ) : null}
                     </div>
                   ))}
