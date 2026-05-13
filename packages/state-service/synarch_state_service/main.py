@@ -362,6 +362,15 @@ def validate_agent_access_references(
         raise HTTPException(status_code=400, detail=f"Unknown access agents: {unknown_agent_ids}")
 
 
+def inactive_known_agent_ids(agent_ids: list[str]) -> list[str]:
+    inactive_agent_ids: list[str] = []
+    for agent_id in agent_ids:
+        agent = REPOSITORIES.agents.get(agent_id)
+        if agent is not None and agent.status != AgentStatus.active:
+            inactive_agent_ids.append(agent_id)
+    return inactive_agent_ids
+
+
 def validate_service_definition(service: ServiceDefinition) -> None:
     validate_agent_access_references(
         owner_agent_id=service.owner_agent_id,
@@ -603,6 +612,12 @@ def validate_project_workspace(workspace: ProjectWorkspace) -> None:
     ]
     if unknown_agents:
         raise HTTPException(status_code=400, detail=f"Unknown workspace agents: {unknown_agents}")
+    inactive_agents = inactive_known_agent_ids(workspace.allowed_agent_ids)
+    if workspace.active and inactive_agents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Workspace agents are not active: {inactive_agents}",
+        )
     active_workspace = active_project_workspace(workspace.project_id)
     if active_workspace is not None and active_workspace.id != workspace.id and workspace.active:
         raise HTTPException(
@@ -634,7 +649,10 @@ def active_project_assignments(project_id: str) -> list[AgentProjectAssignment]:
     return [
         assignment
         for assignment in REPOSITORIES.agent_project_assignments.list_records()
-        if assignment.project_id == project_id and assignment.active
+        if assignment.project_id == project_id
+        and assignment.active
+        and (agent := REPOSITORIES.agents.get(assignment.agent_id)) is not None
+        and agent.status == AgentStatus.active
     ]
 
 
@@ -706,8 +724,14 @@ def project_complexity_payload(report: ProjectComplexityReport) -> dict[str, Any
 def validate_agent_project_assignment(assignment: AgentProjectAssignment) -> None:
     if not REPOSITORIES.projects.exists(assignment.project_id):
         raise HTTPException(status_code=400, detail=f"Unknown project: {assignment.project_id}")
-    if not REPOSITORIES.agents.exists(assignment.agent_id):
+    agent = REPOSITORIES.agents.get(assignment.agent_id)
+    if agent is None:
         raise HTTPException(status_code=400, detail=f"Unknown agent: {assignment.agent_id}")
+    if assignment.active and agent.status != AgentStatus.active:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Agent is not active: {assignment.agent_id}",
+        )
     workspace = REPOSITORIES.project_workspaces.get(assignment.workspace_id)
     if workspace is None:
         raise HTTPException(status_code=400, detail=f"Unknown workspace: {assignment.workspace_id}")
@@ -1022,9 +1046,19 @@ def read_active_agent_soul(agent_id: str) -> AgentSoul:
     return soul
 
 
+def validate_project_record(project: ProjectRecord) -> None:
+    inactive_owners = inactive_known_agent_ids([project.owner_agent_id])
+    if inactive_owners:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project owner is not active: {project.owner_agent_id}",
+        )
+
+
 @app.post("/projects", response_model=ProjectRecord, status_code=201)
 def create_project(project: ProjectRecord, request: Request) -> ProjectRecord:
     audit_context = audit_context_from_request(request)
+    validate_project_record(project)
     record = create_record(REPOSITORIES.projects, project.id, project)
     write_audit_log(
         audit_context,

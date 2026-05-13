@@ -7,6 +7,7 @@ from synarch_models import (
     AgentDefinition,
     AgentLifecycleDecision,
     AgentLifecycleRequest,
+    AgentStatus,
     HealthResponse,
     LocalWorldView,
     ServiceDefinition,
@@ -200,6 +201,8 @@ def read_agent(agent_id: str) -> AgentDefinition:
 @app.get("/agents/{agent_id}/world-view", response_model=LocalWorldView)
 def read_world_view(agent_id: str) -> LocalWorldView:
     agent = get_agent_or_404(agent_id)
+    if agent.status != AgentStatus.active:
+        raise HTTPException(status_code=409, detail=f"Agent is not active: {agent.id}")
     agents = list_agents_from_source()
     try:
         soul = AGENT_SOURCE.get_agent_soul(agent.id)
@@ -209,10 +212,14 @@ def read_world_view(agent_id: str) -> LocalWorldView:
     peers = [
         candidate.id
         for candidate in agents
-        if candidate.division == agent.division and candidate.id != agent.id
+        if candidate.status == AgentStatus.active
+        and candidate.division == agent.division
+        and candidate.id != agent.id
     ]
     direct_report_agent_ids = [
-        candidate.id for candidate in agents if candidate.manager_id == agent.id
+        candidate.id
+        for candidate in agents
+        if candidate.status == AgentStatus.active and candidate.manager_id == agent.id
     ]
     available_services = list_available_services(agent)
     return LocalWorldView(

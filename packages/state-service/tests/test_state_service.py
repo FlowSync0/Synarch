@@ -118,6 +118,83 @@ def test_project_then_task_flow() -> None:
     ]
 
 
+def test_project_rejects_inactive_owner() -> None:
+    client = TestClient(app)
+
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-retired-owner",
+            "name": "IA Retired Owner",
+            "role": "Former project owner",
+            "division": "direction",
+            "status": "inactive",
+        },
+    )
+    assert agent_response.status_code == 201
+
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Inactive owner project",
+            "goal": "This project should not be owned by an inactive agent.",
+            "owner_agent_id": "agent-retired-owner",
+        },
+    )
+
+    assert project_response.status_code == 400
+    assert project_response.json()["detail"] == (
+        "Project owner is not active: agent-retired-owner"
+    )
+    assert client.get("/projects").json() == []
+
+
+def test_project_workspace_rejects_inactive_allowed_agent() -> None:
+    client = TestClient(app)
+    for agent_id, status in [
+        ("agent-direction", "active"),
+        ("agent-retired-worker", "inactive"),
+    ]:
+        response = client.post(
+            "/agents",
+            json={
+                "id": agent_id,
+                "name": agent_id,
+                "role": "Project participant",
+                "division": "dev",
+                "status": status,
+            },
+        )
+        assert response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "id": "project-inactive-workspace-agent",
+            "title": "Inactive workspace agent",
+            "goal": "Workspace active access must exclude inactive agents.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    workspace_response = client.post(
+        "/project-workspaces",
+        json={
+            "id": "workspace-inactive-agent",
+            "project_id": "project-inactive-workspace-agent",
+            "name": "Inactive agent workspace",
+            "memory_scope": "project:project-inactive-workspace-agent",
+            "allowed_agent_ids": ["agent-direction", "agent-retired-worker"],
+        },
+    )
+
+    assert workspace_response.status_code == 400
+    assert workspace_response.json()["detail"] == (
+        "Workspace agents are not active: ['agent-retired-worker']"
+    )
+    assert client.get("/project-workspaces").json() == []
+
+
 def test_task_credential_scopes_must_reference_required_tools() -> None:
     client = TestClient(app)
     project_response = client.post(
@@ -2276,6 +2353,184 @@ def test_project_assignment_requires_workspace_allowlist() -> None:
 
     assert assignment_response.status_code == 400
     assert assignment_response.json()["detail"] == "Agent is not allowed in workspace: agent-dev"
+
+
+def test_project_assignment_rejects_deactivated_agent() -> None:
+    client = TestClient(app)
+    for agent_id in ["agent-direction", "agent-temporary-project-worker"]:
+        assert (
+            client.post(
+                "/agents",
+                json={
+                    "id": agent_id,
+                    "name": agent_id,
+                    "role": "Project participant",
+                    "division": "dev",
+                },
+            ).status_code
+            == 201
+        )
+    assert (
+        client.post(
+            "/projects",
+            json={
+                "id": "project-deactivated-assignment",
+                "title": "Deactivated assignment",
+                "goal": "Do not add deactivated agents to active projects.",
+                "owner_agent_id": "agent-direction",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/project-workspaces",
+            json={
+                "id": "workspace-deactivated-assignment",
+                "project_id": "project-deactivated-assignment",
+                "name": "Deactivated assignment workspace",
+                "memory_scope": "project:project-deactivated-assignment",
+                "allowed_agent_ids": [
+                    "agent-direction",
+                    "agent-temporary-project-worker",
+                ],
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-lifecycle-requests",
+            json={
+                "id": "lifecycle-deactivate-project-worker",
+                "action": "deactivate_agent",
+                "requested_by_type": "agent",
+                "requested_by_id": "agent-direction",
+                "reason": "The worker should leave project rotation.",
+                "target_agent_id": "agent-temporary-project-worker",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-lifecycle-requests/lifecycle-deactivate-project-worker/decisions",
+            json={
+                "request_id": "lifecycle-deactivate-project-worker",
+                "status": "approved",
+                "decided_by_type": "user",
+                "decided_by_id": "local-user",
+                "rationale": "Worker is out of rotation.",
+            },
+        ).status_code
+        == 201
+    )
+
+    assignment_response = client.post(
+        "/agent-project-assignments",
+        json={
+            "project_id": "project-deactivated-assignment",
+            "workspace_id": "workspace-deactivated-assignment",
+            "agent_id": "agent-temporary-project-worker",
+        },
+    )
+
+    assert assignment_response.status_code == 400
+    assert assignment_response.json()["detail"] == (
+        "Agent is not active: agent-temporary-project-worker"
+    )
+    assert client.get("/agent-project-assignments").json() == []
+
+
+def test_project_complexity_ignores_deactivated_assignments() -> None:
+    client = TestClient(app)
+    for agent_id in ["agent-direction", "agent-temporary-complexity-worker"]:
+        assert (
+            client.post(
+                "/agents",
+                json={
+                    "id": agent_id,
+                    "name": agent_id,
+                    "role": "Project participant",
+                    "division": "dev",
+                },
+            ).status_code
+            == 201
+        )
+    assert (
+        client.post(
+            "/projects",
+            json={
+                "id": "project-complexity-deactivated",
+                "title": "Complexity deactivated assignment",
+                "goal": "Do not count deactivated project assignments as active load.",
+                "owner_agent_id": "agent-direction",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/project-workspaces",
+            json={
+                "id": "workspace-complexity-deactivated",
+                "project_id": "project-complexity-deactivated",
+                "name": "Complexity deactivated workspace",
+                "memory_scope": "project:project-complexity-deactivated",
+                "allowed_agent_ids": [
+                    "agent-direction",
+                    "agent-temporary-complexity-worker",
+                ],
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-project-assignments",
+            json={
+                "id": "assignment-complexity-deactivated",
+                "project_id": "project-complexity-deactivated",
+                "workspace_id": "workspace-complexity-deactivated",
+                "agent_id": "agent-temporary-complexity-worker",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-lifecycle-requests",
+            json={
+                "id": "lifecycle-deactivate-complexity-worker",
+                "action": "deactivate_agent",
+                "requested_by_type": "agent",
+                "requested_by_id": "agent-direction",
+                "reason": "The worker should no longer count as active project load.",
+                "target_agent_id": "agent-temporary-complexity-worker",
+            },
+        ).status_code
+        == 201
+    )
+    assert (
+        client.post(
+            "/agent-lifecycle-requests/lifecycle-deactivate-complexity-worker/decisions",
+            json={
+                "request_id": "lifecycle-deactivate-complexity-worker",
+                "status": "approved",
+                "decided_by_type": "user",
+                "decided_by_id": "local-user",
+                "rationale": "Worker is out of rotation.",
+            },
+        ).status_code
+        == 201
+    )
+
+    assessment_response = client.post(
+        "/projects/project-complexity-deactivated/complexity-assessments"
+    )
+
+    assert assessment_response.status_code == 201
+    assert assessment_response.json()["report"]["assigned_agent_count"] == 0
 
 
 def test_state_change_rejects_unknown_actor_type_before_writing() -> None:

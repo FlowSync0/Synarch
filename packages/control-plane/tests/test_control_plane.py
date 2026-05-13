@@ -85,6 +85,74 @@ def test_agents_can_be_read_from_state_service(monkeypatch: pytest.MonkeyPatch) 
     assert payload["active_projects"] == ["project-finance-demo"]
 
 
+def test_world_view_rejects_inactive_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    inactive_agent = AGENTS[3].model_copy(update={"status": "inactive"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/agents/agent-dev":
+            return httpx.Response(200, json=inactive_agent.model_dump(mode="json"))
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "get", client.get)
+    set_agent_source(StateServiceAgentSource("http://state-service:8020"))
+
+    response = TestClient(app).get("/agents/agent-dev/world-view")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent is not active: agent-dev"
+
+
+def test_world_view_excludes_inactive_relationships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_agent = AGENTS[3]
+    inactive_peer = AGENTS[3].model_copy(
+        update={"id": "agent-dev-retired-peer", "name": "Retired peer", "status": "inactive"}
+    )
+    inactive_report = AGENTS[3].model_copy(
+        update={
+            "id": "agent-dev-retired-report",
+            "name": "Retired report",
+            "manager_id": "agent-dev",
+            "status": "inactive",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/agents":
+            return httpx.Response(
+                200,
+                json=[
+                    active_agent.model_dump(mode="json"),
+                    inactive_peer.model_dump(mode="json"),
+                    inactive_report.model_dump(mode="json"),
+                ],
+            )
+        if request.url.path == "/agents/agent-dev":
+            return httpx.Response(200, json=active_agent.model_dump(mode="json"))
+        if request.url.path == "/agents/agent-dev/soul":
+            return httpx.Response(404, json={"detail": "No active soul for agent: agent-dev"})
+        if request.url.path == "/agent-project-assignments":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/services":
+            return httpx.Response(200, json=[])
+        if request.url.path == "/skills":
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"detail": "not found"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "get", client.get)
+    set_agent_source(StateServiceAgentSource("http://state-service:8020"))
+
+    response = TestClient(app).get("/agents/agent-dev/world-view")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["peer_agent_ids"] == []
+    assert payload["direct_report_agent_ids"] == []
+
+
 def test_state_service_source_404_becomes_control_plane_404(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
