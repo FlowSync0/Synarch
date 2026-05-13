@@ -110,6 +110,16 @@ verifies the task context contains the compacted source-ID summary while excludi
 source memories. It is not part of `make verify` because it depends on external provider
 availability and consumes real tokens.
 
+Run the paid live model-gateway/DeepSeek slice with:
+
+```bash
+make test-live-model-gateway-openrouter
+```
+
+This starts `model-gateway` in OpenRouter mode, runs a Gateway scheduler batch through
+`agent-runtime` in `model_gateway` mode, and asserts the returned `AgentResult`, `ModelUsage`,
+timeline events, memory candidate, and cost record all preserve the same trace.
+
 Deterministic memory compaction and the threshold policy are covered by the normal backend tests.
 The memory-service tests assert that only approved source memories are compacted, source IDs stay
 visible in both content and structured metadata, compaction is skipped below threshold, and duplicate

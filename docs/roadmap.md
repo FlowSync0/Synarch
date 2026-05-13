@@ -424,6 +424,9 @@ Progress:
   deterministic fake provider, and an OpenRouter provider boundary.
 - Done: agent-runtime can call model-gateway with `AGENT_RUNTIME_MODE=model_gateway`, parse the
   returned content into `AgentResult`, and preserve `ModelUsage`.
+- Done: `scripts/live_model_gateway_openrouter_e2e.sh` verifies a real Gateway task run through
+  agent-runtime -> model-gateway -> OpenRouter/DeepSeek with trace, cost, and memory candidate
+  assertions.
 - Next: route provider/model selection from state-backed `ModelPolicy` into model-gateway and move
   live OpenRouter task execution onto this boundary.
 
