@@ -190,7 +190,13 @@ def reset_memory_items() -> None:
 @app.post("/memory-items", response_model=MemoryItem, status_code=201)
 def create_memory_item(item: MemoryItem) -> MemoryItem:
     validate_embedding_dimensions(item.embedding, label="Memory embedding")
-    return STORE.create(item)
+    try:
+        return STORE.create(item)
+    except psycopg.errors.ForeignKeyViolation as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Memory item references an unknown project or agent",
+        ) from error
 
 
 @app.patch("/memory-items/{item_id}/status", response_model=MemoryItem)

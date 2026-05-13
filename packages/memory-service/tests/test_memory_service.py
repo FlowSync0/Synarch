@@ -1,7 +1,10 @@
+import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+import synarch_memory_service.main as memory_main
 from synarch_memory_service.main import app, reset_memory_items
+from synarch_models import MemoryItem, MemoryStatus
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +25,42 @@ def test_create_memory_item_rejects_wrong_embedding_dimension() -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Memory embedding must have 1536 dimensions"
+
+
+def test_create_memory_item_maps_store_foreign_key_errors_to_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ForeignKeyFailingStore:
+        def create(self, item: MemoryItem) -> MemoryItem:
+            raise psycopg.errors.ForeignKeyViolation("missing reference")
+
+        def update_status(
+            self,
+            item_id: str,
+            status: MemoryStatus,
+        ) -> MemoryItem | None:
+            return None
+
+        def list_items(self) -> list[MemoryItem]:
+            return []
+
+        def reset(self) -> None:
+            return None
+
+    monkeypatch.setattr(memory_main, "STORE", ForeignKeyFailingStore())
+
+    response = TestClient(app).post(
+        "/memory-items",
+        json={
+            "id": "memory-unknown-project",
+            "scope": "project:missing",
+            "project_id": "missing",
+            "content": "Unknown projects should be rejected as bad input.",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Memory item references an unknown project or agent"
 
 
 def test_context_assembly_filters_by_scope_agent_and_project() -> None:
