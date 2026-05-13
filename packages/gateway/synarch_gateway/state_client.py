@@ -21,6 +21,9 @@ from synarch_models import (
     CredentialGrantApplication,
     CredentialGrantApplicationRequest,
     EventRecord,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
     ProjectComplexityAssessment,
     ProjectRecord,
     ProjectSplitApplication,
@@ -100,6 +103,12 @@ class StateClient(Protocol):
         kind: str | None = None,
         enabled: bool | None = None,
     ) -> list[ServiceDefinition]: ...
+
+    def get_model_provider(self, provider_id: str) -> ModelProviderConfig: ...
+
+    def get_model_definition(self, model_id: str) -> ModelDefinition: ...
+
+    def get_model_policy(self, policy_id: str) -> ModelPolicy: ...
 
     def assess_project_complexity(
         self,
@@ -363,6 +372,18 @@ class HttpStateClient:
             params["enabled"] = str(enabled).lower()
         response = self._get("/services", params=params)
         return [ServiceDefinition.model_validate(service) for service in response.json()]
+
+    def get_model_provider(self, provider_id: str) -> ModelProviderConfig:
+        response = self._get(f"/model-providers/{provider_id}")
+        return ModelProviderConfig.model_validate(response.json())
+
+    def get_model_definition(self, model_id: str) -> ModelDefinition:
+        response = self._get(f"/model-definitions/{model_id}")
+        return ModelDefinition.model_validate(response.json())
+
+    def get_model_policy(self, policy_id: str) -> ModelPolicy:
+        response = self._get(f"/model-policies/{policy_id}")
+        return ModelPolicy.model_validate(response.json())
 
     def assess_project_complexity(
         self,
@@ -675,6 +696,9 @@ class HttpStateClient:
             )
         except httpx.HTTPError as error:
             raise StateServiceUnavailable(str(error)) from error
+
+        if 400 <= response.status_code < 500:
+            raise StateServiceRequestError(response.status_code, response_detail(response))
 
         try:
             response.raise_for_status()

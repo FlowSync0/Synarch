@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from synarch_agent_runtime.main import app as agent_runtime_app
@@ -10,7 +11,7 @@ from synarch_memory_service.main import app as memory_service_app
 from synarch_state_service.main import app as state_service_app
 
 
-def health_apps() -> Iterable[tuple[str, object]]:
+def health_apps() -> Iterable[tuple[str, FastAPI]]:
     return [
         ("gateway", gateway_app),
         ("control-plane", control_plane_app),

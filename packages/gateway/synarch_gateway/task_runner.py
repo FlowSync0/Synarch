@@ -25,6 +25,9 @@ from synarch_models import (
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
     ModelUsage,
     ProjectRecord,
     TaskDraft,
@@ -120,6 +123,16 @@ class CredentialReadinessBlocker:
     reason: str
     requested_scopes: tuple[str, ...] = ()
     candidate_service_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModelRoute:
+    provider_id: str
+    model_id: str
+    input_cost_per_million_tokens: float
+    output_cost_per_million_tokens: float
+    currency: str = "USD"
+    model_policy_id: str | None = None
 
 
 class ToolReadinessChecker(Protocol):
@@ -422,6 +435,32 @@ class TaskRunner:
             )
         )
 
+    def model_route_for_world_view(self, world_view: LocalWorldView) -> ModelRoute:
+        model_policy_id = model_policy_id_from_world_view(world_view)
+        if model_policy_id is None:
+            return ModelRoute(
+                provider_id=self.provider_id,
+                model_id=self.model_id,
+                input_cost_per_million_tokens=self.input_cost_per_million_tokens,
+                output_cost_per_million_tokens=self.output_cost_per_million_tokens,
+            )
+
+        policy = self.state.get_model_policy(model_policy_id)
+        selected_model_id = selected_model_id_for_policy(self.model_id, policy)
+        allowed_model_ids = {policy.default_model_id, *policy.allowed_model_ids}
+        if selected_model_id not in allowed_model_ids:
+            raise TaskRunnerUnavailable(
+                f"Model {selected_model_id} is not allowed by policy {policy.id}"
+            )
+
+        model = self.state.get_model_definition(selected_model_id)
+        if not model.enabled:
+            raise TaskRunnerUnavailable(f"Model is disabled: {model.id}")
+        provider = self.state.get_model_provider(model.provider_id)
+        if not provider.enabled:
+            raise TaskRunnerUnavailable(f"Model provider is disabled: {provider.id}")
+        return model_route_from_state(policy, model, provider)
+
     def create_credential_access_requests(
         self,
         task: TaskRecord,
@@ -496,13 +535,52 @@ class TaskRunner:
         )
         query_embedding_dimensions = len(query_embedding) if query_embedding is not None else 0
         memory_context = memory_context_without_embeddings(memory_context)
+        try:
+            model_route = self.model_route_for_world_view(world_view)
+        except (StateServiceRequestError, TaskRunnerUnavailable) as error:
+            failed_event = self.state.create_event(
+                model_call_failed_event(
+                    task=started_task,
+                    world_view=world_view,
+                    provider_id=self.provider_id,
+                    model_id=self.model_id,
+                    model_policy_id=model_policy_id_from_world_view(world_view),
+                    trace_id=trace_id,
+                    error=f"Model route failed: {error}",
+                ),
+                headers=headers,
+            )
+            failure_result = AgentResult(
+                agent_id=world_view.agent_id,
+                task_id=started_task.id,
+                status=TaskStatus.failed,
+                actions_taken=["Model route failed before task execution."],
+                summary=f"Model route failed: {error}",
+            )
+            recorded_task = self.state.record_task_result(
+                started_task.id,
+                failure_result,
+                headers=headers,
+            )
+            return TaskRunResult(
+                trace_id=trace_id,
+                task=recorded_task,
+                project=project,
+                world_view=world_view,
+                memory_context=memory_context,
+                agent_result=failure_result,
+                model_call_events=[failed_event],
+                tool_results=[],
+                cost_records=[],
+            )
         started_event = self.state.create_event(
             model_call_started_event(
                 task=started_task,
                 world_view=world_view,
                 memory_context=memory_context,
-                provider_id=self.provider_id,
-                model_id=self.model_id,
+                provider_id=model_route.provider_id,
+                model_id=model_route.model_id,
+                model_policy_id=model_route.model_policy_id,
                 trace_id=trace_id,
                 memory_query_embedding_used=query_embedding is not None,
                 memory_query_embedding_dimensions=query_embedding_dimensions,
@@ -515,6 +593,7 @@ class TaskRunner:
                 project=project,
                 world_view=world_view,
                 memory_context=memory_context,
+                model_route=model_route,
                 trace_id=trace_id,
                 headers=headers,
             )
@@ -523,8 +602,9 @@ class TaskRunner:
                 model_call_failed_event(
                     task=started_task,
                     world_view=world_view,
-                    provider_id=self.provider_id,
-                    model_id=self.model_id,
+                    provider_id=model_route.provider_id,
+                    model_id=model_route.model_id,
+                    model_policy_id=model_route.model_policy_id,
                     trace_id=trace_id,
                     error=str(error),
                 ),
@@ -568,10 +648,11 @@ class TaskRunner:
             world_view=world_view,
             memory_context=memory_context,
             agent_result=agent_result,
-            provider_id=self.provider_id,
-            model_id=self.model_id,
-            input_cost_per_million_tokens=self.input_cost_per_million_tokens,
-            output_cost_per_million_tokens=self.output_cost_per_million_tokens,
+            provider_id=model_route.provider_id,
+            model_id=model_route.model_id,
+            input_cost_per_million_tokens=model_route.input_cost_per_million_tokens,
+            output_cost_per_million_tokens=model_route.output_cost_per_million_tokens,
+            currency=model_route.currency,
             trace_id=trace_id,
         )
         completed_event = self.state.create_event(
@@ -580,6 +661,7 @@ class TaskRunner:
                 world_view=world_view,
                 agent_result=agent_result,
                 cost_record=cost_record,
+                model_policy_id=model_route.model_policy_id,
                 trace_id=trace_id,
             ),
             headers=headers,
@@ -670,6 +752,7 @@ class TaskRunner:
         project: ProjectRecord | None,
         world_view: LocalWorldView,
         memory_context: MemoryContext,
+        model_route: ModelRoute,
         trace_id: str,
         headers: dict[str, str],
     ) -> tuple[AgentResult, list[ToolResult]]:
@@ -681,8 +764,8 @@ class TaskRunner:
                 world_view=world_view,
                 memory_context=memory_context,
                 tool_results=tool_results,
-                provider_id=self.provider_id,
-                model_id=self.model_id,
+                provider_id=model_route.provider_id,
+                model_id=model_route.model_id,
             )
         )
         combined_usage = agent_result.model_usage
@@ -715,8 +798,8 @@ class TaskRunner:
                     world_view=world_view,
                     memory_context=memory_context,
                     tool_results=tool_results,
-                    provider_id=self.provider_id,
-                    model_id=self.model_id,
+                    provider_id=model_route.provider_id,
+                    model_id=model_route.model_id,
                 )
             )
             combined_usage = combine_model_usage(combined_usage, agent_result.model_usage)
@@ -1004,6 +1087,7 @@ def cost_record_for_run(
     model_id: str,
     input_cost_per_million_tokens: float,
     output_cost_per_million_tokens: float,
+    currency: str,
     trace_id: str,
 ) -> CostRecord:
     if agent_result.model_usage is not None:
@@ -1041,11 +1125,41 @@ def cost_record_for_run(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_cost=total_cost,
+        currency=currency,
     )
 
 
 def estimated_tokens(*texts: str) -> int:
     return max(1, (sum(len(text) for text in texts) + 3) // 4)
+
+
+def model_policy_id_from_world_view(world_view: LocalWorldView) -> str | None:
+    prefix = "model_policy:"
+    for policy in world_view.policies:
+        if policy.startswith(prefix):
+            return policy.removeprefix(prefix)
+    return None
+
+
+def selected_model_id_for_policy(configured_model_id: str, policy: ModelPolicy) -> str:
+    if configured_model_id == LOCAL_RUNTIME_MODEL_ID:
+        return policy.default_model_id
+    return configured_model_id
+
+
+def model_route_from_state(
+    policy: ModelPolicy,
+    model: ModelDefinition,
+    provider: ModelProviderConfig,
+) -> ModelRoute:
+    return ModelRoute(
+        provider_id=provider.id,
+        model_id=model.id,
+        input_cost_per_million_tokens=model.input_cost_per_million_tokens,
+        output_cost_per_million_tokens=model.output_cost_per_million_tokens,
+        currency=model.currency,
+        model_policy_id=policy.id,
+    )
 
 
 def bridge_project_ids_for_run(
@@ -1102,6 +1216,7 @@ def model_call_started_event(
     memory_context: MemoryContext,
     provider_id: str,
     model_id: str,
+    model_policy_id: str | None,
     trace_id: str,
     memory_query_embedding_used: bool = False,
     memory_query_embedding_dimensions: int = 0,
@@ -1114,6 +1229,7 @@ def model_call_started_event(
             "task_id": task.id,
             "provider_id": provider_id,
             "model_id": model_id,
+            "model_policy_id": model_policy_id,
             "purpose": "task.run",
             "memory_item_count": len(memory_context.items),
             "memory_item_ids": [item.id for item in memory_context.items],
@@ -1140,6 +1256,7 @@ def model_call_completed_event(
     world_view: LocalWorldView,
     agent_result: AgentResult,
     cost_record: CostRecord,
+    model_policy_id: str | None,
     trace_id: str,
 ) -> EventRecord:
     return EventRecord(
@@ -1150,6 +1267,7 @@ def model_call_completed_event(
             "task_id": task.id,
             "provider_id": cost_record.provider_id,
             "model_id": cost_record.model_id,
+            "model_policy_id": model_policy_id,
             "cost_id": cost_record.id,
             "status": agent_result.status,
             "input_tokens": cost_record.input_tokens,
@@ -1167,6 +1285,7 @@ def model_call_failed_event(
     world_view: LocalWorldView,
     provider_id: str,
     model_id: str,
+    model_policy_id: str | None,
     trace_id: str,
     error: str,
 ) -> EventRecord:
@@ -1178,6 +1297,7 @@ def model_call_failed_event(
             "task_id": task.id,
             "provider_id": provider_id,
             "model_id": model_id,
+            "model_policy_id": model_policy_id,
             "error": error,
         },
         trace_id=trace_id,

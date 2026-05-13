@@ -62,7 +62,10 @@ def post_memory_item(memory_service_url: str, item: dict[str, Any]) -> dict[str,
         response_body = response.read().decode("utf-8")
         if response.status != 201:
             raise RuntimeError(f"Memory service returned {response.status}: {response_body}")
-        return json.loads(response_body)
+        payload = json.loads(response_body)
+        if not isinstance(payload, dict):
+            raise RuntimeError("Memory service returned a non-object response.")
+        return dict(payload)
 
 
 def seed_system_memory(

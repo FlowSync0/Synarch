@@ -18,6 +18,7 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AgentTaskRequest,
+    AiProviderType,
     AuditLogRecord,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
@@ -47,6 +48,9 @@ from synarch_models import (
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
+    ModelDefinition,
+    ModelPolicy,
+    ModelProviderConfig,
     ModelUsage,
     PermissionBundle,
     ProjectComplexityAssessment,
@@ -73,6 +77,9 @@ class FakeStateClient:
         self.assignments: list[AgentProjectAssignment] = []
         self.tasks: list[TaskRecord] = []
         self.services: list[ServiceDefinition] = []
+        self.model_providers: list[ModelProviderConfig] = []
+        self.model_definitions: list[ModelDefinition] = []
+        self.model_policies: list[ModelPolicy] = []
         self.connector_jobs: list[ConnectorJobRecord] = []
         self.connector_job_runs: list[ConnectorJobRunRecord] = []
         self.events: list[EventRecord] = []
@@ -174,6 +181,24 @@ class FakeStateClient:
         if enabled is not None:
             services = [service for service in services if service.enabled is enabled]
         return services
+
+    def get_model_provider(self, provider_id: str) -> ModelProviderConfig:
+        for provider in self.model_providers:
+            if provider.id == provider_id:
+                return provider
+        raise StateServiceRequestError(404, f"Unknown model provider: {provider_id}")
+
+    def get_model_definition(self, model_id: str) -> ModelDefinition:
+        for model in self.model_definitions:
+            if model.id == model_id:
+                return model
+        raise StateServiceRequestError(404, f"Unknown model definition: {model_id}")
+
+    def get_model_policy(self, policy_id: str) -> ModelPolicy:
+        for policy in self.model_policies:
+            if policy.id == policy_id:
+                return policy
+        raise StateServiceRequestError(404, f"Unknown model policy: {policy_id}")
 
     def assess_project_complexity(
         self,
@@ -2604,6 +2629,89 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_task_runner_resolves_model_route_from_world_view_policy() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_model_policy",
+            title="Model policy project",
+            goal="Route model calls through the employee model policy.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_model_policy",
+            project_id="project_model_policy",
+            title="Run with the policy model",
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Runtime uses the policy-selected provider and model."],
+        )
+    )
+    state_client.model_providers.append(
+        ModelProviderConfig(
+            id="provider-openrouter",
+            name="OpenRouter",
+            provider_type=AiProviderType.openrouter,
+            default_model_id="deepseek/deepseek-v4-flash",
+        )
+    )
+    state_client.model_definitions.append(
+        ModelDefinition(
+            id="deepseek/deepseek-v4-flash",
+            provider_id="provider-openrouter",
+            display_name="DeepSeek V4 Flash",
+            input_cost_per_million_tokens=0.0,
+            output_cost_per_million_tokens=0.0,
+        )
+    )
+    state_client.model_policies.append(
+        ModelPolicy(
+            id="policy-openrouter-test",
+            name="OpenRouter test policy",
+            default_model_id="deepseek/deepseek-v4-flash",
+            allowed_model_ids=["deepseek/deepseek-v4-flash"],
+        )
+    )
+    runtime_client = FakeAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(
+            {
+                "agent-dev": LocalWorldView(
+                    agent_id="agent-dev",
+                    role="Code and infra",
+                    division="dev",
+                    policies=["model_policy:policy-openrouter-test"],
+                )
+            }
+        ),
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+    )
+
+    result = runner.run_task(
+        "task_model_policy",
+        trace_id="trace_model_policy_route",
+        headers={"x-synarch-trace-id": "trace_model_policy_route"},
+    )
+
+    assert runtime_client.requests[0].provider_id == "provider-openrouter"
+    assert runtime_client.requests[0].model_id == "deepseek/deepseek-v4-flash"
+    assert result.model_call_events[0].payload["provider_id"] == "provider-openrouter"
+    assert result.model_call_events[0].payload["model_id"] == "deepseek/deepseek-v4-flash"
+    assert (
+        result.model_call_events[0].payload["model_policy_id"]
+        == "policy-openrouter-test"
+    )
+    assert (
+        result.model_call_events[1].payload["model_policy_id"]
+        == "policy-openrouter-test"
+    )
+    assert result.cost_records[0].provider_id == "provider-openrouter"
+    assert result.cost_records[0].model_id == "deepseek/deepseek-v4-flash"
 
 
 def test_run_next_task_includes_workspace_bridge_memory_scope() -> None:
