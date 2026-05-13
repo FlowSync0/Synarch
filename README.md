@@ -284,6 +284,7 @@ Synarch/
 │  ├─ state-service/            # State store + migrations
 │  ├─ memory-service/           # Memory Layer (OpenViking, pgvector)
 │  ├─ event-service/            # NATS event bus
+│  ├─ model-gateway/            # Provider routing boundary
 │  ├─ agent-runtime/            # Agent execution (Hermes wrappers)
 │  └─ frontend/                 # Next.js dashboard
 ├─ shared/

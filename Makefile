@@ -27,6 +27,7 @@ install-backend:
 	$(PYTHON) -m pip install -e packages/state-service
 	$(PYTHON) -m pip install -e packages/memory-service
 	$(PYTHON) -m pip install -e packages/event-service
+	$(PYTHON) -m pip install -e packages/model-gateway
 	$(PYTHON) -m pip install -e packages/agent-runtime
 	$(PYTHON) -m pip install pytest ruff mypy
 
@@ -94,7 +95,7 @@ lint:
 	$(PYTHON) -m ruff check .
 
 typecheck:
-	$(PYTHON) -m mypy shared/models packages/gateway packages/control-plane packages/state-service packages/memory-service packages/event-service packages/agent-runtime --cache-dir "$(MYPY_CACHE_DIR)"
+	$(PYTHON) -m mypy shared/models packages/gateway packages/control-plane packages/state-service packages/memory-service packages/event-service packages/model-gateway packages/agent-runtime --cache-dir "$(MYPY_CACHE_DIR)"
 
 verify: lint typecheck test
 
@@ -111,4 +112,4 @@ dev-infra:
 	docker compose up postgres redis nats otel-collector prometheus grafana
 
 dev-backend:
-	docker compose up --build gateway control-plane state-service memory-service event-service agent-runtime
+	docker compose up --build gateway control-plane state-service memory-service event-service model-gateway agent-runtime

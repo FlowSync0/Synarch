@@ -40,6 +40,7 @@ Core service ports:
 - Memory Service: `http://localhost:8030`
 - Event Service: `http://localhost:8040`
 - Agent Runtime: `http://localhost:8050`
+- Model Gateway: `http://localhost:8060`
 
 ## State Database
 

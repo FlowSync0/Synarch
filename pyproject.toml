@@ -6,6 +6,7 @@ pythonpath = [
   "packages/state-service",
   "packages/memory-service",
   "packages/event-service",
+  "packages/model-gateway",
   "packages/agent-runtime"
 ]
 testpaths = ["shared/models/tests", "packages", "tests"]
@@ -26,6 +27,7 @@ src = [
   "packages/state-service",
   "packages/memory-service",
   "packages/event-service",
+  "packages/model-gateway",
   "packages/agent-runtime"
 ]
 

@@ -15,6 +15,9 @@ from synarch_models import (
     EventType,
     HealthResponse,
     MemoryItem,
+    ModelCompletionRequest,
+    ModelCompletionResponse,
+    ModelMessage,
     ModelUsage,
     TaskDraft,
     TaskStatus,
@@ -26,6 +29,8 @@ app = FastAPI(title="Synarch Agent Runtime", version="0.1.0")
 
 class Settings(BaseSettings):
     agent_runtime_mode: str = "stub"
+    model_gateway_url: str = "http://model-gateway:8060"
+    model_gateway_timeout_seconds: float = 180.0
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     openrouter_api_key_env_var: str = "OPENROUTER_API_KEY"
     openrouter_provider_id: str = "provider-openrouter"
@@ -50,6 +55,8 @@ def healthz() -> HealthResponse:
 
 @app.post("/tasks/run", response_model=AgentResult)
 def run_task(request: AgentTaskRequest) -> AgentResult:
+    if settings.agent_runtime_mode == "model_gateway":
+        return run_task_with_model_gateway(request)
     if settings.agent_runtime_mode == "openrouter":
         return run_task_with_openrouter(request)
     if settings.agent_runtime_mode != "stub":
@@ -118,10 +125,72 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
     message = first_choice.get("message", {})
     if not isinstance(message, dict):
         message = {}
+    usage = model_usage_from_response(body, provider_id, model_id)
     content = message.get("content") or ""
+    if not isinstance(content, str):
+        content = ""
+    return agent_result_from_model_content(
+        request=request,
+        content=content,
+        usage=usage,
+        mode="openrouter",
+        provider_id=provider_id,
+        model_id=model_id,
+    )
+
+
+def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
+    completion_request = ModelCompletionRequest(
+        agent_id=request.world_view.agent_id,
+        purpose="agent_task",
+        provider_id=request.provider_id,
+        model_id=request.model_id,
+        task_id=request.task.id,
+        project_id=request.task.project_id,
+        messages=agent_messages(request),
+        max_output_tokens=request.max_output_tokens,
+        metadata={"runtime": "agent-runtime"},
+    )
+    try:
+        response = httpx.post(
+            f"{settings.model_gateway_url.rstrip('/')}/model-calls/complete",
+            json=completion_request.model_dump(mode="json"),
+            timeout=settings.model_gateway_timeout_seconds,
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="Model Gateway request failed") from error
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "provider_status": response.status_code,
+                "error": response_detail(response),
+            },
+        )
+
+    completion = ModelCompletionResponse.model_validate(response.json())
+    return agent_result_from_model_content(
+        request=request,
+        content=completion.content,
+        usage=completion.usage,
+        mode="model-gateway",
+        provider_id=completion.provider_id,
+        model_id=completion.model_id,
+    )
+
+
+def agent_result_from_model_content(
+    *,
+    request: AgentTaskRequest,
+    content: str,
+    usage: ModelUsage,
+    mode: str,
+    provider_id: str,
+    model_id: str,
+) -> AgentResult:
     parsed = parse_agent_json(content)
     status = parsed_status(parsed.get("status"))
-    usage = model_usage_from_response(body, provider_id, model_id)
     event = EventRecord(
         type=EventType.agent_reported,
         source_agent_id=request.world_view.agent_id,
@@ -129,7 +198,8 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         payload={
             "task_id": request.task.id,
             "division": request.world_view.division,
-            "mode": "openrouter",
+            "mode": mode,
+            "provider_id": provider_id,
             "model_id": model_id,
         },
     )
@@ -147,50 +217,54 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
     )
 
 
+def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
+    return [
+        ModelMessage(
+            role="system",
+            content=(
+                "You are a Synarch AI employee. Return only valid JSON with keys "
+                "status, summary, actions_taken, sub_tasks_created, and "
+                "memory_candidates, tool_calls_requested. "
+                "status must be one of completed, needs_review, blocked, failed. "
+                "sub_tasks_created must be a list of small debuggable task objects "
+                "with title, description, assigned_agent_id, depends_on, "
+                "required_tools, required_tool_scopes, acceptance_criteria, and sequence. "
+                "tool_calls_requested must be a list of tool call objects with "
+                "tool_name, service_id, reason, and arguments. Request a tool only "
+                "when it is in world_view.permissions.allowed_tools and you need "
+                "external evidence before finalizing. If tool_results are present, "
+                "use them and return a final answer with no new tool calls. "
+                "For web.fetch, arguments must include url and may include max_bytes. "
+                "Keep the answer operational and auditable."
+            ),
+        ),
+        ModelMessage(
+            role="user",
+            content=json.dumps(
+                {
+                    "task": request.task.model_dump(mode="json"),
+                    "project": request.project.model_dump(mode="json")
+                    if request.project is not None
+                    else None,
+                    "world_view": request.world_view.model_dump(mode="json"),
+                    "memory_context": request.memory_context.model_dump(mode="json")
+                    if request.memory_context is not None
+                    else None,
+                    "tool_results": [
+                        tool_result.model_dump(mode="json")
+                        for tool_result in request.tool_results
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ),
+    ]
+
+
 def openrouter_payload(request: AgentTaskRequest, model_id: str) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model_id,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You are a Synarch AI employee. Return only valid JSON with keys "
-                    "status, summary, actions_taken, sub_tasks_created, and "
-                    "memory_candidates, tool_calls_requested. "
-                    "status must be one of completed, needs_review, blocked, failed. "
-                    "sub_tasks_created must be a list of small debuggable task objects "
-                    "with title, description, assigned_agent_id, depends_on, "
-                    "required_tools, required_tool_scopes, acceptance_criteria, and sequence. "
-                    "tool_calls_requested must be a list of tool call objects with "
-                    "tool_name, service_id, reason, and arguments. Request a tool only "
-                    "when it is in world_view.permissions.allowed_tools and you need "
-                    "external evidence before finalizing. If tool_results are present, "
-                    "use them and return a final answer with no new tool calls. "
-                    "For web.fetch, arguments must include url and may include max_bytes. "
-                    "Keep the answer operational and auditable."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "task": request.task.model_dump(mode="json"),
-                        "project": request.project.model_dump(mode="json")
-                        if request.project is not None
-                        else None,
-                        "world_view": request.world_view.model_dump(mode="json"),
-                        "memory_context": request.memory_context.model_dump(mode="json")
-                        if request.memory_context is not None
-                        else None,
-                        "tool_results": [
-                            tool_result.model_dump(mode="json")
-                            for tool_result in request.tool_results
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-            },
-        ],
+        "messages": [message.model_dump(mode="json") for message in agent_messages(request)],
         "max_tokens": request.max_output_tokens or settings.openrouter_max_output_tokens,
         "temperature": 0.2,
     }

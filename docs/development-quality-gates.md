@@ -71,6 +71,8 @@ GoalEnvelope
   -> Optional scheduler worker loop for cron/server execution
   -> Durable scheduler.tick event and audit log for every batch, including empty ticks
   -> Gateway service health checks filtered by LocalWorldView with event and audit traces
+  -> Model Gateway can return deterministic typed completions through ModelCompletionResponse
+  -> Agent Runtime can call Model Gateway instead of directly owning provider-specific calls
   -> Durable connector jobs can be created, run-recorded, and stopped with event/audit traces
   -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Gateway connector-job execution uses the existing tool gate before recording runs

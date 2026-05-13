@@ -157,3 +157,89 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
         "total_cost": 0.00002,
         "currency": "USD",
     }
+
+
+def test_runtime_can_call_model_gateway_with_fake_response(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "model_gateway")
+    monkeypatch.setattr(runtime_main.settings, "model_gateway_url", "http://model-gateway:8060")
+
+    def fake_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        assert url == "http://model-gateway:8060/model-calls/complete"
+        assert json["agent_id"] == "agent-dev"
+        assert json["purpose"] == "agent_task"
+        assert json["provider_id"] == "provider-openrouter"
+        assert json["model_id"] == "deepseek/deepseek-v4-flash"
+        messages = json["messages"]
+        assert isinstance(messages, list)
+        first_message = messages[0]
+        assert isinstance(first_message, dict)
+        assert first_message["role"] == "system"
+        assert timeout == runtime_main.settings.model_gateway_timeout_seconds
+        return httpx.Response(
+            200,
+            json={
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "content": (
+                    '{"status":"completed",'
+                    '"summary":"Model gateway completed the task.",'
+                    '"actions_taken":["Called model gateway"],'
+                    '"sub_tasks_created":[],'
+                    '"tool_calls_requested":[],'
+                    '"memory_candidates":[]}'
+                ),
+                "usage": {
+                    "provider_id": "provider-openrouter",
+                    "model_id": "deepseek/deepseek-v4-flash",
+                    "input_tokens": 90,
+                    "output_tokens": 40,
+                    "total_cost": 0.000017,
+                    "currency": "USD",
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_model_gateway_demo",
+                "project_id": "project_demo",
+                "title": "Draft plan",
+                "assigned_agent_id": "agent-dev",
+                "acceptance_criteria": ["Plan has a verifiable next action."],
+            },
+            "world_view": {
+                "agent_id": "agent-dev",
+                "role": "Code and infra",
+                "division": "dev",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["summary"] == "Model gateway completed the task."
+    assert payload["actions_taken"] == ["Called model gateway"]
+    assert payload["events_emitted"][0]["payload"]["mode"] == "model-gateway"
+    assert payload["model_usage"] == {
+        "provider_id": "provider-openrouter",
+        "model_id": "deepseek/deepseek-v4-flash",
+        "input_tokens": 90,
+        "output_tokens": 40,
+        "total_cost": 0.000017,
+        "currency": "USD",
+    }

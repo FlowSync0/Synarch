@@ -620,6 +620,25 @@ class ModelCallRequest(SynarchModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ModelMessage(SynarchModel):
+    role: str
+    content: str
+
+
+class ModelCompletionRequest(SynarchModel):
+    agent_id: str
+    purpose: str
+    messages: list[ModelMessage] = Field(min_length=1)
+    provider_id: str | None = None
+    model_id: str | None = None
+    task_id: str | None = None
+    project_id: str | None = None
+    trace_id: str = Field(default_factory=lambda: new_id("trace"))
+    max_output_tokens: int | None = None
+    temperature: float = 0.2
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class ModelUsage(SynarchModel):
     provider_id: str
     model_id: str
@@ -627,6 +646,14 @@ class ModelUsage(SynarchModel):
     output_tokens: int = 0
     total_cost: float = 0.0
     currency: str = "USD"
+
+
+class ModelCompletionResponse(SynarchModel):
+    provider_id: str
+    model_id: str
+    content: str
+    usage: ModelUsage
+    raw_response: dict[str, Any] = Field(default_factory=dict)
 
 
 class CostRecord(SynarchModel):

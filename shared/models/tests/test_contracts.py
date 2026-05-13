@@ -22,6 +22,9 @@ from synarch_models import (
     MemoryItem,
     MemoryRelationProposalRequest,
     MemoryStatus,
+    ModelCompletionRequest,
+    ModelCompletionResponse,
+    ModelMessage,
     ModelUsage,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
@@ -146,6 +149,42 @@ def test_agent_result_is_serializable() -> None:
     assert payload["events_emitted"][0]["type"] == "task.completed"
     assert payload["tool_calls_requested"][0]["tool_name"] == "event.emit"
     assert payload["model_usage"]["model_id"] == "deepseek/deepseek-v4-flash"
+
+
+def test_model_completion_contract_carries_messages_and_usage() -> None:
+    request = ModelCompletionRequest(
+        agent_id="agent-dev",
+        purpose="agent_task",
+        provider_id="provider-openrouter",
+        model_id="deepseek/deepseek-v4-flash",
+        task_id="task_model_gateway",
+        project_id="project_model_gateway",
+        messages=[
+            ModelMessage(role="system", content="Return JSON."),
+            ModelMessage(role="user", content="Plan the task."),
+        ],
+        max_output_tokens=400,
+    )
+    response = ModelCompletionResponse(
+        provider_id="provider-openrouter",
+        model_id="deepseek/deepseek-v4-flash",
+        content='{"status":"needs_review"}',
+        usage=ModelUsage(
+            provider_id="provider-openrouter",
+            model_id="deepseek/deepseek-v4-flash",
+            input_tokens=20,
+            output_tokens=5,
+            total_cost=0.000001,
+        ),
+    )
+
+    request_payload = request.model_dump(mode="json")
+    response_payload = response.model_dump(mode="json")
+
+    assert request_payload["messages"][0]["role"] == "system"
+    assert request_payload["purpose"] == "agent_task"
+    assert response_payload["usage"]["input_tokens"] == 20
+    assert response_payload["content"] == '{"status":"needs_review"}'
 
 
 def test_task_run_result_captures_execution_boundary() -> None:

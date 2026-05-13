@@ -12,7 +12,7 @@ project into an untestable multi-agent prototype.
 Synarch is currently a clean executable skeleton, not yet a durable AI company runtime.
 
 - Backend services exist as FastAPI boundaries: gateway, control-plane, state-service,
-  memory-service, event-service, and agent-runtime.
+  memory-service, event-service, model-gateway, and agent-runtime.
 - Shared Pydantic contracts exist for goals, projects, tasks, agents, memory, events, tools,
   model providers, model policies, costs, audit logs, lifecycle requests, project workspaces, and
   project split requests.
@@ -43,9 +43,9 @@ through the dashboard.
 | A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost/health dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, and exposes an opt-in scheduler worker. | Routing is keyword-based only and there is no durable worker queue yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
-| D. Domain Agents | Partial | Agent runtime supports deterministic stub mode and interim OpenRouter execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, no tool execution, and no standalone model-gateway service. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
+| D. Domain Agents | Partial | Agent runtime supports deterministic stub mode, interim OpenRouter execution, and model-gateway-backed execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, and no sandboxed tool execution inside the runtime. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
 | E. Project / Workflow | Partial | Project/task contracts, durable repositories, task dependencies, atomic task start claim, task lease heartbeat, expired lease retry recovery, retry backoff, dead-letter review metadata, task review decisions, task result recording, bounded ready-batch execution, scheduler tick event/audit records, opt-in scheduler worker, and timeline events exist. | No durable worker queue or human review UI for dead-lettered tasks yet. | Bounded scheduler loop executes only ready tasks and emits traceable batch output. |
-| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, explicit workspace bridge project isolation, bounded graph expansion through `related_memory_ids`, reviewable memory relation proposals, optional query-embedding cosine ranking, OpenRouter task query embeddings, embedded memory candidates, bounded embedding backfill, deterministic fallback ranking, 1536D embedding validation, reusable vector-ranking E2E, live OpenRouter embedding E2E, live embedding-backfill E2E, live bridge/graph E2E, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, live approved/rejected-memory validation, deterministic compaction with structured source provenance, threshold-based compaction policy, duplicate suppression, project-wide compaction planning, Gateway planning restricted to active project workspaces, reusable active/inactive workspace compaction E2E, compaction worker path, and live compacted-memory validation exist. | No hierarchical context database or relation-proposal dashboard controls yet. | Add dashboard controls for reviewing and applying memory relation proposals. |
+| F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, explicit workspace bridge project isolation, bounded graph expansion through `related_memory_ids`, reviewable memory relation proposals, dashboard relation-proposal apply controls, optional query-embedding cosine ranking, OpenRouter task query embeddings, embedded memory candidates, bounded embedding backfill, deterministic fallback ranking, 1536D embedding validation, reusable vector-ranking E2E, live OpenRouter embedding E2E, live embedding-backfill E2E, live bridge/graph E2E, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, live approved/rejected-memory validation, deterministic compaction with structured source provenance, threshold-based compaction policy, duplicate suppression, project-wide compaction planning, Gateway planning restricted to active project workspaces, reusable active/inactive workspace compaction E2E, compaction worker path, and live compacted-memory validation exist. | No hierarchical context database yet. | Start model-gateway extraction before adding heavier memory/agent autonomy. |
 | G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, `event.emit`/`web.fetch` adapters, task-scoped credential gates, service health checks, durable connector job lifecycle records, and bounded connector workers exist. | No sandbox execution and no real external connector adapters yet. | Connector job executes a real adapter only after permission, service, and credential gates pass. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
 | I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
@@ -381,6 +381,8 @@ Progress:
 - Done: gateway can create reviewable `memory_relation_proposal` memory items, apply approved
   proposals to source `metadata.related_memory_ids`, and keep proposal records out of runtime
   context assembly.
+- Done: dashboard memory review can display relation proposal source/target metadata and apply
+  approved proposals through the same-origin gateway proxy.
 - Done: `scripts/live_memory_bridge_scope_e2e.sh` verifies proposal, approval, application, target
   memory, and explicitly bridged graph-related source memory are visible while another project
   remains hidden.
@@ -418,8 +420,12 @@ Progress:
 - Done: agent-runtime has an interim OpenRouter adapter for `deepseek/deepseek-v4-flash`.
 - Done: OpenRouter API keys are read only from `OPENROUTER_API_KEY`.
 - Done: runtime responses can include `ModelUsage`; gateway turns that into durable `CostRecord`.
-- Next: extract provider routing into a real `packages/model-gateway` service and enforce
-  `ModelPolicy`.
+- Done: `packages/model-gateway` exposes `ModelCompletionRequest`/`ModelCompletionResponse`, a
+  deterministic fake provider, and an OpenRouter provider boundary.
+- Done: agent-runtime can call model-gateway with `AGENT_RUNTIME_MODE=model_gateway`, parse the
+  returned content into `AgentResult`, and preserve `ModelUsage`.
+- Next: route provider/model selection from state-backed `ModelPolicy` into model-gateway and move
+  live OpenRouter task execution onto this boundary.
 
 Definition of done:
 
