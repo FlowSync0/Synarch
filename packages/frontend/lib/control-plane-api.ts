@@ -164,6 +164,10 @@ export type AgentLifecycleDecision = {
   decided_at: string;
 };
 
+export type AgentModelPolicyUpdate = {
+  model_policy_id: string | null;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -224,6 +228,26 @@ export async function getAgentWorldView(agentId: string): Promise<LocalWorldView
     }
   );
   return parseJsonResponse<LocalWorldView>(response);
+}
+
+export async function updateAgentModelPolicy(
+  agentId: string,
+  modelPolicyId: string | null
+): Promise<AgentDefinition> {
+  const response = await fetch(
+    `/api/control-plane/agents/${encodeURIComponent(agentId)}/model-policy`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_model_policy_${Date.now()}`
+      },
+      body: JSON.stringify({ model_policy_id: modelPolicyId } satisfies AgentModelPolicyUpdate)
+    }
+  );
+  return parseJsonResponse<AgentDefinition>(response);
 }
 
 export async function decideAgentLifecycleRequest({

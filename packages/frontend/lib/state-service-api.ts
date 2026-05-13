@@ -82,6 +82,42 @@ export type AuditLogRecord = {
   created_at: string;
 };
 
+export type AiProviderType = "local" | "openrouter" | "openai" | "anthropic" | "custom";
+
+export type ModelProviderConfig = {
+  id: string;
+  name: string;
+  provider_type: AiProviderType;
+  base_url?: string | null;
+  api_key_env_var?: string | null;
+  default_model_id?: string | null;
+  enabled: boolean;
+};
+
+export type ModelDefinition = {
+  id: string;
+  provider_id: string;
+  display_name: string;
+  context_window?: number | null;
+  input_cost_per_million_tokens: number;
+  output_cost_per_million_tokens: number;
+  currency: string;
+  supports_tool_calling: boolean;
+  supports_structured_output: boolean;
+  enabled: boolean;
+};
+
+export type ModelPolicy = {
+  id: string;
+  name: string;
+  default_model_id: string;
+  allowed_model_ids: string[];
+  max_cost_per_task?: number | null;
+  max_cost_per_day?: number | null;
+  currency: string;
+  require_human_approval_above?: number | null;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -123,6 +159,27 @@ export async function listAuditLogs(): Promise<AuditLogRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<AuditLogRecord[]>(response);
+}
+
+export async function listModelProviders(): Promise<ModelProviderConfig[]> {
+  const response = await fetch("/api/state-service/model-providers", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ModelProviderConfig[]>(response);
+}
+
+export async function listModelDefinitions(): Promise<ModelDefinition[]> {
+  const response = await fetch("/api/state-service/model-definitions", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ModelDefinition[]>(response);
+}
+
+export async function listModelPolicies(): Promise<ModelPolicy[]> {
+  const response = await fetch("/api/state-service/model-policies", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ModelPolicy[]>(response);
 }
 
 export async function listConnectorJobs(): Promise<ConnectorJobRecord[]> {
