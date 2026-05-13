@@ -83,10 +83,11 @@
       "Gateway persists agent memory candidates as proposed and emits memory.candidate_created",
       "Proposed and rejected memories are excluded from context assembly",
       "Gateway and dashboard can approve or reject memory candidates",
-      "Live OpenRouter E2E verifies approved memory appears in the next task context"
+      "Live OpenRouter E2E verifies approved memory appears in the next task context",
+      "Live OpenRouter E2E verifies rejected memory stays out of the next task context"
     ],
     "main_gap": "No compaction, vector search, graph retrieval, or hierarchical context database.",
-    "next_validation": "Reject a bad memory candidate and verify it stays out of future task context.",
+    "next_validation": "Add memory compaction for long-running projects without losing provenance.",
     "source": "docs/roadmap.md"
   },
   {

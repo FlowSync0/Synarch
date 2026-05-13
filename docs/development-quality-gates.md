@@ -101,8 +101,9 @@ the gateway, and asserts the timeline contains child tasks, task events, a sched
 audit, no skipped task claims, no lease recoveries, and a cost record. It also seeds a project memory,
 requires the model to read it, persists a proposed memory candidate, approves that candidate through
 the gateway, runs a follow-up task, and verifies the approved candidate appears in the next task
-context. It is not part of `make verify` because it depends on external provider availability and
-consumes real tokens.
+context. The same run also rejects a separate proposed memory item and verifies it stays out of the
+follow-up task context. It is not part of `make verify` because it depends on external provider
+availability and consumes real tokens.
 
 Run one scheduler tick with:
 

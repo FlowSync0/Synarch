@@ -9,8 +9,10 @@ RUN_ID="${RUN_ID:-$(date +%s)}"
 PROJECT_ID="project_live_openrouter_${RUN_ID}"
 TASK_ID="task_live_openrouter_${RUN_ID}"
 FOLLOWUP_TASK_ID="task_live_openrouter_followup_${RUN_ID}"
+REJECTED_MEMORY_ID="memory_live_openrouter_rejected_${RUN_ID}"
 TRACE_ID="trace_live_openrouter_${RUN_ID}"
 MARKER="SYNARCH_LIVE_OK_${RUN_ID}"
+REJECTED_MARKER="SYNARCH_REJECTED_MEMORY_${RUN_ID}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -202,19 +204,40 @@ fi
 patch_json "${GATEWAY_URL}/memory-items/${approved_candidate_memory_id}/status" \
   '{"status":"approved"}' >/dev/null
 
+rejected_memory_payload="$(
+  jq -n \
+    --arg id "$REJECTED_MEMORY_ID" \
+    --arg project_id "$PROJECT_ID" \
+    --arg marker "$REJECTED_MARKER" \
+    '{
+      id: $id,
+      scope: ("project:" + $project_id),
+      agent_id: "agent-ops-sourcing",
+      project_id: $project_id,
+      status: "proposed",
+      content: ("Rejected live memory marker that must stay out of future context: " + $marker)
+    }'
+)"
+
+post_json "${MEMORY_SERVICE_URL}/memory-items" "$rejected_memory_payload" >/dev/null
+patch_json "${GATEWAY_URL}/memory-items/${REJECTED_MEMORY_ID}/status" \
+  '{"status":"rejected"}' >/dev/null
+
 followup_task_payload="$(
   jq -n \
     --arg id "$FOLLOWUP_TASK_ID" \
     --arg project_id "$PROJECT_ID" \
     --arg memory_id "$approved_candidate_memory_id" \
+    --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
     '{
       id: $id,
       project_id: $project_id,
       title: "Verify approved memory is injected",
-      description: ("Return status completed after inspecting memory_context. Do not create child tasks. The approved memory id that must be present in memory_context is " + $memory_id + "."),
+      description: ("Return status completed after inspecting memory_context. Do not create child tasks. The approved memory id that must be present in memory_context is " + $memory_id + ". The rejected memory id must not be present in memory_context: " + $rejected_memory_id + "."),
       assigned_agent_id: "agent-ops-sourcing",
       acceptance_criteria: [
         "The approved memory candidate from the previous run is present in memory_context.",
+        "The rejected memory candidate is absent from memory_context.",
         "The task completes without creating child tasks."
       ],
       sequence: 2
@@ -231,12 +254,14 @@ followup_run_response="$(
 printf "%s" "$followup_run_response" | jq -e \
   --arg task_id "$FOLLOWUP_TASK_ID" \
   --arg memory_id "$approved_candidate_memory_id" \
+  --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
   '
     (.task.id == $task_id) and
     (.task.status == "completed") and
     (.agent_result.status == "completed") and
     (.memory_context.items | type == "array") and
     (any(.memory_context.items[]; .id == $memory_id)) and
+    (all(.memory_context.items[]; .id != $rejected_memory_id)) and
     (.cost_records[0].provider_id == "provider-openrouter") and
     (.cost_records[0].model_id == "deepseek/deepseek-v4-flash") and
     (.cost_records[0].input_tokens > 0) and
@@ -250,11 +275,23 @@ timeline_after_memory_review="$(
 printf "%s" "$timeline_after_memory_review" | jq -e \
   --arg trace_id "$TRACE_ID" \
   --arg memory_id "$approved_candidate_memory_id" \
+  --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
   --arg followup_task_id "$FOLLOWUP_TASK_ID" \
   '
     ([.events[] | select(.trace_id == $trace_id and .type == "memory.status_updated" and .payload.memory_id == $memory_id and .payload.status == "approved")] | length == 1) and
+    ([.events[] | select(.trace_id == $trace_id and .type == "memory.status_updated" and .payload.memory_id == $rejected_memory_id and .payload.status == "rejected")] | length == 1) and
     ([.tasks[] | select(.id == $followup_task_id and .status == "completed")] | length == 1) and
     ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .model_id == "deepseek/deepseek-v4-flash" and .input_tokens > 0 and .output_tokens > 0)] | length >= 2)
+  ' >/dev/null
+
+memory_items_after_review="$(
+  curl -fsS "${MEMORY_SERVICE_URL}/memory-items?project_id=${PROJECT_ID}"
+)"
+
+printf "%s" "$memory_items_after_review" | jq -e \
+  --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
+  '
+    ([.[] | select(.id == $rejected_memory_id and .status == "rejected")] | length == 1)
   ' >/dev/null
 
 printf "%s" "$run_response" | jq \
@@ -264,6 +301,7 @@ printf "%s" "$run_response" | jq \
   --arg trace_id "$TRACE_ID" \
   --arg marker "$MARKER" \
   --arg approved_memory_id "$approved_candidate_memory_id" \
+  --arg rejected_memory_id "$REJECTED_MEMORY_ID" \
   --argjson followup_run "$followup_run_response" \
   --arg stop_reason "$(printf "%s" "$batch_response" | jq -r '.stop_reason')" \
   --arg scheduler_event_id "$(printf "%s" "$batch_response" | jq -r '.scheduler_event.id')" \
@@ -276,6 +314,7 @@ printf "%s" "$run_response" | jq \
     trace_id: $trace_id,
     marker: $marker,
     approved_memory_id: $approved_memory_id,
+    rejected_memory_id: $rejected_memory_id,
     batch_stop_reason: $stop_reason,
     scheduler_event_id: $scheduler_event_id,
     scheduler_audit_id: $scheduler_audit_id,
