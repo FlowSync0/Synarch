@@ -110,7 +110,8 @@ availability and consumes real tokens.
 
 Deterministic memory compaction and the threshold policy are covered by the normal backend tests.
 The memory-service tests assert that only approved source memories are compacted, source IDs stay
-visible, and compaction is skipped below threshold; the gateway tests assert `memory.compacted` is
+visible in both content and structured metadata, compaction is skipped below threshold, and duplicate
+compaction requests reuse the existing proposed item. The gateway tests assert `memory.compacted` is
 emitted only when a compaction is actually created.
 
 Run one scheduler tick with:

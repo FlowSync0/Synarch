@@ -965,6 +965,14 @@ class FakeMemoryClient:
                 status=request.status,
                 agent_id=request.agent_id,
                 project_id=request.project_id,
+                metadata={
+                    "kind": "compaction",
+                    "source_memory_ids": [item.id for item in source_items],
+                    "source_count": len(source_items),
+                    "source_tokens": sum(
+                        max(1, (len(item.content) + 3) // 4) for item in source_items
+                    ),
+                },
             )
         )
         return MemoryCompactionResult(
@@ -1003,6 +1011,30 @@ class FakeMemoryClient:
                 source_memory_ids=[item.id for item in source_items],
                 source_count=len(source_items),
                 source_tokens=source_tokens,
+            )
+        existing_compacted_item = next(
+            (
+                item
+                for item in self.items_by_id.values()
+                if item.scope == request.scope
+                and item.project_id == request.project_id
+                and item.agent_id == request.agent_id
+                and item.status in {MemoryStatus.approved, MemoryStatus.proposed}
+                and item.metadata.get("kind") == "compaction"
+                and item.metadata.get("source_memory_ids")
+                == [source_item.id for source_item in source_items]
+            ),
+            None,
+        )
+        if existing_compacted_item is not None:
+            return MemoryCompactionPolicyResult(
+                compaction_needed=False,
+                reason="matching_compaction_exists",
+                threshold_tokens=request.min_source_tokens,
+                source_memory_ids=[item.id for item in source_items],
+                source_count=len(source_items),
+                source_tokens=source_tokens,
+                existing_compacted_item=existing_compacted_item,
             )
         compaction = self.compact_memory_items(compaction_request)
         return MemoryCompactionPolicyResult(
@@ -4176,9 +4208,10 @@ def test_compact_memory_items_if_needed_records_event_when_threshold_exceeded() 
     )
     app.dependency_overrides[get_state_client] = lambda: state_client
     app.dependency_overrides[get_memory_client] = lambda: memory_client
+    client = TestClient(app)
 
     try:
-        response = TestClient(app).post(
+        response = client.post(
             "/memory-items/compact-if-needed",
             json={
                 "scope": "project:project_demo",
@@ -4191,6 +4224,15 @@ def test_compact_memory_items_if_needed_records_event_when_threshold_exceeded() 
                 "X-Synarch-Trace-Id": "trace_memory_policy_test",
             },
         )
+        duplicate_response = client.post(
+            "/memory-items/compact-if-needed",
+            json={
+                "scope": "project:project_demo",
+                "project_id": "project_demo",
+                "min_source_tokens": 10,
+            },
+            headers={"X-Synarch-Trace-Id": "trace_memory_policy_duplicate_test"},
+        )
     finally:
         app.dependency_overrides.clear()
 
@@ -4199,6 +4241,10 @@ def test_compact_memory_items_if_needed_records_event_when_threshold_exceeded() 
     assert payload["compaction_needed"] is True
     assert payload["reason"] == "source_tokens_exceed_threshold"
     assert payload["compaction"]["compacted_item"]["id"] == "memory-compacted"
+    assert payload["compaction"]["compacted_item"]["metadata"]["source_memory_ids"] == [
+        "memory-source-a",
+        "memory-source-b",
+    ]
     assert payload["source_memory_ids"] == ["memory-source-a", "memory-source-b"]
     assert [event.type for event in state_client.events] == ["memory.compacted"]
     assert state_client.events[0].payload["memory_id"] == "memory-compacted"
@@ -4207,6 +4253,14 @@ def test_compact_memory_items_if_needed_records_event_when_threshold_exceeded() 
         "memory-source-b",
     ]
     assert state_client.events[0].trace_id == "trace_memory_policy_test"
+
+    assert duplicate_response.status_code == 200
+    duplicate_payload = duplicate_response.json()
+    assert duplicate_payload["compaction_needed"] is False
+    assert duplicate_payload["reason"] == "matching_compaction_exists"
+    assert duplicate_payload["existing_compacted_item"]["id"] == "memory-compacted"
+    assert duplicate_payload["compaction"] is None
+    assert [event.type for event in state_client.events] == ["memory.compacted"]
 
 
 def test_compact_memory_items_if_needed_skips_event_when_under_threshold() -> None:

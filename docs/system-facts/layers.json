@@ -88,10 +88,12 @@
       "Memory-service can create deterministic proposed compaction items with source memory IDs",
       "Gateway emits memory.compacted with source IDs, source count, and source token estimate",
       "Memory-service and gateway expose compact-if-needed threshold policy",
+      "Compacted memories persist structured source provenance in MemoryItem.metadata",
+      "compact-if-needed suppresses duplicate proposed or approved compactions for the same source IDs",
       "Live OpenRouter E2E verifies compact-if-needed, approved compacted memory, and oversized source memory exclusion in a real task context"
     ],
-    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or scheduled compaction runner with duplicate suppression.",
-    "next_validation": "Run the compaction policy from an automated worker path without creating duplicate proposed summaries.",
+    "main_gap": "No semantic/vector retrieval, graph retrieval, hierarchical context database, or scheduled compaction runner.",
+    "next_validation": "Run the compaction policy from an automated worker path and keep duplicate suppression intact.",
     "source": "docs/roadmap.md"
   },
   {

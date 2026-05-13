@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
 import psycopg
 from fastapi import FastAPI, HTTPException
 from psycopg import rows
+from psycopg.types.json import Jsonb
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
@@ -75,9 +77,9 @@ class PostgresMemoryStore:
                 """
                 INSERT INTO memory_items (
                   id, scope, agent_id, project_id, content,
-                  status, embedding, created_at, expires_at
+                  status, embedding, metadata, created_at, expires_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                   scope = EXCLUDED.scope,
                   agent_id = EXCLUDED.agent_id,
@@ -85,6 +87,7 @@ class PostgresMemoryStore:
                   content = EXCLUDED.content,
                   status = EXCLUDED.status,
                   embedding = EXCLUDED.embedding,
+                  metadata = EXCLUDED.metadata,
                   created_at = EXCLUDED.created_at,
                   expires_at = EXCLUDED.expires_at
                 """,
@@ -96,6 +99,7 @@ class PostgresMemoryStore:
                     item.content,
                     item.status,
                     vector_literal(item.embedding),
+                    Jsonb(item.metadata),
                     item.created_at,
                     item.expires_at,
                 ],
@@ -120,6 +124,7 @@ class PostgresMemoryStore:
                   content,
                   status,
                   embedding::text AS embedding,
+                  metadata,
                   created_at,
                   expires_at
                 """,
@@ -144,6 +149,7 @@ class PostgresMemoryStore:
                   content,
                   status,
                   embedding::text AS embedding,
+                  metadata,
                   created_at,
                   expires_at
                 FROM memory_items
@@ -240,6 +246,17 @@ def compact_memory_items_if_needed(
             source_count=len(source_items),
             source_tokens=source_tokens,
         )
+    existing_compacted_item = matching_compacted_item(source_memory_ids, request)
+    if existing_compacted_item is not None:
+        return MemoryCompactionPolicyResult(
+            compaction_needed=False,
+            reason="matching_compaction_exists",
+            threshold_tokens=request.min_source_tokens,
+            source_memory_ids=source_memory_ids,
+            source_count=len(source_items),
+            source_tokens=source_tokens,
+            existing_compacted_item=existing_compacted_item,
+        )
     compaction = create_compaction_result(source_items, request)
     return MemoryCompactionPolicyResult(
         compaction_needed=True,
@@ -263,6 +280,7 @@ def create_compaction_result(
             status=request.status,
             agent_id=request.agent_id,
             project_id=request.project_id,
+            metadata=compaction_metadata(source_items),
         )
     )
     return MemoryCompactionResult(
@@ -320,6 +338,36 @@ def compactable_memory_items(request: MemoryCompactionRequest) -> list[MemoryIte
     return sorted(items, key=lambda item: (item.created_at, item.id))[
         : request.max_source_items
     ]
+
+
+def matching_compacted_item(
+    source_memory_ids: list[str],
+    request: MemoryCompactionRequest,
+) -> MemoryItem | None:
+    for item in sorted(STORE.list_items(), key=lambda item: (item.created_at, item.id)):
+        if item.scope != request.scope:
+            continue
+        if item.project_id != request.project_id:
+            continue
+        if item.agent_id != request.agent_id:
+            continue
+        if item.status not in {MemoryStatus.approved, MemoryStatus.proposed}:
+            continue
+        if item.metadata.get("kind") != "compaction":
+            continue
+        if item.metadata.get("source_memory_ids") == source_memory_ids:
+            return item
+    return None
+
+
+def compaction_metadata(source_items: list[MemoryItem]) -> dict[str, object]:
+    source_memory_ids = [item.id for item in source_items]
+    return {
+        "kind": "compaction",
+        "source_memory_ids": source_memory_ids,
+        "source_count": len(source_items),
+        "source_tokens": sum(estimated_tokens(item.content) for item in source_items),
+    }
 
 
 def default_allowed_scopes(request: MemoryContext) -> set[str]:
@@ -388,4 +436,9 @@ def deserialize_memory_row(record: dict[str, object]) -> dict[str, object]:
             if stripped
             else []
         )
+    metadata = record.get("metadata")
+    if metadata is None:
+        record["metadata"] = {}
+    elif isinstance(metadata, str):
+        record["metadata"] = json.loads(metadata)
     return record

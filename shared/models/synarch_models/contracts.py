@@ -396,6 +396,7 @@ class MemoryItem(SynarchModel):
     agent_id: str | None = None
     project_id: str | None = None
     embedding: list[float] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     expires_at: datetime | None = None
 
@@ -431,6 +432,7 @@ class MemoryCompactionPolicyResult(SynarchModel):
     source_memory_ids: list[str] = Field(default_factory=list)
     source_count: int = 0
     source_tokens: int = 0
+    existing_compacted_item: MemoryItem | None = None
     compaction: MemoryCompactionResult | None = None
 
 

@@ -1,0 +1,2 @@
+ALTER TABLE memory_items
+ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;

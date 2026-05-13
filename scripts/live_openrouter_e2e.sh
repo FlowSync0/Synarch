@@ -392,6 +392,20 @@ printf "%s" "$compaction_response" | jq -e \
     (.compaction.compacted_item.content | contains("Source memory ids: " + $source_a + ", " + $source_b))
   ' >/dev/null
 
+duplicate_compaction_response="$(post_json "${GATEWAY_URL}/memory-items/compact-if-needed" "$compaction_policy_payload")"
+
+printf "%s" "$duplicate_compaction_response" | jq -e \
+  --arg compacted_memory_id "$compacted_memory_id" \
+  --arg source_a "$COMPACTION_SOURCE_ID_A" \
+  --arg source_b "$COMPACTION_SOURCE_ID_B" \
+  '
+    (.compaction_needed == false) and
+    (.reason == "matching_compaction_exists") and
+    (.existing_compacted_item.id == $compacted_memory_id) and
+    (.source_memory_ids == [$source_a, $source_b]) and
+    (.compaction == null)
+  ' >/dev/null
+
 patch_json "${GATEWAY_URL}/memory-items/${compacted_memory_id}/status" \
   '{"status":"approved"}' >/dev/null
 

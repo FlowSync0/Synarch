@@ -265,6 +265,12 @@ def test_compact_memory_items_creates_proposed_item_with_source_provenance() -> 
     assert compacted_item["status"] == "proposed"
     assert compacted_item["scope"] == "project:project_compaction"
     assert compacted_item["project_id"] == "project_compaction"
+    assert compacted_item["metadata"] == {
+        "kind": "compaction",
+        "source_memory_ids": ["memory-source-a", "memory-source-b"],
+        "source_count": 2,
+        "source_tokens": payload["source_tokens"],
+    }
     assert "Source memory ids: memory-source-a, memory-source-b" in compacted_item["content"]
     assert "[memory-source-a]" in compacted_item["content"]
     assert "[memory-source-b]" in compacted_item["content"]
@@ -332,7 +338,37 @@ def test_compact_memory_items_if_needed_creates_policy_candidate_above_threshold
     assert payload["source_tokens"] == 50
     compacted_item = payload["compaction"]["compacted_item"]
     assert compacted_item["status"] == "proposed"
+    assert compacted_item["metadata"]["kind"] == "compaction"
+    assert compacted_item["metadata"]["source_memory_ids"] == [
+        "memory-large-a",
+        "memory-large-b",
+    ]
     assert "Source memory ids: memory-large-a, memory-large-b" in compacted_item["content"]
+
+    duplicate_response = client.post(
+        "/memory-items/compact-if-needed",
+        json={
+            "scope": "project:project_policy",
+            "project_id": "project_policy",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+            "max_summary_chars": 200,
+        },
+    )
+    assert duplicate_response.status_code == 200
+    duplicate_payload = duplicate_response.json()
+    assert duplicate_payload["compaction_needed"] is False
+    assert duplicate_payload["reason"] == "matching_compaction_exists"
+    assert duplicate_payload["existing_compacted_item"]["id"] == compacted_item["id"]
+    assert duplicate_payload["compaction"] is None
+
+    items_response = client.get("/memory-items?project_id=project_policy")
+    compacted_items = [
+        item
+        for item in items_response.json()
+        if item["metadata"].get("kind") == "compaction"
+    ]
+    assert [item["id"] for item in compacted_items] == [compacted_item["id"]]
 
 
 def test_compact_memory_items_if_needed_skips_when_sources_fit_threshold() -> None:
@@ -364,6 +400,7 @@ def test_compact_memory_items_if_needed_skips_when_sources_fit_threshold() -> No
     assert payload["reason"] == "source_tokens_within_threshold"
     assert payload["threshold_tokens"] == 100
     assert payload["source_memory_ids"] == ["memory-small"]
+    assert payload["existing_compacted_item"] is None
     assert payload["compaction"] is None
 
     items_response = client.get("/memory-items?project_id=project_policy")
