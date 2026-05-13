@@ -241,8 +241,11 @@ scripts/live_memory_embedding_backfill_e2e.sh
 Project memory can cross project boundaries only through active workspace bridges. Gateway expands
 active `ProjectWorkspace.bridge_project_ids` into `MemoryContext.allowed_project_ids`, and
 memory-service still rejects project memory whose project ID is not explicitly allowed.
+Minimal graph retrieval uses `MemoryItem.metadata.related_memory_ids`. Memory-service expands those
+links after a selected memory, bounded by `MemoryContext.max_related_items`, and still applies the
+same visibility and token-budget checks to every related item.
 
-Run the bridge-isolation check with:
+Run the bridge/graph isolation check with:
 
 ```bash
 scripts/live_memory_bridge_scope_e2e.sh

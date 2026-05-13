@@ -350,26 +350,80 @@ def create_compaction_result(
 def assemble_context(request: MemoryContext) -> MemoryContext:
     validate_embedding_dimensions(request.query_embedding, label="Query embedding")
     selected: list[MemoryItem] = []
+    selected_ids: set[str] = set()
     tokens_used = 0
-    for item in sorted(
-        (item for item in STORE.list_items() if is_visible(item, request)),
-        key=lambda item: memory_rank(item, request),
-    ):
-        item_tokens = estimated_tokens(item.content)
-        if tokens_used + item_tokens > request.token_budget:
+    related_items_used = 0
+    visible_items = {
+        item.id: item for item in STORE.list_items() if is_visible(item, request)
+    }
+    for item in sorted(visible_items.values(), key=lambda item: memory_rank(item, request)):
+        added, tokens_used = add_context_item(
+            item,
+            selected=selected,
+            selected_ids=selected_ids,
+            tokens_used=tokens_used,
+            token_budget=request.token_budget,
+        )
+        if not added:
             continue
-        selected.append(item)
-        tokens_used += item_tokens
+        for related_item in related_memory_items(item, visible_items):
+            if related_items_used >= request.max_related_items:
+                break
+            added_related, tokens_used = add_context_item(
+                related_item,
+                selected=selected,
+                selected_ids=selected_ids,
+                tokens_used=tokens_used,
+                token_budget=request.token_budget,
+            )
+            if added_related:
+                related_items_used += 1
 
     ranking = "semantic vector ranking" if request.query_embedding is not None else "scope ranking"
     summary = (
         "Deterministic context assembly selected "
         f"{len(selected)} memory items using {tokens_used}/{request.token_budget} "
-        f"estimated tokens with {ranking}."
+        f"estimated tokens with {ranking} and {related_items_used} graph-related items."
     )
     return request.model_copy(
         update={"items": selected, "summary": summary, "tokens_used": tokens_used}
     )
+
+
+def add_context_item(
+    item: MemoryItem,
+    *,
+    selected: list[MemoryItem],
+    selected_ids: set[str],
+    tokens_used: int,
+    token_budget: int,
+) -> tuple[bool, int]:
+    if item.id in selected_ids:
+        return False, tokens_used
+    item_tokens = estimated_tokens(item.content)
+    if tokens_used + item_tokens > token_budget:
+        return False, tokens_used
+    selected.append(item)
+    selected_ids.add(item.id)
+    return True, tokens_used + item_tokens
+
+
+def related_memory_items(
+    item: MemoryItem,
+    visible_items: dict[str, MemoryItem],
+) -> list[MemoryItem]:
+    return [
+        visible_items[memory_id]
+        for memory_id in related_memory_ids(item)
+        if memory_id in visible_items
+    ]
+
+
+def related_memory_ids(item: MemoryItem) -> list[str]:
+    value = item.metadata.get("related_memory_ids")
+    if not isinstance(value, list):
+        return []
+    return [memory_id for memory_id in value if isinstance(memory_id, str) and memory_id]
 
 
 def is_visible(item: MemoryItem, request: MemoryContext) -> bool:

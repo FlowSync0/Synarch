@@ -107,10 +107,11 @@
     "memory_embedding_worker runs embedding backfill as a bounded tick or loop",
     "scripts/live_memory_embedding_backfill_e2e.sh verifies real OpenRouter embedding backfill, 1536D storage, and event traceability",
     "Task runs derive bridged project memory from active workspace bridge_project_ids and pass explicit allowed_project_ids to memory-service",
-    "scripts/live_memory_bridge_scope_e2e.sh verifies target memory and explicitly bridged source memory are visible while unbridged project memory remains isolated"
+    "Memory-service expands bounded metadata.related_memory_ids only when related memories are already visible through the same scopes and project bridges",
+    "scripts/live_memory_bridge_scope_e2e.sh verifies target memory and explicitly bridged graph-related source memory are visible while unbridged project memory remains isolated"
   ],
-  "main_gap": "No graph retrieval or hierarchical context database yet.",
-  "next_validation": "Add graph retrieval for explicit memory relationships inside already-authorized project scopes.",
+  "main_gap": "No memory relation authoring workflow or hierarchical context database yet.",
+  "next_validation": "Add a safe relation-authoring path for proposed memory links.",
     "source": "docs/roadmap.md"
   },
   {

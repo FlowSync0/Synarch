@@ -188,6 +188,107 @@ def test_context_assembly_requires_explicit_bridge_project_ids() -> None:
     ]
 
 
+def test_context_assembly_expands_related_memory_inside_visibility_rules() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-seed",
+            "scope": "project:project_target",
+            "project_id": "project_target",
+            "content": "Seed memory.",
+            "metadata": {
+                "related_memory_ids": [
+                    "memory-related",
+                    "memory-hidden",
+                    "memory-missing",
+                    42,
+                ]
+            },
+        },
+        {
+            "id": "memory-unrelated",
+            "scope": "project:project_target",
+            "project_id": "project_target",
+            "content": "Unrelated target memory.",
+        },
+        {
+            "id": "memory-related",
+            "scope": "project:project_source",
+            "project_id": "project_source",
+            "content": "Related bridged project memory.",
+        },
+        {
+            "id": "memory-hidden",
+            "scope": "project:project_hidden",
+            "project_id": "project_hidden",
+            "content": "Hidden project memory must not leak through graph links.",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "project_id": "project_target",
+            "token_budget": 200,
+            "allowed_scopes": ["project:project_target", "project:project_source"],
+            "allowed_project_ids": ["project_target", "project_source"],
+            "max_related_items": 1,
+        },
+    )
+
+    assert context_response.status_code == 200
+    context = context_response.json()
+    assert [item["id"] for item in context["items"]] == [
+        "memory-seed",
+        "memory-related",
+        "memory-unrelated",
+    ]
+    assert "1 graph-related items" in context["summary"]
+
+
+def test_context_assembly_can_disable_related_memory_expansion() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-seed",
+            "scope": "project:project_target",
+            "project_id": "project_target",
+            "content": "Seed memory.",
+            "metadata": {"related_memory_ids": ["memory-related"]},
+        },
+        {
+            "id": "memory-related",
+            "scope": "project:project_source",
+            "project_id": "project_source",
+            "content": "Related bridged project memory.",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    context_response = client.post(
+        "/context/assemble",
+        json={
+            "agent_id": "agent-dev",
+            "project_id": "project_target",
+            "token_budget": 200,
+            "allowed_scopes": ["project:project_target", "project:project_source"],
+            "allowed_project_ids": ["project_target", "project_source"],
+            "max_related_items": 0,
+        },
+    )
+
+    assert context_response.status_code == 200
+    assert [item["id"] for item in context_response.json()["items"]] == [
+        "memory-seed",
+        "memory-related",
+    ]
+    assert "0 graph-related items" in context_response.json()["summary"]
+
+
 def test_context_assembly_enforces_token_budget() -> None:
     client = TestClient(app)
     short_response = client.post(

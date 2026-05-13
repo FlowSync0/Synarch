@@ -1121,6 +1121,7 @@ def model_call_started_event(
             "memory_token_budget": memory_context.token_budget,
             "memory_allowed_scopes": memory_context.allowed_scopes,
             "memory_allowed_project_ids": memory_context.allowed_project_ids,
+            "memory_max_related_items": memory_context.max_related_items,
             "memory_query_embedding_used": memory_query_embedding_used,
             "memory_query_embedding_dimensions": memory_query_embedding_dimensions,
             "input_tokens_estimate": estimated_tokens(

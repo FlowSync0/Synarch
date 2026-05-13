@@ -134,7 +134,23 @@ task_payload="$(
 )"
 post_state tasks "$task_payload"
 
-post_memory "$(memory_payload "memory_bridge_target_${RUN_ID}" "$TARGET_PROJECT_ID" "Target project memory.")"
+target_memory_payload="$(
+  jq -n \
+    --arg id "memory_bridge_target_${RUN_ID}" \
+    --arg project_id "$TARGET_PROJECT_ID" \
+    --arg source_memory_id "memory_bridge_source_${RUN_ID}" \
+    --arg other_memory_id "memory_bridge_other_${RUN_ID}" \
+    '{
+      id: $id,
+      scope: ("project:" + $project_id),
+      project_id: $project_id,
+      status: "approved",
+      content: "Target project memory with graph relation.",
+      metadata: {related_memory_ids: [$source_memory_id, $other_memory_id]}
+    }'
+)"
+post_memory "$target_memory_payload"
+post_memory "$(memory_payload "memory_bridge_unrelated_${RUN_ID}" "$TARGET_PROJECT_ID" "Unrelated target project memory.")"
 post_memory "$(memory_payload "memory_bridge_source_${RUN_ID}" "$SOURCE_PROJECT_ID" "Bridged source project memory.")"
 post_memory "$(memory_payload "memory_bridge_other_${RUN_ID}" "$OTHER_PROJECT_ID" "Unbridged other project memory.")"
 
@@ -149,6 +165,7 @@ printf "%s" "$run_response" | jq -e \
   --arg source_project_id "$SOURCE_PROJECT_ID" \
   --arg target_memory_id "memory_bridge_target_${RUN_ID}" \
   --arg source_memory_id "memory_bridge_source_${RUN_ID}" \
+  --arg unrelated_memory_id "memory_bridge_unrelated_${RUN_ID}" \
   --arg other_memory_id "memory_bridge_other_${RUN_ID}" \
   '
     (.runs | length == 1) and
@@ -156,8 +173,12 @@ printf "%s" "$run_response" | jq -e \
     (.runs[0].memory_context.allowed_scopes | index("project:" + $source_project_id) != null) and
     (.runs[0].memory_context.allowed_project_ids == [$target_project_id, $source_project_id]) and
     ([$target_memory_id, $source_memory_id] - [.runs[0].memory_context.items[].id] | length == 0) and
+    ([.runs[0].memory_context.items[].id] | index($source_memory_id) == (index($target_memory_id) + 1)) and
+    ([.runs[0].memory_context.items[].id] | index($unrelated_memory_id) > index($source_memory_id)) and
     ([.runs[0].memory_context.items[].id] | index($other_memory_id) == null) and
-    (.runs[0].model_call_events[0].payload.memory_allowed_project_ids == [$target_project_id, $source_project_id])
+    (.runs[0].memory_context.summary | contains("1 graph-related items")) and
+    (.runs[0].model_call_events[0].payload.memory_allowed_project_ids == [$target_project_id, $source_project_id]) and
+    (.runs[0].model_call_events[0].payload.memory_max_related_items == 3)
   ' >/dev/null
 
 jq -n \

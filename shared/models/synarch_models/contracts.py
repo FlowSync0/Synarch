@@ -484,6 +484,7 @@ class MemoryContext(SynarchModel):
     token_budget: int = 4000
     allowed_scopes: list[str] = Field(default_factory=list)
     allowed_project_ids: list[str] = Field(default_factory=list)
+    max_related_items: int = Field(default=3, ge=0, le=20)
     query_embedding: list[float] | None = None
     items: list[MemoryItem] = Field(default_factory=list)
     summary: str = ""

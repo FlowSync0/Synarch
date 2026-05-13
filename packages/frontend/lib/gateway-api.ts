@@ -189,6 +189,7 @@ export type MemoryContext = {
   token_budget: number;
   allowed_scopes: string[];
   allowed_project_ids: string[];
+  max_related_items: number;
   items: MemoryItem[];
   summary: string;
   tokens_used: number;

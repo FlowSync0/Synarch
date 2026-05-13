@@ -84,11 +84,13 @@ def test_memory_context_can_carry_query_embedding() -> None:
     )
 
     assert context.allowed_project_ids == ["project_demo", "project_source"]
+    assert context.max_related_items == 3
     assert context.query_embedding == [0.0, 1.0]
     assert context.model_dump(mode="json")["allowed_project_ids"] == [
         "project_demo",
         "project_source",
     ]
+    assert context.model_dump(mode="json")["max_related_items"] == 3
     assert context.model_dump(mode="json")["query_embedding"] == [0.0, 1.0]
 
 
