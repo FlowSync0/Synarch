@@ -216,6 +216,28 @@ Run the live task-embedding check with:
 scripts/live_openrouter_task_embedding_e2e.sh
 ```
 
+Approved memories created before embeddings were configured can be indexed later through Gateway
+`/memory-items/embedding-backfill`. The endpoint is bounded by `max_items`, only touches matching
+memories that have no embedding, and emits `memory.embedding_backfilled` for each updated item.
+
+Run one embedding backfill tick with:
+
+```bash
+SYNARCH_MEMORY_EMBEDDING_PROJECT_ID=project_demo make memory-embedding-backfill-tick
+```
+
+For a local loop, use `make memory-embedding-backfill-loop`. For the Docker worker service, use:
+
+```bash
+SYNARCH_MEMORY_EMBEDDING_PROJECT_ID=project_demo make memory-embedding-backfill-worker
+```
+
+Run the live OpenRouter backfill check with:
+
+```bash
+scripts/live_memory_embedding_backfill_e2e.sh
+```
+
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.
 

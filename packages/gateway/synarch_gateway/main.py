@@ -49,6 +49,8 @@ from synarch_models import (
     MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
     MemoryCompactionResult,
+    MemoryEmbeddingBackfillRequest,
+    MemoryEmbeddingBackfillResult,
     MemoryItem,
     MemoryStatus,
     MemoryStatusUpdate,
@@ -2382,6 +2384,89 @@ def memory_compacted_event(
             "source_memory_ids": result.source_memory_ids,
             "source_count": result.source_count,
             "source_tokens": result.source_tokens,
+        },
+        trace_id=trace_id,
+    )
+
+
+@app.post("/memory-items/embedding-backfill", response_model=MemoryEmbeddingBackfillResult)
+def backfill_memory_embeddings(
+    backfill_request: MemoryEmbeddingBackfillRequest,
+    request: Request,
+    memory_client: MemoryClient = Depends(get_memory_client),
+    state_client: StateClient = Depends(get_state_client),
+    embedding_provider: OpenRouterQueryEmbeddingProvider | None = Depends(
+        get_query_embedding_provider
+    ),
+) -> MemoryEmbeddingBackfillResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = memory_reviewer_headers(request, trace_id)
+    if embedding_provider is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Memory embedding provider unavailable",
+        )
+    try:
+        memory_items = memory_client.list_memory_items(
+            scope=backfill_request.scope,
+            agent_id=backfill_request.agent_id,
+            project_id=backfill_request.project_id,
+            status=MemoryStatus(backfill_request.status),
+        )
+        backfilled_items: list[MemoryItem] = []
+        for memory_item in memory_items:
+            if len(backfilled_items) >= backfill_request.max_items:
+                break
+            if memory_item.embedding is not None or not memory_item.content.strip():
+                continue
+            embedding = embedding_provider.embed_text(memory_item.content)
+            updated_item = memory_client.create_memory_item(
+                memory_item.model_copy(update={"embedding": embedding})
+            )
+            backfilled_items.append(updated_item)
+            state_client.create_event(
+                memory_embedding_backfilled_event(
+                    updated_item,
+                    trace_id,
+                    provider_id=embedding_provider.provider_id,
+                    model_id=embedding_provider.model_id,
+                ),
+                headers=headers,
+            )
+        return MemoryEmbeddingBackfillResult(
+            inspected_count=len(memory_items),
+            backfilled_count=len(backfilled_items),
+            skipped_count=len(memory_items) - len(backfilled_items),
+            memory_ids=[item.id for item in backfilled_items],
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory embedding backfill dependency unavailable",
+        ) from error
+
+
+def memory_embedding_backfilled_event(
+    memory_item: MemoryItem,
+    trace_id: str,
+    *,
+    provider_id: str,
+    model_id: str,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.memory_embedding_backfilled,
+        target=memory_item.project_id or memory_item.scope,
+        payload={
+            "memory_id": memory_item.id,
+            "scope": memory_item.scope,
+            "status": memory_item.status,
+            "project_id": memory_item.project_id,
+            "agent_id": memory_item.agent_id,
+            "embedding_dimensions": len(memory_item.embedding or []),
+            "embedding_provider_id": provider_id,
+            "embedding_model_id": model_id,
         },
         trace_id=trace_id,
     )

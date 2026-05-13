@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter test-live-memory-embedding scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker memory-embedding-backfill-tick memory-embedding-backfill-loop memory-embedding-backfill-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -13,6 +13,11 @@ SYNARCH_MEMORY_COMPACTION_PROJECT_ID ?=
 SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS ?= 1200
 SYNARCH_MEMORY_COMPACTION_MAX_SCOPES ?= 20
 SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS ?= 300
+SYNARCH_MEMORY_EMBEDDING_PROJECT_ID ?=
+SYNARCH_MEMORY_EMBEDDING_AGENT_ID ?=
+SYNARCH_MEMORY_EMBEDDING_SCOPE ?=
+SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS ?= 10
+SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS ?= 300
 
 install-backend:
 	$(PYTHON) -m pip install --upgrade pip
@@ -40,6 +45,9 @@ test-eval:
 test-live-openrouter:
 	scripts/live_openrouter_e2e.sh
 
+test-live-memory-embedding:
+	scripts/live_memory_embedding_backfill_e2e.sh
+
 scheduler-tick:
 	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)"
 
@@ -66,6 +74,15 @@ memory-compaction-loop:
 
 memory-compaction-worker:
 	docker compose up --build memory-compaction-worker
+
+memory-embedding-backfill-tick:
+	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)"
+
+memory-embedding-backfill-loop:
+	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)" --loop --interval-seconds "$(SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS)"
+
+memory-embedding-backfill-worker:
+	docker compose up --build memory-embedding-worker
 
 lint:
 	$(PYTHON) -m ruff check .

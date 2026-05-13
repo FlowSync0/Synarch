@@ -120,6 +120,27 @@ services:
     depends_on:
       - gateway
 
+  memory-embedding-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/gateway
+    command: python -m synarch_gateway.memory_embedding_worker --loop
+    environment:
+      GATEWAY_URL: http://gateway:8000
+      SYNARCH_MEMORY_EMBEDDING_WORKER_ID: ${SYNARCH_MEMORY_EMBEDDING_WORKER_ID:-memory-embedding-worker-1}
+      SYNARCH_MEMORY_EMBEDDING_PROJECT_ID: ${SYNARCH_MEMORY_EMBEDDING_PROJECT_ID:-}
+      SYNARCH_MEMORY_EMBEDDING_AGENT_ID: ${SYNARCH_MEMORY_EMBEDDING_AGENT_ID:-}
+      SYNARCH_MEMORY_EMBEDDING_SCOPE: ${SYNARCH_MEMORY_EMBEDDING_SCOPE:-}
+      SYNARCH_MEMORY_EMBEDDING_STATUS: ${SYNARCH_MEMORY_EMBEDDING_STATUS:-approved}
+      SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS: ${SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS:-10}
+      SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS: ${SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS:-300}
+      SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS: ${SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS:-60}
+    depends_on:
+      - gateway
+
   control-plane:
     build:
       context: .

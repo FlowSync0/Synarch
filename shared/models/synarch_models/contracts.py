@@ -463,6 +463,21 @@ class MemoryCompactionPlanResult(SynarchModel):
     items: list[MemoryCompactionPlanItem] = Field(default_factory=list)
 
 
+class MemoryEmbeddingBackfillRequest(SynarchModel):
+    project_id: str | None = None
+    agent_id: str | None = None
+    scope: str | None = None
+    status: MemoryStatus = MemoryStatus.approved
+    max_items: int = Field(default=10, ge=1, le=100)
+
+
+class MemoryEmbeddingBackfillResult(SynarchModel):
+    inspected_count: int = 0
+    backfilled_count: int = 0
+    skipped_count: int = 0
+    memory_ids: list[str] = Field(default_factory=list)
+
+
 class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None

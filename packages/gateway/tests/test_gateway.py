@@ -3893,6 +3893,114 @@ def test_list_memory_items_filters_review_queue() -> None:
     assert [item["id"] for item in response.json()] == ["memory-candidate"]
 
 
+def test_backfill_memory_embeddings_updates_items_and_records_events() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    embedding_provider = FakeQueryEmbeddingProvider()
+    memory_client.items_by_id["memory-missing-embedding"] = MemoryItem(
+        id="memory-missing-embedding",
+        scope="project:project_demo",
+        content="Backfill me.",
+        status=MemoryStatus.approved,
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-existing-embedding"] = MemoryItem(
+        id="memory-existing-embedding",
+        scope="project:project_demo",
+        content="Already indexed.",
+        status=MemoryStatus.approved,
+        agent_id="agent-dev",
+        project_id="project_demo",
+        embedding=[0.2] * 1536,
+    )
+    memory_client.items_by_id["memory-empty-content"] = MemoryItem(
+        id="memory-empty-content",
+        scope="project:project_demo",
+        content=" ",
+        status=MemoryStatus.approved,
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-proposed"] = MemoryItem(
+        id="memory-proposed",
+        scope="project:project_demo",
+        content="Not approved yet.",
+        status=MemoryStatus.proposed,
+        agent_id="agent-dev",
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+    app.dependency_overrides[gateway_main.get_query_embedding_provider] = (
+        lambda: embedding_provider
+    )
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/embedding-backfill",
+            json={"project_id": "project_demo", "max_items": 2},
+            headers={
+                "X-Synarch-Actor-Type": "service",
+                "X-Synarch-Actor-Id": "memory-embedding-worker-test",
+                "X-Synarch-Trace-Id": "trace_memory_embedding_test",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload == {
+        "inspected_count": 3,
+        "backfilled_count": 1,
+        "skipped_count": 2,
+        "memory_ids": ["memory-missing-embedding"],
+    }
+    assert embedding_provider.texts == ["Backfill me."]
+    backfilled_item = memory_client.items_by_id["memory-missing-embedding"]
+    assert backfilled_item.embedding is not None
+    assert len(backfilled_item.embedding) == 1536
+    assert [event.type for event in state_client.events] == [
+        "memory.embedding_backfilled"
+    ]
+    assert state_client.events[0].target == "project_demo"
+    assert state_client.events[0].payload == {
+        "memory_id": "memory-missing-embedding",
+        "scope": "project:project_demo",
+        "status": "approved",
+        "project_id": "project_demo",
+        "agent_id": "agent-dev",
+        "embedding_dimensions": 1536,
+        "embedding_provider_id": "provider-test-embedding",
+        "embedding_model_id": "model-test-embedding",
+    }
+    assert state_client.events[0].trace_id == "trace_memory_embedding_test"
+    assert state_client.headers[-1]["x-synarch-actor-id"] == (
+        "memory-embedding-worker-test"
+    )
+
+
+def test_backfill_memory_embeddings_requires_configured_provider() -> None:
+    state_client = FakeStateClient()
+    memory_client = FakeMemoryClient()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+    app.dependency_overrides[gateway_main.get_query_embedding_provider] = lambda: None
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/embedding-backfill",
+            json={"project_id": "project_demo"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Memory embedding provider unavailable"
+    assert state_client.events == []
+
+
 def test_operational_records_are_listed_through_gateway() -> None:
     state_client = FakeStateClient()
     state_client.events.extend(

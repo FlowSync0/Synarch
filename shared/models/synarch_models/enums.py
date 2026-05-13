@@ -56,6 +56,7 @@ class EventType(StrEnum):
     memory_candidate_created = "memory.candidate_created"
     memory_status_updated = "memory.status_updated"
     memory_compacted = "memory.compacted"
+    memory_embedding_backfilled = "memory.embedding_backfilled"
     model_call_started = "model_call.started"
     model_call_completed = "model_call.completed"
     model_call_failed = "model_call.failed"

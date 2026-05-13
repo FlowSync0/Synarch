@@ -18,6 +18,7 @@ from synarch_models import (
     MemoryCompactionPlanRequest,
     MemoryCompactionPolicyRequest,
     MemoryContext,
+    MemoryEmbeddingBackfillRequest,
     MemoryItem,
     MemoryStatus,
     ModelUsage,
@@ -64,6 +65,14 @@ def test_memory_compaction_plan_request_defaults() -> None:
     assert request.min_source_tokens == 1200
     assert request.max_source_items == 20
     assert request.max_scopes == 20
+
+
+def test_memory_embedding_backfill_request_defaults() -> None:
+    request = MemoryEmbeddingBackfillRequest(project_id="project_demo")
+
+    assert request.project_id == "project_demo"
+    assert request.status == "approved"
+    assert request.max_items == 10
 
 
 def test_memory_context_can_carry_query_embedding() -> None:
