@@ -36,6 +36,9 @@ from synarch_models import (
     EventRecord,
     EventType,
     LocalWorldView,
+    MemoryCompactionPlanItem,
+    MemoryCompactionPlanRequest,
+    MemoryCompactionPlanResult,
     MemoryCompactionPolicyRequest,
     MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
@@ -1047,6 +1050,57 @@ class FakeMemoryClient:
             source_count=compaction.source_count,
             source_tokens=compaction.source_tokens,
             compaction=compaction,
+        )
+
+    def plan_memory_compaction(
+        self, request: MemoryCompactionPlanRequest
+    ) -> MemoryCompactionPlanResult:
+        groups: dict[tuple[str, str | None, str | None], list[MemoryItem]] = {}
+        for item in self.items_by_id.values():
+            if item.status != MemoryStatus.approved:
+                continue
+            if item.metadata.get("kind") == "compaction":
+                continue
+            if request.project_id is not None and item.project_id != request.project_id:
+                continue
+            if request.agent_id is not None and item.agent_id != request.agent_id:
+                continue
+            groups.setdefault((item.scope, item.project_id, item.agent_id), []).append(item)
+        plan_items: list[MemoryCompactionPlanItem] = []
+        for _, group in sorted(groups.items()):
+            source_items = sorted(group, key=lambda item: (item.created_at, item.id))[
+                : request.max_source_items
+            ]
+            source_tokens = sum(
+                max(1, (len(item.content) + 3) // 4) for item in source_items
+            )
+            if source_tokens <= request.min_source_tokens:
+                continue
+            source_memory_ids = [item.id for item in source_items]
+            if any(
+                item.metadata.get("kind") == "compaction"
+                and item.metadata.get("source_memory_ids") == source_memory_ids
+                and item.scope == source_items[0].scope
+                and item.project_id == source_items[0].project_id
+                and item.agent_id == source_items[0].agent_id
+                for item in self.items_by_id.values()
+            ):
+                continue
+            plan_items.append(
+                MemoryCompactionPlanItem(
+                    scope=source_items[0].scope,
+                    project_id=source_items[0].project_id,
+                    agent_id=source_items[0].agent_id,
+                    source_memory_ids=source_memory_ids,
+                    source_count=len(source_items),
+                    source_tokens=source_tokens,
+                )
+            )
+        return MemoryCompactionPlanResult(
+            threshold_tokens=request.min_source_tokens,
+            inspected_scope_count=len(groups),
+            planned_scope_count=len(plan_items),
+            items=plan_items[: request.max_scopes],
         )
 
 
@@ -4297,6 +4351,45 @@ def test_compact_memory_items_if_needed_skips_event_when_under_threshold() -> No
     assert payload["reason"] == "source_tokens_within_threshold"
     assert payload["compaction"] is None
     assert state_client.events == []
+
+
+def test_plan_memory_compaction_forwards_gateway_request() -> None:
+    memory_client = FakeMemoryClient()
+    memory_client.items_by_id["memory-source-a"] = MemoryItem(
+        id="memory-source-a",
+        scope="project:project_demo",
+        content="A" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    memory_client.items_by_id["memory-source-b"] = MemoryItem(
+        id="memory-source-b",
+        scope="project:project_demo",
+        content="B" * 80,
+        status=MemoryStatus.approved,
+        project_id="project_demo",
+    )
+    app.dependency_overrides[get_memory_client] = lambda: memory_client
+
+    try:
+        response = TestClient(app).post(
+            "/memory-items/compaction-plan",
+            json={"project_id": "project_demo", "min_source_tokens": 10},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["threshold_tokens"] == 10
+    assert payload["inspected_scope_count"] == 1
+    assert payload["planned_scope_count"] == 1
+    assert payload["items"][0]["scope"] == "project:project_demo"
+    assert payload["items"][0]["source_memory_ids"] == [
+        "memory-source-a",
+        "memory-source-b",
+    ]
+    assert payload["items"][0]["source_tokens"] == 40
 
 
 def test_run_next_task_records_failed_model_call_when_runtime_is_unavailable() -> None:

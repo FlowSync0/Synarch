@@ -357,6 +357,33 @@ curl -fsS -X POST "${MEMORY_SERVICE_URL}/memory-items" \
   -H "Content-Type: application/json" \
   -d "$source_memory_payload_b" >/dev/null
 
+compaction_plan_payload="$(
+  jq -n \
+    --arg project_id "$COMPACTION_PROJECT_ID" \
+    '{
+      project_id: $project_id,
+      min_source_tokens: 2400,
+      max_source_items: 10,
+      max_summary_chars: 200,
+      max_scopes: 5
+    }'
+)"
+
+compaction_plan_response="$(post_json "${GATEWAY_URL}/memory-items/compaction-plan" "$compaction_plan_payload")"
+
+printf "%s" "$compaction_plan_response" | jq -e \
+  --arg project_id "$COMPACTION_PROJECT_ID" \
+  --arg source_a "$COMPACTION_SOURCE_ID_A" \
+  --arg source_b "$COMPACTION_SOURCE_ID_B" \
+  '
+    (.threshold_tokens == 2400) and
+    (.inspected_scope_count == 1) and
+    (.planned_scope_count == 1) and
+    (.items[0].scope == ("project:" + $project_id)) and
+    (.items[0].source_memory_ids == [$source_a, $source_b]) and
+    (.items[0].source_tokens > 2400)
+  ' >/dev/null
+
 compaction_policy_payload="$(
   jq -n \
     --arg project_id "$COMPACTION_PROJECT_ID" \
@@ -404,6 +431,15 @@ printf "%s" "$duplicate_compaction_response" | jq -e \
     (.existing_compacted_item.id == $compacted_memory_id) and
     (.source_memory_ids == [$source_a, $source_b]) and
     (.compaction == null)
+  ' >/dev/null
+
+duplicate_compaction_plan_response="$(post_json "${GATEWAY_URL}/memory-items/compaction-plan" "$compaction_plan_payload")"
+
+printf "%s" "$duplicate_compaction_plan_response" | jq -e \
+  '
+    (.inspected_scope_count == 1) and
+    (.planned_scope_count == 0) and
+    (.items == [])
   ' >/dev/null
 
 patch_json "${GATEWAY_URL}/memory-items/${compacted_memory_id}/status" \

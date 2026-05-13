@@ -9,7 +9,9 @@ SYNARCH_SCHEDULER_INTERVAL_SECONDS ?= 30
 SYNARCH_CONNECTOR_JOB_MAX_JOBS ?= 3
 SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS ?= 30
 SYNARCH_MEMORY_COMPACTION_SCOPE ?=
+SYNARCH_MEMORY_COMPACTION_PROJECT_ID ?=
 SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS ?= 1200
+SYNARCH_MEMORY_COMPACTION_MAX_SCOPES ?= 20
 SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS ?= 300
 
 install-backend:
@@ -57,10 +59,10 @@ connector-job-worker:
 	docker compose up --build connector-job-worker
 
 memory-compaction-tick:
-	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)"
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)"
 
 memory-compaction-loop:
-	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --loop --interval-seconds "$(SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS)"
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)" --loop --interval-seconds "$(SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS)"
 
 memory-compaction-worker:
 	docker compose up --build memory-compaction-worker

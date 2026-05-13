@@ -112,8 +112,9 @@ Deterministic memory compaction and the threshold policy are covered by the norm
 The memory-service tests assert that only approved source memories are compacted, source IDs stay
 visible in both content and structured metadata, compaction is skipped below threshold, and duplicate
 compaction requests reuse the existing proposed or approved item without recompacting compacted
-summaries as sources. The gateway tests assert `memory.compacted` is emitted only when a compaction
-is actually created.
+summaries as sources. The compaction-plan tests assert only overloaded non-compacted scopes are
+planned. The gateway tests assert `memory.compacted` is emitted only when a compaction is actually
+created.
 
 Run one scheduler tick with:
 
@@ -177,9 +178,13 @@ For a local loop, use `make memory-compaction-loop`. For the Docker worker servi
 SYNARCH_MEMORY_COMPACTION_SCOPE=project:project_demo make memory-compaction-worker
 ```
 
-This worker is intentionally scope-configured for now. It calls Gateway `compact-if-needed`, so
-duplicate suppression and `memory.compacted` event emission stay centralized in the gateway and
+When a scope is provided, the worker calls Gateway `compact-if-needed` directly, so duplicate
+suppression and `memory.compacted` event emission stay centralized in the gateway and
 memory-service.
+
+Omit `SYNARCH_MEMORY_COMPACTION_SCOPE` to let the worker call Gateway
+`/memory-items/compaction-plan` first, then execute `compact-if-needed` for each planned scope.
+Use `SYNARCH_MEMORY_COMPACTION_PROJECT_ID` to constrain that discovery to one project.
 
 This is intentionally not a full production workflow. It is the first contract-compatible path across
 the current skeleton.

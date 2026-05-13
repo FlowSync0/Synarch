@@ -42,6 +42,8 @@ from synarch_models import (
     GoalSubmissionResult,
     HealthResponse,
     LocalWorldView,
+    MemoryCompactionPlanRequest,
+    MemoryCompactionPlanResult,
     MemoryCompactionPolicyRequest,
     MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
@@ -2294,6 +2296,22 @@ def compact_memory_items_if_needed(
         raise HTTPException(
             status_code=502,
             detail="Memory compaction policy dependency unavailable",
+        ) from error
+
+
+@app.post("/memory-items/compaction-plan", response_model=MemoryCompactionPlanResult)
+def plan_memory_compaction(
+    compaction_request: MemoryCompactionPlanRequest,
+    memory_client: MemoryClient = Depends(get_memory_client),
+) -> MemoryCompactionPlanResult:
+    try:
+        return memory_client.plan_memory_compaction(compaction_request)
+    except TaskRunnerRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except TaskRunnerUnavailable as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Memory compaction plan dependency unavailable",
         ) from error
 
 

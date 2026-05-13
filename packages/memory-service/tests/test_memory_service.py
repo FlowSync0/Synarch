@@ -431,3 +431,92 @@ def test_compact_memory_items_if_needed_skips_when_sources_fit_threshold() -> No
 
     items_response = client.get("/memory-items?project_id=project_policy")
     assert [item["id"] for item in items_response.json()] == ["memory-small"]
+
+
+def test_memory_compaction_plan_discovers_overloaded_scopes_without_duplicates() -> None:
+    client = TestClient(app)
+    for item in [
+        {
+            "id": "memory-plan-a",
+            "scope": "project:project_plan",
+            "project_id": "project_plan",
+            "agent_id": "agent-ops",
+            "content": "A" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-plan-b",
+            "scope": "project:project_plan",
+            "project_id": "project_plan",
+            "agent_id": "agent-ops",
+            "content": "B" * 100,
+            "status": "approved",
+        },
+        {
+            "id": "memory-small-scope",
+            "scope": "project:project_plan_small",
+            "project_id": "project_plan_small",
+            "content": "Small fact.",
+            "status": "approved",
+        },
+        {
+            "id": "memory-other-project",
+            "scope": "project:project_other",
+            "project_id": "project_other",
+            "content": "C" * 100,
+            "status": "approved",
+        },
+    ]:
+        response = client.post("/memory-items", json=item)
+        assert response.status_code == 201
+
+    response = client.post(
+        "/memory-items/compaction-plan",
+        json={
+            "project_id": "project_plan",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["threshold_tokens"] == 40
+    assert payload["inspected_scope_count"] == 1
+    assert payload["planned_scope_count"] == 1
+    assert payload["items"] == [
+        {
+            "scope": "project:project_plan",
+            "project_id": "project_plan",
+            "agent_id": "agent-ops",
+            "source_memory_ids": ["memory-plan-a", "memory-plan-b"],
+            "source_count": 2,
+            "source_tokens": 50,
+        }
+    ]
+
+    compaction_response = client.post(
+        "/memory-items/compact-if-needed",
+        json={
+            "scope": "project:project_plan",
+            "project_id": "project_plan",
+            "agent_id": "agent-ops",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+        },
+    )
+    assert compaction_response.status_code == 200
+
+    duplicate_plan_response = client.post(
+        "/memory-items/compaction-plan",
+        json={
+            "project_id": "project_plan",
+            "min_source_tokens": 40,
+            "max_source_items": 10,
+        },
+    )
+    assert duplicate_plan_response.status_code == 200
+    duplicate_plan = duplicate_plan_response.json()
+    assert duplicate_plan["inspected_scope_count"] == 1
+    assert duplicate_plan["planned_scope_count"] == 0
+    assert duplicate_plan["items"] == []

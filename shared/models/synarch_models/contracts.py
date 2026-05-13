@@ -436,6 +436,32 @@ class MemoryCompactionPolicyResult(SynarchModel):
     compaction: MemoryCompactionResult | None = None
 
 
+class MemoryCompactionPlanRequest(SynarchModel):
+    project_id: str | None = None
+    agent_id: str | None = None
+    status: MemoryStatus = MemoryStatus.proposed
+    min_source_tokens: int = Field(default=1200, ge=1)
+    max_source_items: int = Field(default=20, ge=1, le=100)
+    max_summary_chars: int = Field(default=1200, ge=200, le=10000)
+    max_scopes: int = Field(default=20, ge=1, le=100)
+
+
+class MemoryCompactionPlanItem(SynarchModel):
+    scope: str
+    project_id: str | None = None
+    agent_id: str | None = None
+    source_memory_ids: list[str] = Field(default_factory=list)
+    source_count: int = 0
+    source_tokens: int = 0
+
+
+class MemoryCompactionPlanResult(SynarchModel):
+    threshold_tokens: int
+    inspected_scope_count: int = 0
+    planned_scope_count: int = 0
+    items: list[MemoryCompactionPlanItem] = Field(default_factory=list)
+
+
 class MemoryContext(SynarchModel):
     agent_id: str
     project_id: str | None = None

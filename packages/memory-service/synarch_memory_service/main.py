@@ -12,6 +12,9 @@ from pydantic_settings import BaseSettings
 
 from synarch_models import (
     HealthResponse,
+    MemoryCompactionPlanItem,
+    MemoryCompactionPlanRequest,
+    MemoryCompactionPlanResult,
     MemoryCompactionPolicyRequest,
     MemoryCompactionPolicyResult,
     MemoryCompactionRequest,
@@ -269,6 +272,48 @@ def compact_memory_items_if_needed(
     )
 
 
+@app.post("/memory-items/compaction-plan", response_model=MemoryCompactionPlanResult)
+def plan_memory_compaction(
+    request: MemoryCompactionPlanRequest,
+) -> MemoryCompactionPlanResult:
+    groups = compactable_memory_groups(request)
+    planned_items: list[MemoryCompactionPlanItem] = []
+    for group in groups:
+        source_items = group[: request.max_source_items]
+        source_tokens = sum(estimated_tokens(item.content) for item in source_items)
+        if source_tokens <= request.min_source_tokens:
+            continue
+        source_memory_ids = [item.id for item in source_items]
+        compaction_request = MemoryCompactionRequest(
+            scope=source_items[0].scope,
+            project_id=source_items[0].project_id,
+            agent_id=source_items[0].agent_id,
+            status=request.status,
+            max_source_items=request.max_source_items,
+            max_summary_chars=request.max_summary_chars,
+        )
+        if matching_compacted_item(source_memory_ids, compaction_request) is not None:
+            continue
+        planned_items.append(
+            MemoryCompactionPlanItem(
+                scope=compaction_request.scope,
+                project_id=compaction_request.project_id,
+                agent_id=compaction_request.agent_id,
+                source_memory_ids=source_memory_ids,
+                source_count=len(source_items),
+                source_tokens=source_tokens,
+            )
+        )
+        if len(planned_items) >= request.max_scopes:
+            break
+    return MemoryCompactionPlanResult(
+        threshold_tokens=request.min_source_tokens,
+        inspected_scope_count=len(groups),
+        planned_scope_count=len(planned_items),
+        items=planned_items,
+    )
+
+
 def create_compaction_result(
     source_items: list[MemoryItem],
     request: MemoryCompactionRequest,
@@ -339,6 +384,28 @@ def compactable_memory_items(request: MemoryCompactionRequest) -> list[MemoryIte
     return sorted(items, key=lambda item: (item.created_at, item.id))[
         : request.max_source_items
     ]
+
+
+def compactable_memory_groups(
+    request: MemoryCompactionPlanRequest,
+) -> list[list[MemoryItem]]:
+    grouped: dict[tuple[str, str | None, str | None], list[MemoryItem]] = {}
+    for item in STORE.list_items():
+        if item.status != MemoryStatus.approved:
+            continue
+        if item.metadata.get("kind") == "compaction":
+            continue
+        if request.project_id is not None and item.project_id != request.project_id:
+            continue
+        if request.agent_id is not None and item.agent_id != request.agent_id:
+            continue
+        key = (item.scope, item.project_id, item.agent_id)
+        grouped.setdefault(key, []).append(item)
+    groups = [
+        sorted(items, key=lambda item: (item.created_at, item.id))
+        for _, items in sorted(grouped.items())
+    ]
+    return groups
 
 
 def matching_compacted_item(
