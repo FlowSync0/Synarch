@@ -127,13 +127,20 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         ),
     )
     repair_usage = model_usage_from_response(repair_body, provider_id, model_id)
-    return agent_result_from_model_content(
+    repair_content = content_from_openrouter_body(repair_body)
+    repaired_result = agent_result_from_model_content(
         request=request,
-        content=content_from_openrouter_body(repair_body),
+        content=repair_content,
         usage=combine_model_usage(usage, repair_usage),
         mode="openrouter",
         provider_id=provider_id,
         model_id=model_id,
+    )
+    return block_unrepaired_invalid_result(
+        request,
+        repaired_result,
+        repair_messages,
+        repair_content,
     )
 
 
@@ -191,13 +198,19 @@ def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
         request,
         repair_messages,
     )
-    return agent_result_from_model_content(
+    repaired_result = agent_result_from_model_content(
         request=request,
         content=repair_completion.content,
         usage=combine_model_usage(completion.usage, repair_completion.usage),
         mode="model-gateway",
         provider_id=repair_completion.provider_id,
         model_id=repair_completion.model_id,
+    )
+    return block_unrepaired_invalid_result(
+        request,
+        repaired_result,
+        repair_messages,
+        repair_completion.content,
     )
 
 
@@ -296,7 +309,8 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "use them before deciding. Request another allowed tool only when "
                 "the previous tool result is an intermediate step required by the "
                 "acceptance criteria; otherwise return a final answer with no new "
-                "tool calls. "
+                "tool calls. If a tool_result status is failed, request a corrected "
+                "allowed tool when possible, or return blocked or needs_review. "
                 "lifecycle_requests_created must be empty unless an org change is "
                 "required; proposed org changes stay requested and require human approval. "
                 "For create_agent, include proposed_agent and, when useful, proposed_soul. "
@@ -401,6 +415,14 @@ def agent_result_repair_messages(
 ) -> list[ModelMessage] | None:
     if lifecycle_repair_required(request, result):
         return lifecycle_repair_messages(request, messages, previous_content)
+    failed_tools = unresolved_failed_completed_tool_results(request, result)
+    if failed_tools:
+        return failed_tool_repair_messages(
+            request,
+            messages,
+            previous_content,
+            failed_tools,
+        )
     missing_tools = missing_completed_required_tools(request, result)
     if missing_tools:
         return required_tool_repair_messages(
@@ -410,6 +432,53 @@ def agent_result_repair_messages(
             missing_tools,
         )
     return None
+
+
+def block_unrepaired_invalid_result(
+    request: AgentTaskRequest,
+    result: AgentResult,
+    messages: list[ModelMessage],
+    previous_content: str,
+) -> AgentResult:
+    if agent_result_repair_messages(request, result, messages, previous_content) is None:
+        return result
+    return result.model_copy(
+        update={
+            "status": TaskStatus.blocked,
+            "tool_calls_requested": [],
+            "summary": (
+                "Model result stayed invalid after one repair attempt; blocked for review."
+            ),
+        }
+    )
+
+
+def unresolved_failed_completed_tool_results(
+    request: AgentTaskRequest,
+    result: AgentResult,
+) -> list[str]:
+    if result.status != TaskStatus.completed:
+        return []
+
+    failed_tools: list[str] = []
+    for index, tool_result in enumerate(request.tool_results):
+        if tool_result.status != TaskStatus.failed:
+            continue
+        has_later_success = any(
+            later_result.tool_name == tool_result.tool_name
+            and later_result.status == TaskStatus.completed
+            for later_result in request.tool_results[index + 1 :]
+        )
+        if has_later_success:
+            continue
+        failed_tools.append(failed_tool_result_summary(tool_result.tool_name, tool_result.error))
+    return failed_tools
+
+
+def failed_tool_result_summary(tool_name: str, error: str | None) -> str:
+    if not error:
+        return f"{tool_name}: failed"
+    return f"{tool_name}: {error}"
 
 
 def missing_completed_required_tools(
@@ -466,6 +535,29 @@ def lifecycle_repair_messages(
                 "Return corrected JSON only. Include exactly one object in "
                 "lifecycle_requests_created with action, reason, proposed_agent, "
                 "and proposed_soul when action is create_agent."
+            ),
+        ),
+    ]
+
+
+def failed_tool_repair_messages(
+    request: AgentTaskRequest,
+    messages: list[ModelMessage],
+    previous_content: str,
+    failed_tools: list[str],
+) -> list[ModelMessage]:
+    return [
+        *messages,
+        ModelMessage(role="assistant", content=previous_content),
+        ModelMessage(
+            role="user",
+            content=(
+                "Your previous JSON failed validation: status was completed, "
+                "but these tool_results failed without a later completed result "
+                f"for the same tool: {', '.join(failed_tools)}. Do not mark the "
+                "task completed while tool failures are unresolved. Return "
+                "corrected JSON only. Request a corrected allowed tool if possible; "
+                "otherwise use status needs_review or blocked."
             ),
         ),
     ]

@@ -4,6 +4,7 @@ from pytest import MonkeyPatch
 
 from synarch_agent_runtime import main as runtime_main
 from synarch_agent_runtime.main import app
+from synarch_models import AgentResult, AgentTaskRequest, TaskStatus
 
 
 def test_runtime_returns_review_result() -> None:
@@ -532,3 +533,231 @@ def test_runtime_repairs_completed_result_missing_required_tool(
     assert payload["tool_calls_requested"][0]["arguments"]["job_id"] == "connector-job-owned"
     assert payload["model_usage"]["input_tokens"] == 110
     assert payload["model_usage"]["output_tokens"] == 25
+
+
+def test_runtime_repairs_completed_result_with_unresolved_failed_tool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "model_gateway")
+    monkeypatch.setattr(runtime_main.settings, "model_gateway_url", "http://model-gateway:8060")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(json)
+        if len(calls) == 1:
+            content = (
+                '{"status":"completed",'
+                '"summary":"Stopped the connector job.",'
+                '"actions_taken":["Claimed stop despite failed tool"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 40,
+                "output_tokens": 10,
+                "total_cost": 0.000005,
+                "currency": "USD",
+            }
+        else:
+            messages = json["messages"]
+            assert isinstance(messages, list)
+            repair_content = str(messages[-1]["content"])
+            assert "connector.job.stop: Unknown connector job: bad-job" in repair_content
+            assert "failed without a later completed result" in repair_content
+            content = (
+                '{"status":"blocked",'
+                '"summary":"The connector job stop failed because the job id was unknown.",'
+                '"actions_taken":["Reported unresolved tool failure"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 55,
+                "output_tokens": 12,
+                "total_cost": 0.000007,
+                "currency": "USD",
+            }
+        return httpx.Response(
+            200,
+            json={
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "content": content,
+                "usage": usage,
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_failed_tool_repair",
+                "project_id": "project_demo",
+                "title": "Stop connector job",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "acceptance_criteria": ["The connector job is stopped or a blocker is reported."],
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+            "tool_results": [
+                {
+                    "tool_name": "connector.job.stop",
+                    "status": "failed",
+                    "error": "Unknown connector job: bad-job",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(calls) == 2
+    assert payload["status"] == "blocked"
+    assert payload["summary"] == "The connector job stop failed because the job id was unknown."
+    assert payload["tool_calls_requested"] == []
+    assert payload["model_usage"]["input_tokens"] == 95
+    assert payload["model_usage"]["output_tokens"] == 22
+
+
+def test_runtime_allows_completed_result_when_failed_tool_was_retried_successfully(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "model_gateway")
+    monkeypatch.setattr(runtime_main.settings, "model_gateway_url", "http://model-gateway:8060")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(json)
+        return httpx.Response(
+            200,
+            json={
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "content": (
+                    '{"status":"completed",'
+                    '"summary":"Retried and stopped the connector job.",'
+                    '"actions_taken":["Used successful retry result"],'
+                    '"sub_tasks_created":[],'
+                    '"tool_calls_requested":[],'
+                    '"memory_candidates":[]}'
+                ),
+                "usage": {
+                    "provider_id": "provider-openrouter",
+                    "model_id": "deepseek/deepseek-v4-flash",
+                    "input_tokens": 40,
+                    "output_tokens": 10,
+                    "total_cost": 0.000005,
+                    "currency": "USD",
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_failed_tool_retried",
+                "project_id": "project_demo",
+                "title": "Stop connector job",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "acceptance_criteria": ["The connector job is stopped."],
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+            "tool_results": [
+                {
+                    "tool_name": "connector.job.stop",
+                    "status": "failed",
+                    "error": "Unknown connector job: bad-job",
+                },
+                {
+                    "tool_name": "connector.job.stop",
+                    "status": "completed",
+                    "output": {"connector_job_id": "good-job", "status": "stopped"},
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(calls) == 1
+    assert payload["status"] == "completed"
+    assert payload["summary"] == "Retried and stopped the connector job."
+
+
+def test_runtime_blocks_when_repair_result_is_still_invalid() -> None:
+    request = AgentTaskRequest.model_validate(
+        {
+            "task": {
+                "id": "task_unrepaired_invalid",
+                "project_id": "project_demo",
+                "title": "Stop connector job",
+                "assigned_agent_id": "agent-ops-sourcing",
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+            "tool_results": [
+                {
+                    "tool_name": "connector.job.stop",
+                    "status": "failed",
+                    "error": "Unknown connector job: bad-job",
+                }
+            ],
+        }
+    )
+    unsafe_result = AgentResult(
+        agent_id="agent-ops-sourcing",
+        task_id="task_unrepaired_invalid",
+        status=TaskStatus.completed,
+        summary="Stopped the connector job.",
+    )
+
+    blocked = runtime_main.block_unrepaired_invalid_result(
+        request,
+        unsafe_result,
+        [],
+        "{}",
+    )
+
+    assert blocked.status == TaskStatus.blocked
+    assert blocked.tool_calls_requested == []
+    assert (
+        blocked.summary
+        == "Model result stayed invalid after one repair attempt; blocked for review."
+    )
