@@ -1510,6 +1510,107 @@ class ConnectorJobStopToolLoopAgentRuntimeClient:
         )
 
 
+class ConnectorJobListThenStopToolLoopAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        if not request.tool_results:
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Requested active connector job inventory"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="connector.job.list",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Find the active follow-up job before stopping it.",
+                        arguments={"status": "active", "limit": 10},
+                    ),
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="connector.job.stop",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Premature stop request before observing list output.",
+                        arguments={
+                            "job_id": "connector-job-unobserved",
+                            "reason": "Premature stop should wait for list result.",
+                        },
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=18,
+                    output_tokens=8,
+                    total_cost=0.000002,
+                ),
+                summary="Need connector job inventory before acting.",
+            )
+
+        if len(request.tool_results) == 1:
+            list_result = request.tool_results[0]
+            assert list_result.tool_name == "connector.job.list"
+            listed_jobs = list_result.output["connector_jobs"]
+            assert isinstance(listed_jobs, list)
+            assert [job["id"] for job in listed_jobs] == [
+                "connector-job-list-then-stop"
+            ]
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Selected active connector job to stop"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="connector.job.stop",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Stop the completed follow-up job discovered by list.",
+                        arguments={
+                            "job_id": "connector-job-list-then-stop",
+                            "reason": "Supplier replied; follow-up loop complete.",
+                        },
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=20,
+                    output_tokens=8,
+                    total_cost=0.000002,
+                ),
+                summary="Need to stop the selected connector job.",
+            )
+
+        stop_result = request.tool_results[1]
+        assert stop_result.tool_name == "connector.job.stop"
+        assert stop_result.output["connector_job_id"] == "connector-job-list-then-stop"
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Stopped discovered supplier follow-up job"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=14,
+                output_tokens=6,
+                total_cost=0.000001,
+            ),
+            summary="Listed and stopped the completed supplier follow-up connector job.",
+        )
+
+
 class FailingAgentRuntimeClient:
     def run_task(self, request: AgentTaskRequest) -> AgentResult:
         raise TaskRunnerUnavailable("runtime offline")
@@ -1628,6 +1729,7 @@ def test_gateway_applies_project_split_through_state_service() -> None:
 def test_tool_adapter_registry_exposes_executable_tools() -> None:
     assert gateway_main.registered_tool_names() == [
         "connector.job.create",
+        "connector.job.list",
         "connector.job.stop",
         "event.emit",
         "web.fetch",
@@ -1656,6 +1758,14 @@ def test_tool_registry_endpoint_returns_adapter_manifests() -> None:
         "metadata",
     ]
     assert manifests["connector.job.create"]["risk_level"] == "medium"
+    assert manifests["connector.job.list"]["optional_arguments"] == [
+        "project_id",
+        "task_id",
+        "kind",
+        "status",
+        "limit",
+    ]
+    assert manifests["connector.job.list"]["risk_level"] == "low"
     assert manifests["connector.job.stop"]["required_arguments"] == ["job_id", "reason"]
     assert manifests["connector.job.stop"]["risk_level"] == "medium"
     assert manifests["event.emit"]["required_arguments"] == ["type"]
@@ -2392,6 +2502,148 @@ def test_tool_gate_denies_connector_job_for_unavailable_run_tool() -> None:
     assert state_client.audit_logs[0].action == "tool.denied"
 
 
+def test_tool_gate_lists_only_owned_connector_jobs() -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.extend(
+        [
+            ConnectorJobRecord(
+                id="connector-job-owned-active",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_supplier_followup",
+                owner_agent_id="agent-ops-sourcing",
+                kind="cron",
+                schedule="*/30 * * * *",
+                purpose="Owned active follow-up job.",
+                created_by_type="agent",
+                created_by_id="agent-ops-sourcing",
+                metadata={"tool_name": "web.fetch"},
+            ),
+            ConnectorJobRecord(
+                id="connector-job-other-owner",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_supplier_followup",
+                owner_agent_id="agent-other",
+                kind="cron",
+                schedule="*/30 * * * *",
+                purpose="Other owner follow-up job.",
+                created_by_type="agent",
+                created_by_id="agent-other",
+                metadata={"tool_name": "web.fetch"},
+            ),
+            ConnectorJobRecord(
+                id="connector-job-owned-stopped",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_supplier_followup",
+                owner_agent_id="agent-ops-sourcing",
+                kind="cron",
+                status=ConnectorJobStatus.stopped,
+                schedule="*/30 * * * *",
+                purpose="Owned stopped follow-up job.",
+                created_by_type="agent",
+                created_by_id="agent-ops-sourcing",
+                metadata={"tool_name": "web.fetch"},
+            ),
+        ]
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["connector.job.list"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["connector.job.list"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_list_tool"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "connector.job.list",
+                "service_id": "connector-supplier-web",
+                "project_id": "project_sourcing",
+                "task_id": "task_supplier_followup",
+                "reason": "Inspect my active follow-up jobs.",
+                "arguments": {"status": "active"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["adapter"] == "connector.job.list"
+    assert payload["output"]["count"] == 1
+    assert payload["output"]["total_count"] == 1
+    assert payload["output"]["connector_jobs"][0]["id"] == "connector-job-owned-active"
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert [audit.action for audit in state_client.audit_logs] == ["tool.allowed"]
+
+
+def test_tool_gate_denies_connector_job_list_without_service() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["connector.job.list"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["connector.job.list"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_list_no_service"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "connector.job.list",
+                "project_id": "project_sourcing",
+                "reason": "Inspect connector jobs without selecting a service.",
+                "arguments": {"status": "active"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "connector.job.list requires selected service_id"
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "tool.failed",
+    ]
+
+
 def test_tool_gate_stops_owned_connector_job() -> None:
     state_client = FakeStateClient()
     state_client.connector_jobs.append(
@@ -2525,6 +2777,57 @@ def test_tool_gate_denies_stopping_connector_job_owned_by_another_agent() -> Non
     assert response.status_code == 403
     assert response.json()["detail"] == "Connector job is not owned by requesting agent"
     assert state_client.connector_jobs[0].status == ConnectorJobStatus.active
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "tool.failed",
+    ]
+
+
+def test_gateway_tool_runner_returns_failed_result_for_missing_connector_job() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["connector.job.stop"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["connector.job.stop"]
+                },
+            )
+        }
+    )
+
+    result = gateway_main.GatewayToolRunner().call_tool(
+        ToolCallRequest(
+            agent_id="agent-ops-sourcing",
+            tool_name="connector.job.stop",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            task_id="task_supplier_followup",
+            reason="Stop a connector job that does not exist.",
+            arguments={
+                "job_id": "connector-job-missing",
+                "reason": "Supplier replied.",
+            },
+        ),
+        state_client=state_client,
+        control_plane=control_plane,
+        headers=gateway_main.service_headers("trace_missing_connector_job_tool_result"),
+        trace_id="trace_missing_connector_job_tool_result",
+    )
+
+    assert result.status == TaskStatus.failed
+    assert result.error == "Unknown connector job: connector-job-missing"
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
         EventType.tool_failed,
@@ -3886,6 +4189,129 @@ def test_run_next_task_can_stop_owned_connector_job_through_tool_loop() -> None:
         state_client.tasks[0].result["tool_results"][0]["output"]["connector_job_id"]
         == "connector-job-task-runner-stop"
     )
+
+
+def test_run_next_task_can_list_then_stop_owned_connector_job() -> None:
+    state_client = FakeStateClient()
+    task = TaskRecord(
+        id="task_connector_job_list_then_stop",
+        project_id="project_sourcing",
+        title="Find and stop completed supplier follow-up",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=[
+            "The active owned connector job is discovered before it is stopped."
+        ],
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_sourcing",
+            title="Supplier sourcing",
+            goal="Discover active follow-up jobs from state before acting.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(task)
+    state_client.connector_jobs.extend(
+        [
+            ConnectorJobRecord(
+                id="connector-job-list-then-stop",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_previous_followup",
+                owner_agent_id="agent-ops-sourcing",
+                kind="cron",
+                schedule="*/30 * * * *",
+                purpose="Poll supplier until a reply is received.",
+                created_by_type="agent",
+                created_by_id="agent-ops-sourcing",
+                metadata={"tool_name": "web.fetch"},
+            ),
+            ConnectorJobRecord(
+                id="connector-job-list-other-owner",
+                service_id="connector-supplier-web",
+                project_id="project_sourcing",
+                task_id="task_previous_followup",
+                owner_agent_id="agent-other",
+                kind="cron",
+                schedule="*/30 * * * *",
+                purpose="Another agent follow-up job.",
+                created_by_type="agent",
+                created_by_id="agent-other",
+                metadata={"tool_name": "web.fetch"},
+            ),
+        ]
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["connector.job.list", "connector.job.stop"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": [
+                        "connector.job.list",
+                        "connector.job.stop",
+                    ]
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = ConnectorJobListThenStopToolLoopAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=gateway_main.GatewayToolRunner(),
+        max_tool_rounds=2,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_list_then_stop"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 3
+    assert [tool_result["tool_name"] for tool_result in payload["tool_results"]] == [
+        "connector.job.list",
+        "connector.job.stop",
+    ]
+    assert payload["tool_results"][0]["output"]["connector_jobs"][0]["id"] == (
+        "connector-job-list-then-stop"
+    )
+    assert payload["tool_results"][1]["output"]["status"] == "stopped"
+    assert state_client.connector_jobs[0].status == ConnectorJobStatus.stopped
+    assert state_client.connector_jobs[1].status == ConnectorJobStatus.active
+    assert [event.type for event in state_client.events] == [
+        EventType.model_call_started,
+        EventType.tool_called,
+        EventType.tool_called,
+        EventType.connector_job_stopped,
+        EventType.model_call_completed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "tool.allowed",
+        "connector_job.stopped",
+    ]
+    assert payload["agent_result"]["status"] == "completed"
+    assert state_client.tasks[0].result is not None
+    assert [result["tool_name"] for result in state_client.tasks[0].result["tool_results"]] == [
+        "connector.job.list",
+        "connector.job.stop",
+    ]
 
 
 def test_run_task_by_id_executes_requested_task() -> None:

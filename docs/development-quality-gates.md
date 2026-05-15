@@ -78,8 +78,10 @@ GoalEnvelope
   -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
   -> Gateway connector-job execution uses the existing tool gate before recording runs
   -> Authorized agents can create durable connector jobs through `connector.job.create`
+  -> Authorized agents can inspect their own connector jobs through `connector.job.list`
   -> Task Runner can execute `connector.job.create` from an agent tool loop and return the job result to the agent
   -> Task Runner can execute `connector.job.stop` for an owned connector job and return the stopped job result to the agent
+  -> Task Runner can run a bounded two-round, one-tool-per-round loop so an agent can list connector jobs before stopping one
   -> Webhook connector jobs can be triggered through Gateway with the same tool gate and traceable batch output
   -> Gateway connector-job batch execution records bounded runs plus empty tick traces
   -> Cron connector jobs update next_run_at after each run and are skipped until due

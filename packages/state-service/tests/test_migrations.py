@@ -29,6 +29,7 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0020_memory_item_metadata.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0021_connector_job_create_tool.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0022_connector_job_stop_tool.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0023_connector_job_list_tool.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

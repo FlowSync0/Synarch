@@ -297,6 +297,8 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "For connector.job.create, select the service that will run the job; "
                 "arguments must include kind, purpose, run_tool_name, and may include "
                 "schedule, webhook_path, run_arguments, run_reason, and metadata. "
+                "For connector.job.list, select the service to inspect; arguments "
+                "may include project_id, task_id, kind, status, and limit. "
                 "For connector.job.stop, arguments must include job_id and reason. "
                 "Keep the answer operational and auditable."
             ),

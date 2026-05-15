@@ -179,6 +179,8 @@ class Settings(BaseSettings):
     task_runner_model_id: str = LOCAL_RUNTIME_MODEL_ID
     task_runner_input_cost_per_million_tokens: float = LOCAL_RUNTIME_INPUT_COST_PER_MILLION
     task_runner_output_cost_per_million_tokens: float = LOCAL_RUNTIME_OUTPUT_COST_PER_MILLION
+    task_runner_max_tool_rounds: int = 2
+    task_runner_max_tool_calls_per_round: int = 1
     task_runner_embedding_provider_id: str = ""
     task_runner_embedding_model_id: str = ""
     task_runner_embedding_timeout_seconds: float = 20.0
@@ -234,6 +236,8 @@ def get_task_runner() -> TaskRunner:
         model_id=settings.task_runner_model_id,
         input_cost_per_million_tokens=settings.task_runner_input_cost_per_million_tokens,
         output_cost_per_million_tokens=settings.task_runner_output_cost_per_million_tokens,
+        max_tool_rounds=settings.task_runner_max_tool_rounds,
+        max_tool_calls_per_round=settings.task_runner_max_tool_calls_per_round,
         tool_runner=GatewayToolRunner(),
         tool_readiness=GatewayToolReadinessChecker(),
         query_embedding_provider=get_query_embedding_provider(),
@@ -1281,6 +1285,30 @@ def execute_tool_call_through_gate(
             },
             error=detail,
         )
+    except StateServiceRequestError as error:
+        detail = str(error.detail)
+        state_client.create_event(
+            tool_call_event(tool_call, EventType.tool_failed, trace_id, error=detail),
+            headers=headers,
+        )
+        state_client.create_audit_log(
+            tool_call_audit(tool_call, "tool.failed", trace_id, error=detail),
+            headers=headers,
+        )
+        if raise_on_failure:
+            raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            status=TaskStatus.failed,
+            output={
+                "authorized": True,
+                "trace_id": trace_id,
+                "event_id": event.id,
+                "audit_id": audit.id,
+                "service_id": tool_call.service_id,
+            },
+            error=detail,
+        )
 
     return ToolResult(
         tool_name=tool_call.tool_name,
@@ -1877,6 +1905,19 @@ def execute_connector_job_stop_adapter(
     )
 
 
+def execute_connector_job_list_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_connector_job_list_tool(
+        tool_call,
+        state_client=state_client,
+    )
+
+
 class HtmlSummaryParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -2165,6 +2206,41 @@ def execute_connector_job_stop_tool(
     }
 
 
+def execute_connector_job_list_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+) -> dict[str, object]:
+    if tool_call.service_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.list requires selected service_id",
+        )
+
+    jobs = state_client.list_connector_jobs(
+        service_id=tool_call.service_id,
+        project_id=string_argument(tool_call, "project_id") or tool_call.project_id,
+        task_id=string_argument(tool_call, "task_id"),
+        owner_agent_id=tool_call.agent_id,
+        kind=connector_job_optional_kind_argument(tool_call, "connector.job.list"),
+        status=connector_job_optional_status_argument(tool_call, "connector.job.list"),
+    )
+    limit = connector_job_list_limit_argument(tool_call)
+    limited_jobs = jobs[:limit]
+    return {
+        "executed": True,
+        "adapter": "connector.job.list",
+        "service_id": tool_call.service_id,
+        "owner_agent_id": tool_call.agent_id,
+        "count": len(limited_jobs),
+        "total_count": len(jobs),
+        "connector_jobs": [
+            job.model_dump(mode="json")
+            for job in limited_jobs
+        ],
+    }
+
+
 def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
     raw_kind = required_string_argument(tool_call, "kind", "connector.job.create")
     try:
@@ -2174,6 +2250,53 @@ def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
             status_code=400,
             detail=f"connector.job.create kind must be one of: {', '.join(ConnectorJobKind)}",
         ) from error
+
+
+def connector_job_optional_kind_argument(
+    tool_call: ToolCallRequest,
+    adapter: str,
+) -> ConnectorJobKind | None:
+    raw_kind = string_argument(tool_call, "kind")
+    if raw_kind is None:
+        return None
+    try:
+        return ConnectorJobKind(raw_kind)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{adapter} kind must be one of: {', '.join(ConnectorJobKind)}",
+        ) from error
+
+
+def connector_job_optional_status_argument(
+    tool_call: ToolCallRequest,
+    adapter: str,
+) -> ConnectorJobStatus | None:
+    raw_status = string_argument(tool_call, "status")
+    if raw_status is None:
+        return None
+    try:
+        return ConnectorJobStatus(raw_status)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{adapter} status must be one of: {', '.join(ConnectorJobStatus)}",
+        ) from error
+
+
+def connector_job_list_limit_argument(tool_call: ToolCallRequest) -> int:
+    raw_limit = tool_call.arguments.get("limit", 20)
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.list limit must be an integer",
+        )
+    if raw_limit < 1 or raw_limit > 50:
+        raise HTTPException(
+            status_code=400,
+            detail="connector.job.list limit must be between 1 and 50",
+        )
+    return int(raw_limit)
 
 
 def connector_job_metadata_argument(
@@ -2209,6 +2332,7 @@ def connector_job_metadata_argument(
 
 TOOL_ADAPTERS: dict[str, ToolAdapter] = {
     "connector.job.create": execute_connector_job_create_adapter,
+    "connector.job.list": execute_connector_job_list_adapter,
     "connector.job.stop": execute_connector_job_stop_adapter,
     "event.emit": execute_event_emit_adapter,
     "web.fetch": execute_web_fetch_adapter,
@@ -2228,6 +2352,13 @@ TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
             "metadata",
         ),
         risk_level="medium",
+        audit_required=True,
+    ),
+    "connector.job.list": ToolAdapterManifest(
+        tool_name="connector.job.list",
+        adapter="connector.job.list",
+        optional_arguments=("project_id", "task_id", "kind", "status", "limit"),
+        risk_level="low",
         audit_required=True,
     ),
     "connector.job.stop": ToolAdapterManifest(

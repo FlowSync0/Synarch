@@ -317,6 +317,7 @@ class TaskRunner:
     tool_readiness: ToolReadinessChecker | None = None
     query_embedding_provider: QueryEmbeddingProvider | None = None
     max_tool_rounds: int = 1
+    max_tool_calls_per_round: int = 1
 
     def run_next(self, *, trace_id: str, headers: dict[str, str]) -> TaskRunResult:
         task = next_ready_task(self.state.list_tasks())
@@ -781,7 +782,7 @@ class TaskRunner:
         for _ in range(self.max_tool_rounds):
             if self.tool_runner is None or not agent_result.tool_calls_requested:
                 break
-            for tool_call in agent_result.tool_calls_requested:
+            for tool_call in agent_result.tool_calls_requested[: self.max_tool_calls_per_round]:
                 normalized_tool_call = tool_call_for_task(
                     tool_call=tool_call,
                     task=task,

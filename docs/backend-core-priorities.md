@@ -141,6 +141,7 @@ Implemented baseline:
 
 - Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
 - `connector.job.create` lets an authorized agent create a durable cron/webhook connector job after the same service and tool gate.
+- `connector.job.list` lets an authorized agent inspect its own durable connector jobs through the same service and tool gate.
 - `connector.job.stop` lets an authorized agent stop its own durable connector job after the same service and tool gate.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
