@@ -70,6 +70,7 @@ def scheduler_result_summary(payload: Any) -> dict[str, Any]:
             "tool_result_count": 0,
             "failed_tool_result_count": 0,
             "failed_tool_names": [],
+            "failed_tool_errors": [],
             "total_cost": 0.0,
         }
     runs = payload.get("runs", [])
@@ -81,6 +82,7 @@ def scheduler_result_summary(payload: Any) -> dict[str, Any]:
         "tool_result_count": tool_result_count(runs),
         "failed_tool_result_count": failed_tool_result_count(runs),
         "failed_tool_names": failed_tool_names(runs),
+        "failed_tool_errors": failed_tool_errors(runs),
         "total_cost": round(total_run_cost(runs), 8),
     }
 
@@ -112,6 +114,28 @@ def failed_tool_names(runs: list[Any]) -> list[str]:
             if tool_name not in names:
                 names.append(tool_name)
     return names
+
+
+def failed_tool_errors(runs: list[Any]) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for run in runs:
+        for tool_result in tool_results_for_run(run):
+            if not isinstance(tool_result, dict):
+                continue
+            if tool_result.get("status") != "failed":
+                continue
+            tool_name = tool_result.get("tool_name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            raw_error = tool_result.get("error")
+            error = raw_error if isinstance(raw_error, str) else ""
+            key = (tool_name, error)
+            if key in seen:
+                continue
+            seen.add(key)
+            errors.append({"tool_name": tool_name, "error": error})
+    return errors
 
 
 def total_run_cost(runs: list[Any]) -> float:

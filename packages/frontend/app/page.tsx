@@ -351,6 +351,11 @@ type ProjectViewModel = {
   source: "api" | "sample";
 };
 
+type FailedToolViewModel = {
+  name: string;
+  error?: string;
+};
+
 type TaskReviewViewModel = {
   id: string;
   title: string;
@@ -358,7 +363,7 @@ type TaskReviewViewModel = {
   assignedAgentId: string;
   status: string;
   reason: string;
-  failedTools: string[];
+  failedTools: FailedToolViewModel[];
   attempts: string;
   criteria: string[];
   age: string;
@@ -792,18 +797,22 @@ function isToolResult(value: unknown): value is ToolResult {
   return typeof candidate.tool_name === "string" && typeof candidate.status === "string";
 }
 
-function failedToolNames(task: TaskRecord): string[] {
-  const names: string[] = [];
+function taskFailedTools(task: TaskRecord): FailedToolViewModel[] {
+  const failedToolRows: FailedToolViewModel[] = [];
+  const seen = new Set<string>();
   for (const toolResult of taskToolResults(task)) {
     if (toolResult.status !== "failed") {
       continue;
     }
-    if (names.includes(toolResult.tool_name)) {
+    const error = typeof toolResult.error === "string" ? toolResult.error : undefined;
+    const key = `${toolResult.tool_name}:${error ?? ""}`;
+    if (seen.has(key)) {
       continue;
     }
-    names.push(toolResult.tool_name);
+    seen.add(key);
+    failedToolRows.push({ name: toolResult.tool_name, error });
   }
-  return names;
+  return failedToolRows;
 }
 
 function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
@@ -814,7 +823,7 @@ function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
     assignedAgentId: task.assigned_agent_id,
     status: task.status,
     reason: taskReviewReason(task),
-    failedTools: failedToolNames(task),
+    failedTools: taskFailedTools(task),
     attempts: `${task.attempt_count}/${task.max_attempts}`,
     criteria: task.acceptance_criteria,
     age: formatLifecycleAge(task.dead_lettered_at ?? task.created_at),
@@ -4295,12 +4304,14 @@ export default function DashboardPage() {
                         </BalancedText>
                         {taskReview.failedTools.length > 0 ? (
                           <div className="mt-2 flex flex-wrap gap-1">
-                            {taskReview.failedTools.map((toolName) => (
+                            {taskReview.failedTools.map((tool) => (
                               <span
-                                key={`${taskReview.id}-${toolName}`}
-                                className="rounded-md bg-risk-soft px-2 py-0.5 text-[11px] font-semibold text-risk ring-1 ring-risk/15"
+                                key={`${taskReview.id}-${tool.name}-${tool.error ?? ""}`}
+                                title={tool.error ?? tool.name}
+                                className="inline-flex max-w-full truncate rounded-md bg-risk-soft px-2 py-0.5 text-[11px] font-semibold text-risk ring-1 ring-risk/15"
                               >
-                                failed: {toolName}
+                                failed: {tool.name}
+                                {tool.error ? ` / ${tool.error}` : ""}
                               </span>
                             ))}
                           </div>
