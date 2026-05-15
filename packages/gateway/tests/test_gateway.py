@@ -70,6 +70,7 @@ from synarch_models import (
     TaskReviewResult,
     TaskStatus,
     ToolCallRequest,
+    ToolResult,
 )
 
 
@@ -1452,6 +1453,65 @@ class ContinuingToolLoopAgentRuntimeClient:
         )
 
 
+class RepeatingFailedToolRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.needs_review,
+            actions_taken=["Requested supplier page fetch"],
+            tool_calls_requested=[
+                ToolCallRequest(
+                    agent_id=request.world_view.agent_id,
+                    tool_name="web.fetch",
+                    service_id="connector-supplier-web",
+                    project_id=request.task.project_id,
+                    task_id=request.task.id,
+                    reason="Fetch source evidence for the supplier research task.",
+                    arguments={"url": "https://bad.example.invalid", "max_bytes": 2048},
+                )
+            ],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=20,
+                output_tokens=10,
+                total_cost=0.000002,
+            ),
+            summary="Need supplier source evidence before final answer.",
+        )
+
+
+class FailingToolRunner:
+    def __init__(self) -> None:
+        self.calls: list[ToolCallRequest] = []
+
+    def call_tool(
+        self,
+        tool_call: ToolCallRequest,
+        *,
+        state_client: object,
+        control_plane: object,
+        headers: dict[str, str],
+        trace_id: str,
+    ) -> ToolResult:
+        self.calls.append(tool_call)
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            status=TaskStatus.failed,
+            output={
+                "authorized": True,
+                "trace_id": trace_id,
+                "service_id": tool_call.service_id,
+            },
+            error="web.fetch request failed",
+        )
+
+
 class ConnectorJobToolLoopAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -2648,7 +2708,7 @@ def test_tool_gate_lists_only_owned_connector_jobs() -> None:
                 "project_id": "project_sourcing",
                 "task_id": "task_supplier_followup",
                 "reason": "Inspect my active follow-up jobs.",
-                "arguments": {"status": "active"},
+                "arguments": {"kind": "active", "status": "active"},
             },
         )
     finally:
@@ -2659,6 +2719,7 @@ def test_tool_gate_lists_only_owned_connector_jobs() -> None:
     assert payload["output"]["adapter"] == "connector.job.list"
     assert payload["output"]["count"] == 1
     assert payload["output"]["total_count"] == 1
+    assert payload["output"]["ignored_filters"] == {"kind": "active"}
     assert payload["output"]["connector_jobs"][0]["id"] == "connector-job-owned-active"
     assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert [audit.action for audit in state_client.audit_logs] == ["tool.allowed"]
@@ -4155,6 +4216,81 @@ def test_run_next_task_marks_pending_tools_when_tool_round_limit_reached() -> No
     ]
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["summary"] == payload["agent_result"]["summary"]
+
+
+def test_run_next_task_does_not_replay_identical_failed_tool_call() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_failed_tool_replay",
+            title="Failed tool replay",
+            goal="Avoid replaying the same failing tool call without corrected arguments.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_failed_tool_replay",
+            project_id="project_failed_tool_replay",
+            title="Fetch supplier source",
+            assigned_agent_id="agent-ops-sourcing",
+            acceptance_criteria=["A fetch failure is surfaced without duplicate execution."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"],
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = RepeatingFailedToolRuntimeClient()
+    tool_runner = FailingToolRunner()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=tool_runner,
+        max_tool_rounds=3,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_failed_tool_replay"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert len(tool_runner.calls) == 1
+    assert payload["task"]["status"] == "needs_review"
+    assert payload["agent_result"]["summary"] == (
+        "Tool loop paused because requested tool calls already failed with the same "
+        "arguments; corrected tool calls are required for: web.fetch."
+    )
+    assert "Tool loop paused because requested tool calls already failed." in (
+        payload["agent_result"]["actions_taken"]
+    )
+    assert payload["tool_results"][0]["status"] == "failed"
+    assert payload["tool_results"][0]["error"] == "web.fetch request failed"
+    assert state_client.tasks[0].result is not None
+    assert state_client.tasks[0].result["tool_results"][0]["status"] == "failed"
 
 
 def test_run_next_task_can_create_connector_job_through_tool_loop() -> None:

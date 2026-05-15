@@ -224,6 +224,30 @@ def test_parse_agent_json_recovers_fenced_json_with_malformed_empty_key_line() -
     )
 
 
+def test_agent_messages_describe_connector_job_list_filter_values() -> None:
+    request = AgentTaskRequest.model_validate(
+        {
+            "task": {
+                "id": "task_connector_contract",
+                "project_id": "project_demo",
+                "title": "Stop connector job",
+                "assigned_agent_id": "agent-ops-sourcing",
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+        }
+    )
+
+    system_content = runtime_main.agent_messages(request)[0].content
+
+    assert "connector job kind values are cron or webhook" in system_content
+    assert "omit kind when the task does not specify cron or webhook" in system_content
+    assert "use status for active, stopped, or paused" in system_content
+
+
 def test_runtime_repairs_missing_lifecycle_request_from_openrouter(
     monkeypatch: MonkeyPatch,
 ) -> None:

@@ -780,6 +780,7 @@ class TaskRunner:
         combined_usage = agent_result.model_usage
         combined_actions = list(agent_result.actions_taken)
         completed_tool_call_keys: set[str] = set()
+        failed_tool_call_keys: set[str] = set()
         completed_tool_rounds = 0
 
         for _ in range(self.max_tool_rounds):
@@ -790,12 +791,34 @@ class TaskRunner:
                 task=task,
                 world_view=world_view,
                 trace_id=trace_id,
-                completed_tool_call_keys=completed_tool_call_keys,
+                skipped_tool_call_keys=completed_tool_call_keys | failed_tool_call_keys,
                 max_tool_calls=self.max_tool_calls_per_round,
             )
             if not selected_tool_calls:
+                failed_pending_tools = failed_pending_tool_names(
+                    agent_result,
+                    task=task,
+                    world_view=world_view,
+                    trace_id=trace_id,
+                    failed_tool_call_keys=failed_tool_call_keys,
+                )
+                if failed_pending_tools:
+                    combined_actions.append(
+                        "Tool loop paused because requested tool calls already failed."
+                    )
+                    agent_result = agent_result.model_copy(
+                        update={
+                            "status": TaskStatus.needs_review,
+                            "summary": (
+                                "Tool loop paused because requested tool calls already "
+                                "failed with the same arguments; corrected tool calls "
+                                f"are required for: {', '.join(failed_pending_tools)}."
+                            ),
+                        }
+                    )
                 break
             for normalized_tool_call in selected_tool_calls:
+                tool_call_key = tool_call_execution_key(normalized_tool_call)
                 tool_result = self.tool_runner.call_tool(
                     normalized_tool_call,
                     state_client=self.state,
@@ -806,7 +829,9 @@ class TaskRunner:
                 tool_results.append(tool_result)
                 combined_actions.append(f"Tool gate executed {tool_result.tool_name}.")
                 if tool_result.status == TaskStatus.completed:
-                    completed_tool_call_keys.add(tool_call_execution_key(normalized_tool_call))
+                    completed_tool_call_keys.add(tool_call_key)
+                if tool_result.status == TaskStatus.failed:
+                    failed_tool_call_keys.add(tool_call_key)
 
             completed_tool_rounds += 1
             agent_result = self.runtime.run_task(
@@ -972,7 +997,7 @@ def select_tool_calls_for_round(
     task: TaskRecord,
     world_view: LocalWorldView,
     trace_id: str,
-    completed_tool_call_keys: set[str],
+    skipped_tool_call_keys: set[str],
     max_tool_calls: int,
 ) -> list[ToolCallRequest]:
     selected_tool_calls: list[ToolCallRequest] = []
@@ -983,7 +1008,7 @@ def select_tool_calls_for_round(
             world_view=world_view,
             trace_id=trace_id,
         )
-        if tool_call_execution_key(normalized_tool_call) in completed_tool_call_keys:
+        if tool_call_execution_key(normalized_tool_call) in skipped_tool_call_keys:
             continue
         selected_tool_calls.append(normalized_tool_call)
         if len(selected_tool_calls) >= max_tool_calls:
@@ -1002,6 +1027,31 @@ def tool_call_execution_key(tool_call: ToolCallRequest) -> str:
         },
         sort_keys=True,
         default=str,
+    )
+
+
+def failed_pending_tool_names(
+    agent_result: AgentResult,
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    trace_id: str,
+    failed_tool_call_keys: set[str],
+) -> list[str]:
+    return deduplicate(
+        [
+            normalized_tool_call.tool_name
+            for normalized_tool_call in (
+                tool_call_for_task(
+                    tool_call=tool_call,
+                    task=task,
+                    world_view=world_view,
+                    trace_id=trace_id,
+                )
+                for tool_call in agent_result.tool_calls_requested
+            )
+            if tool_call_execution_key(normalized_tool_call) in failed_tool_call_keys
+        ]
     )
 
 

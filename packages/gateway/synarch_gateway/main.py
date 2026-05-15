@@ -2217,12 +2217,22 @@ def execute_connector_job_list_tool(
             detail="connector.job.list requires selected service_id",
         )
 
+    raw_kind = string_argument(tool_call, "kind")
+    kind = connector_job_optional_kind_argument(
+        tool_call,
+        "connector.job.list",
+        strict=False,
+    )
+    ignored_filters: dict[str, str] = {}
+    if raw_kind is not None and kind is None:
+        ignored_filters["kind"] = raw_kind
+
     jobs = state_client.list_connector_jobs(
         service_id=tool_call.service_id,
         project_id=string_argument(tool_call, "project_id") or tool_call.project_id,
         task_id=string_argument(tool_call, "task_id"),
         owner_agent_id=tool_call.agent_id,
-        kind=connector_job_optional_kind_argument(tool_call, "connector.job.list"),
+        kind=kind,
         status=connector_job_optional_status_argument(tool_call, "connector.job.list"),
     )
     limit = connector_job_list_limit_argument(tool_call)
@@ -2234,6 +2244,7 @@ def execute_connector_job_list_tool(
         "owner_agent_id": tool_call.agent_id,
         "count": len(limited_jobs),
         "total_count": len(jobs),
+        "ignored_filters": ignored_filters,
         "connector_jobs": [
             job.model_dump(mode="json")
             for job in limited_jobs
@@ -2255,6 +2266,8 @@ def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
 def connector_job_optional_kind_argument(
     tool_call: ToolCallRequest,
     adapter: str,
+    *,
+    strict: bool = True,
 ) -> ConnectorJobKind | None:
     raw_kind = string_argument(tool_call, "kind")
     if raw_kind is None:
@@ -2262,6 +2275,8 @@ def connector_job_optional_kind_argument(
     try:
         return ConnectorJobKind(raw_kind)
     except ValueError as error:
+        if not strict:
+            return None
         raise HTTPException(
             status_code=400,
             detail=f"{adapter} kind must be one of: {', '.join(ConnectorJobKind)}",
