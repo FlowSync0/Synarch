@@ -206,3 +206,97 @@ def test_openrouter_completion_normalizes_provider_response(
         "total_cost": 0.00002,
         "currency": "USD",
     }
+
+
+def test_openrouter_completion_retries_transient_provider_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_gateway_main.settings, "model_gateway_mode", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    calls: list[str] = []
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(url)
+        assert headers["Authorization"] == "Bearer test-key"
+        assert json["model"] == "deepseek/deepseek-v4-flash"
+        assert timeout == model_gateway_main.settings.openrouter_timeout_seconds
+        if len(calls) == 1:
+            return httpx.Response(
+                502,
+                json={"error": "provider gateway timeout"},
+                request=httpx.Request("POST", url),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "completion-retry-test",
+                "choices": [{"message": {"content": '{"status":"completed"}'}}],
+                "usage": {"prompt_tokens": 25, "completion_tokens": 10},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/model-calls/complete",
+        json={
+            "agent_id": "agent-dev",
+            "purpose": "agent_task",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "messages": [{"role": "user", "content": "Return JSON."}],
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert response.json()["content"] == '{"status":"completed"}'
+
+
+def test_openrouter_completion_does_not_retry_client_provider_error(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(model_gateway_main.settings, "model_gateway_mode", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+
+    calls: list[str] = []
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(url)
+        return httpx.Response(
+            400,
+            json={"error": "invalid request"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/model-calls/complete",
+        json={
+            "agent_id": "agent-dev",
+            "purpose": "agent_task",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "messages": [{"role": "user", "content": "Return JSON."}],
+        },
+    )
+
+    assert response.status_code == 502
+    assert len(calls) == 1
+    assert response.json()["detail"] == {
+        "provider_status": 400,
+        "error": "invalid request",
+    }

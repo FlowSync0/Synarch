@@ -22,6 +22,9 @@ from synarch_models import (
 
 app = FastAPI(title="Synarch Model Gateway", version="0.1.0")
 
+OPENROUTER_MAX_ATTEMPTS = 2
+OPENROUTER_RETRYABLE_STATUS_CODES = {500, 502, 503, 504}
+
 
 class Settings(BaseSettings):
     model_gateway_mode: str = "fake"
@@ -121,18 +124,33 @@ def openrouter_completion(request: ModelCompletionRequest) -> ModelCompletionRes
         )
 
     payload = openrouter_payload(request, route.model_id)
-    try:
-        response = httpx.post(
-            f"{(route.base_url or settings.openrouter_base_url).rstrip('/')}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=settings.openrouter_timeout_seconds,
-        )
-    except httpx.HTTPError as error:
-        raise HTTPException(status_code=502, detail="OpenRouter request failed") from error
+    response: httpx.Response | None = None
+    endpoint = f"{(route.base_url or settings.openrouter_base_url).rstrip('/')}/chat/completions"
+    for attempt in range(OPENROUTER_MAX_ATTEMPTS):
+        try:
+            response = httpx.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=settings.openrouter_timeout_seconds,
+            )
+        except httpx.HTTPError as error:
+            if attempt < OPENROUTER_MAX_ATTEMPTS - 1:
+                continue
+            raise HTTPException(status_code=502, detail="OpenRouter request failed") from error
+
+        if (
+            response.status_code in OPENROUTER_RETRYABLE_STATUS_CODES
+            and attempt < OPENROUTER_MAX_ATTEMPTS - 1
+        ):
+            continue
+        break
+
+    if response is None:
+        raise HTTPException(status_code=502, detail="OpenRouter request failed")
 
     if response.status_code >= 400:
         raise HTTPException(
