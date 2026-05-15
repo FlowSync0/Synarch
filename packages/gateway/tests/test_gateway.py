@@ -2745,6 +2745,93 @@ def test_connector_job_run_ready_records_empty_tick() -> None:
     assert [audit.action for audit in state_client.audit_logs] == ["connector_job.tick"]
 
 
+def test_webhook_triggers_matching_connector_job_through_tool_gate() -> None:
+    state_client = FakeStateClient()
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-supplier-webhook",
+            service_id="connector-supplier-web",
+            project_id="project_sourcing",
+            task_id="task_supplier_webhook",
+            owner_agent_id="agent-ops-sourcing",
+            kind="webhook",
+            webhook_path="/webhooks/supplier",
+            purpose="Record supplier webhook replies.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={
+                "tool_name": "event.emit",
+                "arguments": {
+                    "type": "agent.reported",
+                    "target": "project_sourcing",
+                    "payload": {"source": "supplier-webhook"},
+                },
+            },
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["event.emit"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/webhooks/supplier",
+            headers={"X-Synarch-Trace-Id": "trace_supplier_webhook"},
+            json={"supplier_id": "factory-a", "message": "ready to quote"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["kind"] == "webhook"
+    assert payload["stop_reason"] == "all_matching_webhook_jobs_ran"
+    assert len(payload["runs"]) == 1
+    run = payload["runs"][0]["run"]
+    assert run["job_id"] == "connector-job-supplier-webhook"
+    assert run["status"] == "completed"
+    tool_result = run["output"]["tool_result"]
+    assert tool_result["tool_name"] == "event.emit"
+    assert tool_result["output"]["adapter"] == "event.emit"
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.agent_reported,
+        EventType.connector_job_run_recorded,
+        EventType.connector_job_tick,
+    ]
+    emitted_payload = state_client.events[1].payload
+    assert emitted_payload["source"] == "supplier-webhook"
+    assert emitted_payload["webhook"] == {
+        "webhook_path": "/webhooks/supplier",
+        "body": {"supplier_id": "factory-a", "message": "ready to quote"},
+        "content_type": "application/json",
+    }
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "connector_job.run_recorded",
+        "connector_job.tick",
+    ]
+    assert payload["tick_event"]["payload"]["connector_job_ids"] == [
+        "connector-job-supplier-webhook"
+    ]
+
+
 def test_connector_job_run_ready_ignores_jobs_in_cooldown() -> None:
     state_client = FakeStateClient()
     now = datetime.now(UTC)

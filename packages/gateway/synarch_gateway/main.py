@@ -888,6 +888,83 @@ def run_ready_connector_jobs(
         ) from error
 
 
+@app.post("/webhooks/{webhook_path:path}", response_model=ConnectorJobRunBatchResult)
+async def trigger_connector_jobs_webhook(
+    webhook_path: str,
+    request: Request,
+    max_jobs: int = Query(default=5, ge=1, le=20),
+    service_id: str | None = None,
+    project_id: str | None = None,
+    owner_agent_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+    control_plane: ControlPlaneClient = Depends(get_control_plane_client),
+) -> ConnectorJobRunBatchResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = connector_job_executor_headers(trace_id)
+    normalized_path = normalized_webhook_path(webhook_path)
+    trigger_payload = await webhook_trigger_payload(request, normalized_path)
+    try:
+        jobs = state_client.list_connector_jobs(
+            service_id=service_id,
+            project_id=project_id,
+            owner_agent_id=owner_agent_id,
+            kind=ConnectorJobKind.webhook,
+            status=ConnectorJobStatus.active,
+            due_before=None,
+        )
+        matching_jobs = [job for job in jobs if job.webhook_path == normalized_path]
+        selected_jobs = matching_jobs[:max_jobs]
+        runs = [
+            state_client.record_connector_job_run(
+                job.id,
+                connector_job_execution_run_request(
+                    job,
+                    state_client=state_client,
+                    control_plane=control_plane,
+                    headers=headers,
+                    trace_id=trace_id,
+                    trigger_payload=trigger_payload,
+                ),
+                headers=headers,
+            )
+            for job in selected_jobs
+        ]
+        if len(matching_jobs) > len(selected_jobs):
+            stop_reason = "max_jobs_reached"
+        elif selected_jobs:
+            stop_reason = "all_matching_webhook_jobs_ran"
+        else:
+            stop_reason = "no_matching_webhook_job"
+        batch_result = ConnectorJobRunBatchResult(
+            trace_id=trace_id,
+            max_jobs=max_jobs,
+            kind=ConnectorJobKind.webhook,
+            service_id=service_id,
+            project_id=project_id,
+            owner_agent_id=owner_agent_id,
+            stop_reason=stop_reason,
+            runs=runs,
+        )
+        tick_event = state_client.create_event(
+            connector_job_batch_tick_event(batch_result),
+            headers=headers,
+        )
+        tick_audit_log = state_client.create_audit_log(
+            connector_job_batch_tick_audit(batch_result),
+            headers=headers,
+        )
+        return batch_result.model_copy(
+            update={"tick_event": tick_event, "tick_audit_log": tick_audit_log}
+        )
+    except (StateServiceRequestError, TaskRunnerRequestError) as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Webhook connector job dependency unavailable",
+        ) from error
+
+
 @app.get("/tools/registry")
 def list_tool_registry() -> dict[str, object]:
     return {"tools": registered_tool_manifests()}
@@ -1225,8 +1302,13 @@ def connector_job_execution_run_request(
     control_plane: ControlPlaneClient,
     headers: dict[str, str],
     trace_id: str,
+    trigger_payload: dict[str, object] | None = None,
 ) -> ConnectorJobRunRequest:
-    tool_call_result = connector_job_tool_call(job, trace_id)
+    tool_call_result = connector_job_tool_call(
+        job,
+        trace_id,
+        trigger_payload=trigger_payload,
+    )
     if isinstance(tool_call_result, ConnectorJobRunRequest):
         return tool_call_result
 
@@ -1260,6 +1342,8 @@ def connector_job_execution_run_request(
 def connector_job_tool_call(
     job: ConnectorJobRecord,
     trace_id: str,
+    *,
+    trigger_payload: dict[str, object] | None = None,
 ) -> ToolCallRequest | ConnectorJobRunRequest:
     raw_tool_name = job.metadata.get("tool_name")
     if not isinstance(raw_tool_name, str) or not raw_tool_name.strip():
@@ -1291,6 +1375,12 @@ def connector_job_tool_call(
     raw_reason = job.metadata.get("reason")
     reason = raw_reason if isinstance(raw_reason, str) and raw_reason.strip() else job.purpose
     arguments = {str(key): value for key, value in raw_arguments.items()}
+    if trigger_payload is not None:
+        arguments = connector_job_arguments_with_trigger_payload(
+            raw_tool_name.strip(),
+            arguments,
+            trigger_payload,
+        )
     return ToolCallRequest(
         agent_id=job.owner_agent_id,
         tool_name=raw_tool_name.strip(),
@@ -1301,6 +1391,46 @@ def connector_job_tool_call(
         reason=reason,
         arguments=arguments,
     )
+
+
+def connector_job_arguments_with_trigger_payload(
+    tool_name: str,
+    arguments: dict[str, object],
+    trigger_payload: dict[str, object],
+) -> dict[str, object]:
+    if tool_name != "event.emit":
+        return {**arguments, "webhook": trigger_payload}
+
+    raw_payload = arguments.get("payload", {})
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    return {
+        **arguments,
+        "payload": {
+            **payload,
+            "webhook": trigger_payload,
+        },
+    }
+
+
+def normalized_webhook_path(webhook_path: str) -> str:
+    normalized = webhook_path.strip("/")
+    return f"/webhooks/{normalized}" if normalized else "/webhooks"
+
+
+async def webhook_trigger_payload(
+    request: Request,
+    webhook_path: str,
+) -> dict[str, object]:
+    try:
+        body: object = await request.json()
+    except ValueError:
+        raw_body = await request.body()
+        body = raw_body.decode("utf-8", errors="replace")
+    return {
+        "webhook_path": webhook_path,
+        "body": body,
+        "content_type": request.headers.get("content-type"),
+    }
 
 
 def connector_job_batch_tick_payload(
