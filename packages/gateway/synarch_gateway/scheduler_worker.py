@@ -69,6 +69,7 @@ def scheduler_result_summary(payload: Any) -> dict[str, Any]:
             "run_count": 0,
             "tool_result_count": 0,
             "failed_tool_result_count": 0,
+            "failed_tool_names": [],
             "total_cost": 0.0,
         }
     runs = payload.get("runs", [])
@@ -79,6 +80,7 @@ def scheduler_result_summary(payload: Any) -> dict[str, Any]:
         "run_count": len(runs),
         "tool_result_count": tool_result_count(runs),
         "failed_tool_result_count": failed_tool_result_count(runs),
+        "failed_tool_names": failed_tool_names(runs),
         "total_cost": round(total_run_cost(runs), 8),
     }
 
@@ -94,6 +96,22 @@ def failed_tool_result_count(runs: list[Any]) -> int:
         for tool_result in tool_results_for_run(run)
         if isinstance(tool_result, dict) and tool_result.get("status") == "failed"
     )
+
+
+def failed_tool_names(runs: list[Any]) -> list[str]:
+    names: list[str] = []
+    for run in runs:
+        for tool_result in tool_results_for_run(run):
+            if not isinstance(tool_result, dict):
+                continue
+            if tool_result.get("status") != "failed":
+                continue
+            tool_name = tool_result.get("tool_name")
+            if not isinstance(tool_name, str) or not tool_name:
+                continue
+            if tool_name not in names:
+                names.append(tool_name)
+    return names
 
 
 def total_run_cost(runs: list[Any]) -> float:

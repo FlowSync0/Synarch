@@ -77,6 +77,7 @@ def test_scheduler_tick_posts_to_gateway_with_trace(monkeypatch: Any) -> None:
     assert result["scheduler"]["run_count"] == 1
     assert result["scheduler"]["tool_result_count"] == 1
     assert result["scheduler"]["failed_tool_result_count"] == 0
+    assert result["scheduler"]["failed_tool_names"] == []
     assert result["scheduler"]["total_cost"] == 0.0001
     assert result["result"]["stop_reason"] == "no_ready_task"
 
@@ -106,6 +107,7 @@ def test_scheduler_summary_counts_tool_results() -> None:
         "run_count": 2,
         "tool_result_count": 2,
         "failed_tool_result_count": 1,
+        "failed_tool_names": ["event.emit"],
         "total_cost": 0.15,
     }
 

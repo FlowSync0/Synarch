@@ -5431,6 +5431,7 @@ def test_run_ready_tasks_records_tool_loop_metrics() -> None:
     assert scheduler_payload["run_count"] == 1
     assert scheduler_payload["tool_result_count"] == 1
     assert scheduler_payload["failed_tool_result_count"] == 0
+    assert scheduler_payload["failed_tool_names"] == []
     assert scheduler_payload["tool_names"] == ["web.fetch"]
     assert scheduler_payload["total_cost"] == 0.000005
     assert state_client.events[-1].type == EventType.scheduler_tick
@@ -5759,6 +5760,7 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "created_sub_task_count": 0,
         "tool_result_count": 0,
         "failed_tool_result_count": 0,
+        "failed_tool_names": [],
         "tool_names": [],
         "cost_ids": [],
         "total_cost": 0,

@@ -213,7 +213,8 @@ printf "%s" "$batch_response" | jq -e \
     (.runs[0].model_call_events[1].payload.tool_names == ["connector.job.list", "connector.job.stop"]) and
     (.runs[0].model_call_events[1].payload.pending_tool_call_count == 0) and
     (.runs[0].model_call_events[1].payload.pending_tool_names == []) and
-    (.scheduler_event.type == "scheduler.tick")
+    (.scheduler_event.type == "scheduler.tick") and
+    (.scheduler_event.payload.failed_tool_names == [])
   ' >/dev/null
 
 own_job="$(

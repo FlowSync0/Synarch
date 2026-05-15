@@ -1650,6 +1650,14 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
             for tool_result in run.tool_results
             if tool_result.status == TaskStatus.failed
         ),
+        "failed_tool_names": deduplicate(
+            [
+                tool_result.tool_name
+                for run in batch_result.runs
+                for tool_result in run.tool_results
+                if tool_result.status == TaskStatus.failed
+            ]
+        ),
         "tool_names": deduplicate(
             [
                 tool_result.tool_name
