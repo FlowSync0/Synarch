@@ -1863,6 +1863,20 @@ def execute_connector_job_create_adapter(
     )
 
 
+def execute_connector_job_stop_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_connector_job_stop_tool(
+        tool_call,
+        state_client=state_client,
+        trace_id=trace_id,
+    )
+
+
 class HtmlSummaryParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -2111,6 +2125,46 @@ def execute_connector_job_create_tool(
     }
 
 
+def execute_connector_job_stop_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    trace_id: str,
+) -> dict[str, object]:
+    job_id = required_string_argument(tool_call, "job_id", "connector.job.stop")
+    reason = required_string_argument(tool_call, "reason", "connector.job.stop")
+    job = state_client.get_connector_job(job_id)
+    if job.owner_agent_id != tool_call.agent_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Connector job is not owned by requesting agent",
+        )
+    if tool_call.service_id is not None and job.service_id != tool_call.service_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Connector job does not belong to selected service",
+        )
+
+    result = state_client.stop_connector_job(
+        job.id,
+        ConnectorJobStopRequest(
+            stopped_by_type=ActorType.agent,
+            stopped_by_id=tool_call.agent_id,
+            reason=reason,
+        ),
+        headers=connector_job_operator_headers(ActorType.agent, tool_call.agent_id, trace_id),
+    )
+    return {
+        "executed": True,
+        "adapter": "connector.job.stop",
+        "connector_job_id": result.job.id,
+        "service_id": result.job.service_id,
+        "status": result.job.status,
+        "connector_job_event_id": result.event.id,
+        "connector_job_audit_id": result.audit_log.id if result.audit_log is not None else None,
+    }
+
+
 def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
     raw_kind = required_string_argument(tool_call, "kind", "connector.job.create")
     try:
@@ -2155,6 +2209,7 @@ def connector_job_metadata_argument(
 
 TOOL_ADAPTERS: dict[str, ToolAdapter] = {
     "connector.job.create": execute_connector_job_create_adapter,
+    "connector.job.stop": execute_connector_job_stop_adapter,
     "event.emit": execute_event_emit_adapter,
     "web.fetch": execute_web_fetch_adapter,
 }
@@ -2172,6 +2227,13 @@ TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
             "run_reason",
             "metadata",
         ),
+        risk_level="medium",
+        audit_required=True,
+    ),
+    "connector.job.stop": ToolAdapterManifest(
+        tool_name="connector.job.stop",
+        adapter="connector.job.stop",
+        required_arguments=("job_id", "reason"),
         risk_level="medium",
         audit_required=True,
     ),

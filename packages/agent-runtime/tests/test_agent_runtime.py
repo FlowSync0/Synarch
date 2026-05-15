@@ -189,6 +189,40 @@ def test_runtime_can_call_openrouter_with_fake_response(monkeypatch: MonkeyPatch
     }
 
 
+def test_parse_agent_json_recovers_fenced_json_with_malformed_empty_key_line() -> None:
+    parsed = runtime_main.parse_agent_json(
+        """```json
+{
+  "status": "needs_review",
+  "summary": "Need to stop the connector job.",
+  "actions_taken": [],
+  ": [],
+  "sub_tasks_created": [],
+  "memory_candidates": [],
+  "tool_calls_requested": [
+    {
+      "tool_name": "connector.job.stop",
+      "service_id": "connector-supplier-web",
+      "reason": "Stop the completed connector job.",
+      "arguments": {
+        "job_id": "connector-job-live-stop",
+        "reason": "Supplier replied, follow-up complete."
+      }
+    }
+  ],
+  "lifecycle_requests_created": []
+}
+```"""
+    )
+
+    assert parsed["status"] == "needs_review"
+    assert parsed["tool_calls_requested"][0]["tool_name"] == "connector.job.stop"
+    assert (
+        parsed["tool_calls_requested"][0]["arguments"]["job_id"]
+        == "connector-job-live-stop"
+    )
+
+
 def test_runtime_repairs_missing_lifecycle_request_from_openrouter(
     monkeypatch: MonkeyPatch,
 ) -> None:

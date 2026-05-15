@@ -274,7 +274,8 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
         ModelMessage(
             role="system",
             content=(
-                "You are a Synarch AI employee. Return only valid JSON with keys "
+                "You are a Synarch AI employee. Return raw valid JSON only, "
+                "without Markdown code fences, with keys "
                 "status, summary, actions_taken, sub_tasks_created, and "
                 "memory_candidates, tool_calls_requested, lifecycle_requests_created. "
                 "status must be one of completed, needs_review, blocked, failed. "
@@ -296,6 +297,7 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "For connector.job.create, select the service that will run the job; "
                 "arguments must include kind, purpose, run_tool_name, and may include "
                 "schedule, webhook_path, run_arguments, run_reason, and metadata. "
+                "For connector.job.stop, arguments must include job_id and reason. "
                 "Keep the answer operational and auditable."
             ),
         ),
@@ -427,20 +429,62 @@ def combine_model_usage(first: ModelUsage, second: ModelUsage) -> ModelUsage:
 
 
 def parse_agent_json(content: str) -> dict[str, Any]:
+    for candidate in agent_json_candidates(content):
+        parsed = json_dict_from_candidate(candidate)
+        if parsed is not None:
+            return parsed
+        repaired_candidate = remove_malformed_empty_key_lines(candidate)
+        if repaired_candidate != candidate:
+            parsed = json_dict_from_candidate(repaired_candidate)
+            if parsed is not None:
+                return parsed
+    return {}
+
+
+def agent_json_candidates(content: str) -> list[str]:
+    stripped = content.strip()
+    candidates = [stripped]
+    candidates.extend(fenced_json_blocks(stripped))
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(stripped[start : end + 1])
+    return deduplicate_strings(candidates)
+
+
+def fenced_json_blocks(content: str) -> list[str]:
+    blocks: list[str] = []
+    chunks = content.split("```")
+    for chunk in chunks:
+        stripped = chunk.strip()
+        if stripped.startswith("json"):
+            blocks.append(stripped.removeprefix("json").strip())
+    return blocks
+
+
+def json_dict_from_candidate(candidate: str) -> dict[str, Any] | None:
     try:
-        parsed = json.loads(content)
+        parsed = json.loads(candidate)
     except json.JSONDecodeError:
-        start = content.find("{")
-        end = content.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return {}
-        try:
-            parsed = json.loads(content[start : end + 1])
-        except json.JSONDecodeError:
-            return {}
+        return None
     if isinstance(parsed, dict):
         return parsed
-    return {}
+    return None
+
+
+def remove_malformed_empty_key_lines(candidate: str) -> str:
+    lines = candidate.splitlines()
+    return "\n".join(line for line in lines if not line.strip().startswith('":'))
+
+
+def deduplicate_strings(values: list[str]) -> list[str]:
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            unique_values.append(value)
+            seen.add(value)
+    return unique_values
 
 
 def parsed_status(value: Any) -> TaskStatus:
