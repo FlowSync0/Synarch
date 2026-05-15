@@ -780,6 +780,7 @@ class TaskRunner:
         combined_usage = agent_result.model_usage
         combined_actions = list(agent_result.actions_taken)
         completed_tool_call_keys: set[str] = set()
+        completed_tool_rounds = 0
 
         for _ in range(self.max_tool_rounds):
             if self.tool_runner is None or not agent_result.tool_calls_requested:
@@ -807,6 +808,7 @@ class TaskRunner:
                 if tool_result.status == TaskStatus.completed:
                     completed_tool_call_keys.add(tool_call_execution_key(normalized_tool_call))
 
+            completed_tool_rounds += 1
             agent_result = self.runtime.run_task(
                 AgentTaskRequest(
                     task=task,
@@ -820,6 +822,26 @@ class TaskRunner:
             )
             combined_usage = combine_model_usage(combined_usage, agent_result.model_usage)
             combined_actions.extend(agent_result.actions_taken)
+
+        if tool_round_limit_reached(
+            agent_result=agent_result,
+            tool_runner=self.tool_runner,
+            max_tool_rounds=self.max_tool_rounds,
+            completed_rounds=completed_tool_rounds,
+        ):
+            pending_tools = pending_tool_names(agent_result)
+            combined_actions.append(
+                "Tool loop paused after reaching the configured round limit."
+            )
+            agent_result = agent_result.model_copy(
+                update={
+                    "status": TaskStatus.needs_review,
+                    "summary": (
+                        "Tool loop paused after reaching the configured round limit; "
+                        f"pending tool calls remain: {', '.join(pending_tools)}."
+                    ),
+                }
+            )
 
         return agent_result.model_copy(
             update={
@@ -980,6 +1002,26 @@ def tool_call_execution_key(tool_call: ToolCallRequest) -> str:
         },
         sort_keys=True,
         default=str,
+    )
+
+
+def tool_round_limit_reached(
+    *,
+    agent_result: AgentResult,
+    tool_runner: ToolRunner | None,
+    max_tool_rounds: int,
+    completed_rounds: int,
+) -> bool:
+    if tool_runner is None:
+        return False
+    if not agent_result.tool_calls_requested:
+        return False
+    return completed_rounds >= max_tool_rounds
+
+
+def pending_tool_names(agent_result: AgentResult) -> list[str]:
+    return deduplicate(
+        [tool_call.tool_name for tool_call in agent_result.tool_calls_requested]
     )
 
 

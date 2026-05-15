@@ -1392,6 +1392,66 @@ class ToolLoopAgentRuntimeClient:
         )
 
 
+class ContinuingToolLoopAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        if not request.tool_results:
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Requested source evidence before finalizing"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="web.fetch",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Fetch source evidence for the supplier research task.",
+                        arguments={"url": "https://example.com", "max_bytes": 2048},
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=20,
+                    output_tokens=10,
+                    total_cost=0.000002,
+                ),
+                summary="Need source evidence before final answer.",
+            )
+
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.needs_review,
+            actions_taken=["Requested audit event after source evidence"],
+            tool_calls_requested=[
+                ToolCallRequest(
+                    agent_id=request.world_view.agent_id,
+                    tool_name="event.emit",
+                    service_id="service-event-log",
+                    project_id=request.task.project_id,
+                    task_id=request.task.id,
+                    reason="Record source verification for audit.",
+                    arguments={"summary": "Source evidence fetched."},
+                )
+            ],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=30,
+                output_tokens=12,
+                total_cost=0.000003,
+            ),
+            summary="Need audit event before final answer.",
+        )
+
+
 class ConnectorJobToolLoopAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -4002,6 +4062,99 @@ def test_run_next_task_executes_agent_requested_tool_call() -> None:
     assert state_client.audit_logs[0].action == "tool.allowed"
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["tool_results"][0]["tool_name"] == "web.fetch"
+
+
+def test_run_next_task_marks_pending_tools_when_tool_round_limit_reached() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_tool_round_limit",
+            title="Tool round limit",
+            goal="Keep pending tool work auditable when a task needs another round.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_tool_round_limit",
+            project_id="project_tool_round_limit",
+            title="Verify supplier source with audit",
+            assigned_agent_id="agent-ops-sourcing",
+            acceptance_criteria=["Source evidence and audit event are both produced."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web", "service-event-log"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"],
+                    "service-event-log": ["event.emit"],
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = ContinuingToolLoopAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=gateway_main.GatewayToolRunner(),
+        max_tool_rounds=1,
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": max_bytes,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain This domain is for examples.",
+        }
+
+    original_fetch_http_url = gateway_main.fetch_http_url
+    gateway_main.fetch_http_url = fake_fetch_http_url
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_tool_round_limit"},
+        )
+    finally:
+        gateway_main.fetch_http_url = original_fetch_http_url
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert payload["task"]["status"] == "needs_review"
+    assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["agent_result"]["summary"] == (
+        "Tool loop paused after reaching the configured round limit; "
+        "pending tool calls remain: event.emit."
+    )
+    assert "Tool loop paused after reaching the configured round limit." in (
+        payload["agent_result"]["actions_taken"]
+    )
+    assert payload["agent_result"]["tool_calls_requested"][0]["tool_name"] == "event.emit"
+    assert [tool_result["tool_name"] for tool_result in payload["tool_results"]] == [
+        "web.fetch"
+    ]
+    assert state_client.tasks[0].result is not None
+    assert state_client.tasks[0].result["summary"] == payload["agent_result"]["summary"]
 
 
 def test_run_next_task_can_create_connector_job_through_tool_loop() -> None:
