@@ -209,6 +209,7 @@ printf "%s" "$batch_response" | jq -e \
     (.runs[0].model_call_events[1].payload.provider_id == "provider-openrouter") and
     (.runs[0].model_call_events[1].payload.tool_result_count == 2) and
     (.runs[0].model_call_events[1].payload.failed_tool_result_count == 0) and
+    (.runs[0].model_call_events[1].payload.failed_tool_names == []) and
     (.runs[0].model_call_events[1].payload.tool_names == ["connector.job.list", "connector.job.stop"]) and
     (.runs[0].model_call_events[1].payload.pending_tool_call_count == 0) and
     (.runs[0].model_call_events[1].payload.pending_tool_names == []) and
@@ -238,6 +239,7 @@ printf "%s" "$timeline" | jq -e \
       .type == "model_call.completed" and
       .payload.tool_result_count == 2 and
       .payload.failed_tool_result_count == 0 and
+      .payload.failed_tool_names == [] and
       .payload.tool_names == ["connector.job.list", "connector.job.stop"] and
       .payload.pending_tool_call_count == 0 and
       .payload.pending_tool_names == []
@@ -267,6 +269,7 @@ jq -n \
     model_completion_tool_metrics: {
       tool_result_count: $batch.runs[0].model_call_events[1].payload.tool_result_count,
       failed_tool_result_count: $batch.runs[0].model_call_events[1].payload.failed_tool_result_count,
+      failed_tool_names: $batch.runs[0].model_call_events[1].payload.failed_tool_names,
       tool_names: $batch.runs[0].model_call_events[1].payload.tool_names,
       pending_tool_call_count: $batch.runs[0].model_call_events[1].payload.pending_tool_call_count,
       pending_tool_names: $batch.runs[0].model_call_events[1].payload.pending_tool_names

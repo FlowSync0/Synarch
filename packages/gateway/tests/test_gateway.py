@@ -4238,6 +4238,7 @@ def test_run_next_task_executes_agent_requested_tool_call() -> None:
     completed_payload = state_client.events[2].payload
     assert completed_payload["tool_result_count"] == 1
     assert completed_payload["failed_tool_result_count"] == 0
+    assert completed_payload["failed_tool_names"] == []
     assert completed_payload["tool_names"] == ["web.fetch"]
     assert completed_payload["pending_tool_call_count"] == 0
     assert completed_payload["pending_tool_names"] == []
@@ -4417,6 +4418,7 @@ def test_run_next_task_does_not_replay_identical_failed_tool_call() -> None:
     )
     assert completed_payload["tool_result_count"] == 1
     assert completed_payload["failed_tool_result_count"] == 1
+    assert completed_payload["failed_tool_names"] == ["web.fetch"]
     assert completed_payload["tool_names"] == ["web.fetch"]
     assert completed_payload["pending_tool_call_count"] == 1
     assert completed_payload["pending_tool_names"] == ["web.fetch"]
@@ -4500,6 +4502,7 @@ def test_run_next_task_allows_corrected_tool_call_after_failure() -> None:
     )
     assert completed_payload["tool_result_count"] == 2
     assert completed_payload["failed_tool_result_count"] == 1
+    assert completed_payload["failed_tool_names"] == ["web.fetch"]
     assert completed_payload["tool_names"] == ["web.fetch"]
     assert completed_payload["pending_tool_call_count"] == 0
     assert completed_payload["pending_tool_names"] == []
