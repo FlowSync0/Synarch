@@ -154,6 +154,11 @@ printf "%s" "$batch_response" | jq -e \
     (.runs[0].cost_records[0].model_id == $model_id) and
     (.runs[0].model_call_events[0].payload.provider_id == "provider-openrouter") and
     (.runs[0].model_call_events[1].payload.provider_id == "provider-openrouter") and
+    (.runs[0].model_call_events[1].payload.tool_result_count == 0) and
+    (.runs[0].model_call_events[1].payload.failed_tool_result_count == 0) and
+    (.runs[0].model_call_events[1].payload.tool_names == []) and
+    (.runs[0].model_call_events[1].payload.pending_tool_call_count == 0) and
+    (.runs[0].model_call_events[1].payload.pending_tool_names == []) and
     (.scheduler_event.type == "scheduler.tick")
   ' >/dev/null
 
@@ -169,7 +174,15 @@ printf "%s" "$timeline" | jq -e \
     ([.tasks[] | select(.id == $task_id and .status == "completed")] | length == 1) and
     ([.memory_items[] | select(.status == "approved" and (.content | contains($marker)))] | length == 1) and
     ([.memory_items[] | select(.status == "proposed")] | length >= 1) and
-    ([.events[] | select(.trace_id == $trace_id and .type == "model_call.completed")] | length == 1) and
+    ([.events[] | select(
+      .trace_id == $trace_id and
+      .type == "model_call.completed" and
+      .payload.tool_result_count == 0 and
+      .payload.failed_tool_result_count == 0 and
+      .payload.tool_names == [] and
+      .payload.pending_tool_call_count == 0 and
+      .payload.pending_tool_names == []
+    )] | length == 1) and
     ([.events[] | select(.trace_id == $trace_id and .type == "memory.candidate_created")] | length >= 1) and
     ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .input_tokens > 0 and .output_tokens > 0)] | length == 1)
   ' >/dev/null
@@ -187,6 +200,13 @@ jq -n \
     trace_id: $trace_id,
     model_id: $model_id,
     runtime_mode: $batch.runs[0].agent_result.events_emitted[0].payload.mode,
+    model_completion_tool_metrics: {
+      tool_result_count: $batch.runs[0].model_call_events[1].payload.tool_result_count,
+      failed_tool_result_count: $batch.runs[0].model_call_events[1].payload.failed_tool_result_count,
+      tool_names: $batch.runs[0].model_call_events[1].payload.tool_names,
+      pending_tool_call_count: $batch.runs[0].model_call_events[1].payload.pending_tool_call_count,
+      pending_tool_names: $batch.runs[0].model_call_events[1].payload.pending_tool_names
+    },
     model_usage: $batch.runs[0].agent_result.model_usage,
     memory_candidate_count: ($batch.runs[0].agent_result.memory_candidates | length)
   }'
