@@ -4120,6 +4120,12 @@ def test_run_next_task_executes_agent_requested_tool_call() -> None:
         EventType.tool_called,
         EventType.model_call_completed,
     ]
+    completed_payload = state_client.events[2].payload
+    assert completed_payload["tool_result_count"] == 1
+    assert completed_payload["failed_tool_result_count"] == 0
+    assert completed_payload["tool_names"] == ["web.fetch"]
+    assert completed_payload["pending_tool_call_count"] == 0
+    assert completed_payload["pending_tool_names"] == []
     assert state_client.audit_logs[0].action == "tool.allowed"
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["tool_results"][0]["tool_name"] == "web.fetch"
@@ -4289,6 +4295,16 @@ def test_run_next_task_does_not_replay_identical_failed_tool_call() -> None:
     )
     assert payload["tool_results"][0]["status"] == "failed"
     assert payload["tool_results"][0]["error"] == "web.fetch request failed"
+    completed_payload = next(
+        event.payload
+        for event in state_client.events
+        if event.type == EventType.model_call_completed
+    )
+    assert completed_payload["tool_result_count"] == 1
+    assert completed_payload["failed_tool_result_count"] == 1
+    assert completed_payload["tool_names"] == ["web.fetch"]
+    assert completed_payload["pending_tool_call_count"] == 1
+    assert completed_payload["pending_tool_names"] == ["web.fetch"]
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["tool_results"][0]["status"] == "failed"
 

@@ -1450,6 +1450,11 @@ def model_call_completed_event(
             "output_tokens": cost_record.output_tokens,
             "total_cost": cost_record.total_cost,
             "currency": cost_record.currency,
+            "tool_result_count": len(agent_result.tool_results),
+            "failed_tool_result_count": failed_tool_result_count(agent_result),
+            "tool_names": tool_result_names(agent_result),
+            "pending_tool_call_count": len(agent_result.tool_calls_requested),
+            "pending_tool_names": pending_tool_names(agent_result),
         },
         trace_id=trace_id,
     )
@@ -1477,6 +1482,20 @@ def model_call_failed_event(
             "error": error,
         },
         trace_id=trace_id,
+    )
+
+
+def failed_tool_result_count(agent_result: AgentResult) -> int:
+    return sum(
+        1
+        for tool_result in agent_result.tool_results
+        if tool_result.status == TaskStatus.failed
+    )
+
+
+def tool_result_names(agent_result: AgentResult) -> list[str]:
+    return deduplicate(
+        [tool_result.tool_name for tool_result in agent_result.tool_results]
     )
 
 
