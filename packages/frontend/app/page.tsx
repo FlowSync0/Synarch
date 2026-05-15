@@ -358,6 +358,7 @@ type TaskReviewViewModel = {
   assignedAgentId: string;
   status: string;
   reason: string;
+  failedTools: string[];
   attempts: string;
   criteria: string[];
   age: string;
@@ -775,6 +776,36 @@ function taskReviewReason(task: TaskRecord): string {
   return "Task requires human review before the next transition.";
 }
 
+function taskToolResults(task: TaskRecord): ToolResult[] {
+  const rawToolResults = task.result?.tool_results;
+  if (!Array.isArray(rawToolResults)) {
+    return [];
+  }
+  return rawToolResults.filter(isToolResult);
+}
+
+function isToolResult(value: unknown): value is ToolResult {
+  if (value === null || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<ToolResult>;
+  return typeof candidate.tool_name === "string" && typeof candidate.status === "string";
+}
+
+function failedToolNames(task: TaskRecord): string[] {
+  const names: string[] = [];
+  for (const toolResult of taskToolResults(task)) {
+    if (toolResult.status !== "failed") {
+      continue;
+    }
+    if (names.includes(toolResult.tool_name)) {
+      continue;
+    }
+    names.push(toolResult.tool_name);
+  }
+  return names;
+}
+
 function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
   return {
     id: task.id,
@@ -783,6 +814,7 @@ function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
     assignedAgentId: task.assigned_agent_id,
     status: task.status,
     reason: taskReviewReason(task),
+    failedTools: failedToolNames(task),
     attempts: `${task.attempt_count}/${task.max_attempts}`,
     criteria: task.acceptance_criteria,
     age: formatLifecycleAge(task.dead_lettered_at ?? task.created_at),
@@ -2026,6 +2058,7 @@ export default function DashboardPage() {
 
     return taskReviews.map((taskReview) => ({
       ...taskReview,
+      failedTools: [],
       source: "sample" as const
     }));
   }, [taskReviewsQuery.data, taskReviewsQuery.isSuccess]);
@@ -2394,6 +2427,7 @@ export default function DashboardPage() {
               assignedAgentId: "",
               status: "needs_review",
               reason: "",
+              failedTools: [],
               attempts: "",
               criteria: [],
               age: "now",
@@ -4259,6 +4293,18 @@ export default function DashboardPage() {
                         <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
                           {taskReview.reason}
                         </BalancedText>
+                        {taskReview.failedTools.length > 0 ? (
+                          <div className="mt-2 flex flex-wrap gap-1">
+                            {taskReview.failedTools.map((toolName) => (
+                              <span
+                                key={`${taskReview.id}-${toolName}`}
+                                className="rounded-md bg-risk-soft px-2 py-0.5 text-[11px] font-semibold text-risk ring-1 ring-risk/15"
+                              >
+                                failed: {toolName}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
                         <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
                           <p className="min-w-0 truncate text-xs text-muted">
                             attempts {taskReview.attempts} / {taskReview.age}
