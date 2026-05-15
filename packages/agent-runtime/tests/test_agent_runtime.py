@@ -418,3 +418,117 @@ def test_runtime_can_call_model_gateway_with_fake_response(
         "total_cost": 0.000017,
         "currency": "USD",
     }
+
+
+def test_runtime_repairs_completed_result_missing_required_tool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "model_gateway")
+    monkeypatch.setattr(runtime_main.settings, "model_gateway_url", "http://model-gateway:8060")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(json)
+        if len(calls) == 1:
+            content = (
+                '{"status":"completed",'
+                '"summary":"Listed and stopped the connector job.",'
+                '"actions_taken":["Claimed stop without tool result"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "total_cost": 0.000006,
+                "currency": "USD",
+            }
+        else:
+            messages = json["messages"]
+            assert isinstance(messages, list)
+            assert "connector.job.stop" in str(messages[-1]["content"])
+            content = (
+                '{"status":"needs_review",'
+                '"summary":"Need to stop the listed connector job.",'
+                '"actions_taken":["Requested missing stop tool"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[{'
+                '"tool_name":"connector.job.stop",'
+                '"service_id":"connector-supplier-web",'
+                '"reason":"Stop the listed active job.",'
+                '"arguments":{"job_id":"connector-job-owned","reason":"Supplier replied."}'
+                '}],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 60,
+                "output_tokens": 15,
+                "total_cost": 0.000009,
+                "currency": "USD",
+            }
+        return httpx.Response(
+            200,
+            json={
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "content": content,
+                "usage": usage,
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_required_tool_repair",
+                "project_id": "project_demo",
+                "title": "Stop listed connector job",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "required_tools": ["connector.job.list", "connector.job.stop"],
+                "acceptance_criteria": ["The stop tool result exists."],
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+            "tool_results": [
+                {
+                    "tool_name": "connector.job.list",
+                    "status": "completed",
+                    "output": {
+                        "connector_jobs": [
+                            {
+                                "id": "connector-job-owned",
+                                "status": "active",
+                            }
+                        ]
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(calls) == 2
+    assert payload["status"] == "needs_review"
+    assert payload["tool_calls_requested"][0]["tool_name"] == "connector.job.stop"
+    assert payload["tool_calls_requested"][0]["arguments"]["job_id"] == "connector-job-owned"
+    assert payload["model_usage"]["input_tokens"] == 110
+    assert payload["model_usage"]["output_tokens"] == 25

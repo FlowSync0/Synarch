@@ -1571,6 +1571,15 @@ class ConnectorJobListThenStopToolLoopAgentRuntimeClient:
                 tool_calls_requested=[
                     ToolCallRequest(
                         agent_id=request.world_view.agent_id,
+                        tool_name="connector.job.list",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Duplicate list request that should not be replayed.",
+                        arguments={"status": "active", "limit": 10},
+                    ),
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
                         tool_name="connector.job.stop",
                         service_id="connector-supplier-web",
                         project_id=request.task.project_id,

@@ -114,7 +114,8 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         provider_id=provider_id,
         model_id=model_id,
     )
-    if not lifecycle_repair_required(request, result):
+    repair_messages = agent_result_repair_messages(request, result, messages, content)
+    if repair_messages is None:
         return result
 
     repair_body = post_openrouter_chat_completion(
@@ -122,7 +123,7 @@ def run_task_with_openrouter(request: AgentTaskRequest) -> AgentResult:
         payload=openrouter_payload(
             request,
             model_id,
-            messages=lifecycle_repair_messages(request, messages, content),
+            messages=repair_messages,
         ),
     )
     repair_usage = model_usage_from_response(repair_body, provider_id, model_id)
@@ -177,12 +178,18 @@ def run_task_with_model_gateway(request: AgentTaskRequest) -> AgentResult:
         provider_id=completion.provider_id,
         model_id=completion.model_id,
     )
-    if not lifecycle_repair_required(request, result):
+    repair_messages = agent_result_repair_messages(
+        request,
+        result,
+        messages,
+        completion.content,
+    )
+    if repair_messages is None:
         return result
 
     repair_completion = post_model_gateway_completion(
         request,
-        lifecycle_repair_messages(request, messages, completion.content),
+        repair_messages,
     )
     return agent_result_from_model_content(
         request=request,
@@ -286,7 +293,10 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "tool_name, service_id, reason, and arguments. Request a tool only "
                 "when it is in world_view.permissions.allowed_tools and you need "
                 "external evidence before finalizing. If tool_results are present, "
-                "use them and return a final answer with no new tool calls. "
+                "use them before deciding. Request another allowed tool only when "
+                "the previous tool result is an intermediate step required by the "
+                "acceptance criteria; otherwise return a final answer with no new "
+                "tool calls. "
                 "lifecycle_requests_created must be empty unless an org change is "
                 "required; proposed org changes stay requested and require human approval. "
                 "For create_agent, include proposed_agent and, when useful, proposed_soul. "
@@ -299,6 +309,9 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "schedule, webhook_path, run_arguments, run_reason, and metadata. "
                 "For connector.job.list, select the service to inspect; arguments "
                 "may include project_id, task_id, kind, status, and limit. "
+                "When a task requires stopping a connector job and connector.job.list "
+                "returns the target job, request connector.job.stop with the exact "
+                "job id from the tool result. "
                 "For connector.job.stop, arguments must include job_id and reason. "
                 "Keep the answer operational and auditable."
             ),
@@ -380,6 +393,45 @@ def lifecycle_repair_required(
     return task_requests_lifecycle_change(request)
 
 
+def agent_result_repair_messages(
+    request: AgentTaskRequest,
+    result: AgentResult,
+    messages: list[ModelMessage],
+    previous_content: str,
+) -> list[ModelMessage] | None:
+    if lifecycle_repair_required(request, result):
+        return lifecycle_repair_messages(request, messages, previous_content)
+    missing_tools = missing_completed_required_tools(request, result)
+    if missing_tools:
+        return required_tool_repair_messages(
+            request,
+            messages,
+            previous_content,
+            missing_tools,
+        )
+    return None
+
+
+def missing_completed_required_tools(
+    request: AgentTaskRequest,
+    result: AgentResult,
+) -> list[str]:
+    if result.status != TaskStatus.completed:
+        return []
+    requested_tool_names = {tool_call.tool_name for tool_call in result.tool_calls_requested}
+    completed_tool_names = {
+        tool_result.tool_name
+        for tool_result in request.tool_results
+        if tool_result.status == TaskStatus.completed
+    }
+    missing_tools: list[str] = []
+    for required_tool in request.task.required_tools:
+        if required_tool in completed_tool_names or required_tool in requested_tool_names:
+            continue
+        missing_tools.append(required_tool)
+    return missing_tools
+
+
 def task_requests_lifecycle_change(request: AgentTaskRequest) -> bool:
     text = " ".join(
         [
@@ -414,6 +466,35 @@ def lifecycle_repair_messages(
                 "Return corrected JSON only. Include exactly one object in "
                 "lifecycle_requests_created with action, reason, proposed_agent, "
                 "and proposed_soul when action is create_agent."
+            ),
+        ),
+    ]
+
+
+def required_tool_repair_messages(
+    request: AgentTaskRequest,
+    messages: list[ModelMessage],
+    previous_content: str,
+    missing_tools: list[str],
+) -> list[ModelMessage]:
+    completed_tools = [
+        tool_result.tool_name
+        for tool_result in request.tool_results
+        if tool_result.status == TaskStatus.completed
+    ]
+    return [
+        *messages,
+        ModelMessage(role="assistant", content=previous_content),
+        ModelMessage(
+            role="user",
+            content=(
+                "Your previous JSON failed validation: status was completed, "
+                "but these task.required_tools do not have completed tool_results: "
+                f"{', '.join(missing_tools)}. Completed tool_results are: "
+                f"{', '.join(completed_tools) or 'none'}. Do not claim a tool was "
+                "executed unless it appears in tool_results. Return corrected JSON "
+                "only. Request the next missing allowed tool if one is needed; "
+                "otherwise use status needs_review or blocked."
             ),
         ),
     ]

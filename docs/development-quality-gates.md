@@ -127,6 +127,17 @@ This starts `model-gateway` in OpenRouter mode, runs a Gateway scheduler batch t
 `agent-runtime` in `model_gateway` mode, and asserts the returned `AgentResult`, `ModelUsage`,
 timeline events, memory candidate, and cost record all preserve the same trace.
 
+Run the paid live connector-job/DeepSeek slice with:
+
+```bash
+make test-live-connector-jobs-openrouter
+```
+
+This creates a real project, task, and two connector jobs, then requires DeepSeek to inspect state
+through `connector.job.list` before stopping the owned active job through `connector.job.stop`. The
+test asserts the other agent's job stays active and that the trace contains tool, stop, audit, and
+cost records.
+
 Deterministic memory compaction and the threshold policy are covered by the normal backend tests.
 The memory-service tests assert that only approved source memories are compacted, source IDs stay
 visible in both content and structured metadata, compaction is skipped below threshold, and duplicate

@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -778,17 +779,22 @@ class TaskRunner:
         )
         combined_usage = agent_result.model_usage
         combined_actions = list(agent_result.actions_taken)
+        completed_tool_call_keys: set[str] = set()
 
         for _ in range(self.max_tool_rounds):
             if self.tool_runner is None or not agent_result.tool_calls_requested:
                 break
-            for tool_call in agent_result.tool_calls_requested[: self.max_tool_calls_per_round]:
-                normalized_tool_call = tool_call_for_task(
-                    tool_call=tool_call,
-                    task=task,
-                    world_view=world_view,
-                    trace_id=trace_id,
-                )
+            selected_tool_calls = select_tool_calls_for_round(
+                agent_result.tool_calls_requested,
+                task=task,
+                world_view=world_view,
+                trace_id=trace_id,
+                completed_tool_call_keys=completed_tool_call_keys,
+                max_tool_calls=self.max_tool_calls_per_round,
+            )
+            if not selected_tool_calls:
+                break
+            for normalized_tool_call in selected_tool_calls:
                 tool_result = self.tool_runner.call_tool(
                     normalized_tool_call,
                     state_client=self.state,
@@ -798,6 +804,8 @@ class TaskRunner:
                 )
                 tool_results.append(tool_result)
                 combined_actions.append(f"Tool gate executed {tool_result.tool_name}.")
+                if tool_result.status == TaskStatus.completed:
+                    completed_tool_call_keys.add(tool_call_execution_key(normalized_tool_call))
 
             agent_result = self.runtime.run_task(
                 AgentTaskRequest(
@@ -933,6 +941,45 @@ def tool_call_for_task(
             "task_id": tool_call.task_id or task.id,
             "trace_id": tool_call.trace_id or trace_id,
         }
+    )
+
+
+def select_tool_calls_for_round(
+    tool_calls: list[ToolCallRequest],
+    *,
+    task: TaskRecord,
+    world_view: LocalWorldView,
+    trace_id: str,
+    completed_tool_call_keys: set[str],
+    max_tool_calls: int,
+) -> list[ToolCallRequest]:
+    selected_tool_calls: list[ToolCallRequest] = []
+    for tool_call in tool_calls:
+        normalized_tool_call = tool_call_for_task(
+            tool_call=tool_call,
+            task=task,
+            world_view=world_view,
+            trace_id=trace_id,
+        )
+        if tool_call_execution_key(normalized_tool_call) in completed_tool_call_keys:
+            continue
+        selected_tool_calls.append(normalized_tool_call)
+        if len(selected_tool_calls) >= max_tool_calls:
+            break
+    return selected_tool_calls
+
+
+def tool_call_execution_key(tool_call: ToolCallRequest) -> str:
+    return json.dumps(
+        {
+            "tool_name": tool_call.tool_name,
+            "service_id": tool_call.service_id,
+            "project_id": tool_call.project_id,
+            "task_id": tool_call.task_id,
+            "arguments": tool_call.arguments,
+        },
+        sort_keys=True,
+        default=str,
     )
 
 
