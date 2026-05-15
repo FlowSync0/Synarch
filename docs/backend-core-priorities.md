@@ -92,6 +92,9 @@ Implemented baseline:
   and `requires_human_approval` stays true before writing to state-service.
 - Agent runtime retries once with a corrective prompt when a lifecycle task mentions a proposal in
   prose but omits the required structured `lifecycle_requests_created` payload.
+- `make test-live-lifecycle-openrouter` verifies the live DeepSeek path: an IA manager proposes a
+  new employee, the employee is absent before approval, a human approval applies the request, and
+  control-plane exposes the new agent plus active `AgentSoul`.
 
 ## Priority 4: Service Registry and Permissions
 
