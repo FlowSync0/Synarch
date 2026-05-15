@@ -1383,6 +1383,8 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
@@ -1400,6 +1402,8 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });

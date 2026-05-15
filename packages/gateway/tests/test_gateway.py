@@ -1392,6 +1392,69 @@ class ToolLoopAgentRuntimeClient:
         )
 
 
+class ConnectorJobToolLoopAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        if not request.tool_results:
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Requested durable supplier follow-up job"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="connector.job.create",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Schedule a bounded supplier follow-up check.",
+                        arguments={
+                            "id": "connector-job-task-runner-followup",
+                            "kind": "cron",
+                            "schedule": "*/30 * * * *",
+                            "purpose": "Fetch supplier evidence before the next follow-up.",
+                            "run_tool_name": "web.fetch",
+                            "run_arguments": {
+                                "url": "https://example.com",
+                                "max_bytes": 1024,
+                            },
+                            "metadata": {"max_runs": 2},
+                        },
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=24,
+                    output_tokens=16,
+                    total_cost=0.000003,
+                ),
+                summary="Need a durable follow-up job before finalizing.",
+            )
+
+        tool_result = request.tool_results[0]
+        assert tool_result.tool_name == "connector.job.create"
+        assert tool_result.output["connector_job_id"] == "connector-job-task-runner-followup"
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Confirmed durable supplier follow-up job"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=18,
+                output_tokens=8,
+                total_cost=0.000002,
+            ),
+            summary="Created a bounded supplier follow-up connector job.",
+        )
+
+
 class FailingAgentRuntimeClient:
     def run_task(self, request: AgentTaskRequest) -> AgentResult:
         raise TaskRunnerUnavailable("runtime offline")
@@ -2190,6 +2253,10 @@ def test_tool_gate_creates_connector_job_after_permission_check() -> None:
     payload = response.json()
     assert payload["output"]["adapter"] == "connector.job.create"
     assert payload["output"]["connector_job_id"] == "connector-job-supplier-followup-tool"
+    assert payload["output"]["event_id"] == state_client.events[0].id
+    assert payload["output"]["audit_id"] == state_client.audit_logs[0].id
+    assert payload["output"]["connector_job_event_id"] == state_client.events[1].id
+    assert payload["output"]["connector_job_audit_id"] == state_client.audit_logs[1].id
     assert payload["output"]["run_tool_name"] == "web.fetch"
     assert len(state_client.connector_jobs) == 1
     job = state_client.connector_jobs[0]
@@ -3335,6 +3402,108 @@ def test_run_next_task_executes_agent_requested_tool_call() -> None:
     assert state_client.audit_logs[0].action == "tool.allowed"
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["tool_results"][0]["tool_name"] == "web.fetch"
+
+
+def test_run_next_task_can_create_connector_job_through_tool_loop() -> None:
+    state_client = FakeStateClient()
+    task = TaskRecord(
+        id="task_connector_job_tool_loop",
+        project_id="project_sourcing",
+        title="Schedule supplier follow-up",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=["A bounded connector job is created for supplier follow-up."],
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_sourcing",
+            title="Supplier sourcing",
+            goal="Find reliable suppliers with bounded autonomous follow-up.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(task)
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["connector.job.create", "web.fetch", "event.emit"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": [
+                        "connector.job.create",
+                        "web.fetch",
+                    ]
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = ConnectorJobToolLoopAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=gateway_main.GatewayToolRunner(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_tool_loop"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert runtime_client.requests[0].tool_results == []
+    assert runtime_client.requests[1].tool_results[0].tool_name == "connector.job.create"
+    assert payload["agent_result"]["status"] == "completed"
+    assert payload["tool_results"][0]["tool_name"] == "connector.job.create"
+    assert (
+        payload["tool_results"][0]["output"]["connector_job_id"]
+        == "connector-job-task-runner-followup"
+    )
+    assert payload["tool_results"][0]["output"]["event_id"] == state_client.events[1].id
+    assert payload["tool_results"][0]["output"]["audit_id"] == state_client.audit_logs[0].id
+    assert (
+        payload["tool_results"][0]["output"]["connector_job_event_id"]
+        == state_client.events[2].id
+    )
+    assert len(state_client.connector_jobs) == 1
+    job = state_client.connector_jobs[0]
+    assert job.owner_agent_id == "agent-ops-sourcing"
+    assert job.project_id == "project_sourcing"
+    assert job.task_id == "task_connector_job_tool_loop"
+    assert job.metadata["tool_name"] == "web.fetch"
+    assert job.metadata["arguments"] == {
+        "url": "https://example.com",
+        "max_bytes": 1024,
+    }
+    assert job.metadata["max_runs"] == 2
+    assert [event.type for event in state_client.events] == [
+        EventType.model_call_started,
+        EventType.tool_called,
+        EventType.connector_job_created,
+        EventType.model_call_completed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "connector_job.created",
+    ]
+    assert state_client.tasks[0].result is not None
+    assert (
+        state_client.tasks[0].result["tool_results"][0]["output"]["connector_job_id"]
+        == "connector-job-task-runner-followup"
+    )
 
 
 def test_run_task_by_id_executes_requested_task() -> None:

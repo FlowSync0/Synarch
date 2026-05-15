@@ -1975,8 +1975,8 @@ def execute_connector_job_create_tool(
         "service_id": result.job.service_id,
         "kind": result.job.kind,
         "status": result.job.status,
-        "event_id": result.event.id,
-        "audit_id": result.audit_log.id if result.audit_log is not None else None,
+        "connector_job_event_id": result.event.id,
+        "connector_job_audit_id": result.audit_log.id if result.audit_log is not None else None,
         "run_tool_name": result.job.metadata.get("tool_name"),
     }
 
