@@ -207,6 +207,11 @@ printf "%s" "$batch_response" | jq -e \
     (.runs[0].cost_records[0].provider_id == "provider-openrouter") and
     (.runs[0].model_call_events[0].payload.provider_id == "provider-openrouter") and
     (.runs[0].model_call_events[1].payload.provider_id == "provider-openrouter") and
+    (.runs[0].model_call_events[1].payload.tool_result_count == 2) and
+    (.runs[0].model_call_events[1].payload.failed_tool_result_count == 0) and
+    (.runs[0].model_call_events[1].payload.tool_names == ["connector.job.list", "connector.job.stop"]) and
+    (.runs[0].model_call_events[1].payload.pending_tool_call_count == 0) and
+    (.runs[0].model_call_events[1].payload.pending_tool_names == []) and
     (.scheduler_event.type == "scheduler.tick")
   ' >/dev/null
 
@@ -228,6 +233,15 @@ printf "%s" "$timeline" | jq -e \
   '
     ([.events[] | select(.trace_id == $trace_id and .type == "tool.called")] | length == 2) and
     ([.events[] | select(.trace_id == $trace_id and .type == "connector_job.stopped" and .payload.connector_job_id == $own_job_id)] | length == 1) and
+    ([.events[] | select(
+      .trace_id == $trace_id and
+      .type == "model_call.completed" and
+      .payload.tool_result_count == 2 and
+      .payload.failed_tool_result_count == 0 and
+      .payload.tool_names == ["connector.job.list", "connector.job.stop"] and
+      .payload.pending_tool_call_count == 0 and
+      .payload.pending_tool_names == []
+    )] | length == 1) and
     ([.audit_logs[] | select(.trace_id == $trace_id and .action == "tool.allowed")] | length == 2) and
     ([.audit_logs[] | select(.trace_id == $trace_id and .action == "connector_job.stopped" and .target_id == $own_job_id)] | length == 1) and
     ([.cost_records[] | select(.trace_id == $trace_id and .provider_id == "provider-openrouter" and .input_tokens > 0 and .output_tokens > 0)] | length == 1)
@@ -250,5 +264,12 @@ jq -n \
     untouched_job_id: $other_job_id,
     tool_results: [$batch.runs[0].tool_results[].tool_name],
     agent_status: $batch.runs[0].agent_result.status,
+    model_completion_tool_metrics: {
+      tool_result_count: $batch.runs[0].model_call_events[1].payload.tool_result_count,
+      failed_tool_result_count: $batch.runs[0].model_call_events[1].payload.failed_tool_result_count,
+      tool_names: $batch.runs[0].model_call_events[1].payload.tool_names,
+      pending_tool_call_count: $batch.runs[0].model_call_events[1].payload.pending_tool_call_count,
+      pending_tool_names: $batch.runs[0].model_call_events[1].payload.pending_tool_names
+    },
     model_usage: $batch.runs[0].cost_records[0]
   }'
