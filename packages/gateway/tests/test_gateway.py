@@ -1976,6 +1976,7 @@ def test_tool_adapter_registry_exposes_executable_tools() -> None:
         "connector.job.list",
         "connector.job.stop",
         "event.emit",
+        "web.extract",
         "web.fetch",
     ]
     assert gateway_main.tool_adapter_registry_errors() == []
@@ -2019,6 +2020,10 @@ def test_tool_registry_endpoint_returns_adapter_manifests() -> None:
     assert manifests["web.fetch"]["optional_arguments"] == ["max_bytes"]
     assert manifests["web.fetch"]["risk_level"] == "medium"
     assert manifests["web.fetch"]["network_access"] is True
+    assert manifests["web.extract"]["required_arguments"] == ["url"]
+    assert manifests["web.extract"]["optional_arguments"] == ["provider", "max_bytes"]
+    assert manifests["web.extract"]["risk_level"] == "medium"
+    assert manifests["web.extract"]["network_access"] is True
 
 
 def test_tool_credential_status_endpoint_reports_missing_scopes(
@@ -2604,6 +2609,296 @@ def test_tool_gate_executes_web_fetch_adapter() -> None:
     assert payload["output"]["truncated"] is False
     assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert state_client.events[0].payload["argument_keys"] == ["max_bytes", "url"]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_web_provider_registry_reports_configured_key_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    response = TestClient(app).get("/web/providers")
+
+    assert response.status_code == 200
+    providers = {provider["provider_id"]: provider for provider in response.json()}
+    assert providers["local_fetch"]["implemented"] is True
+    assert providers["local_fetch"]["requires_api_key"] is False
+    assert providers["local_fetch"]["configured"] is True
+    assert providers["firecrawl"]["implemented"] is True
+    assert providers["firecrawl"]["requires_api_key"] is True
+    assert providers["firecrawl"]["configured"] is False
+    assert providers["local_playwright"]["implemented"] is False
+
+
+def test_tool_gate_executes_web_extract_local_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-web-local",
+            name="Local Web Extractor",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "local_fetch"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.extract"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-web-local"],
+                available_service_capabilities={"connector-web-local": ["web.extract"]},
+                available_connector_ids=["connector-web-local"],
+            )
+        }
+    )
+
+    def fake_fetch_http_url(url: str, *, max_bytes: int) -> dict[str, object]:
+        assert url == "https://example.com"
+        assert max_bytes == 2048
+        return {
+            "url": url,
+            "final_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "bytes_read": 512,
+            "truncated": False,
+            "title": "Example Domain",
+            "text_excerpt": "Example Domain extracted text.",
+        }
+
+    monkeypatch.setattr(gateway_main, "fetch_http_url", fake_fetch_http_url)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_local"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-web-local",
+                "project_id": "project_sourcing",
+                "reason": "Extract supplier page content.",
+                "arguments": {"url": "https://example.com", "max_bytes": 2048},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["adapter"] == "web.extract"
+    assert payload["output"]["provider"] == "local_fetch"
+    assert payload["output"]["markdown"] == "Example Domain extracted text."
+    assert payload["output"]["metadata"] == {"source_adapter": "web.fetch"}
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_web_extract_rejects_provider_service_mismatch() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-web-local",
+            name="Local Web Extractor",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "local_fetch"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-web-local"],
+                available_service_capabilities={"connector-web-local": ["web.extract"]},
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_mismatch"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-web-local",
+                "reason": "Try mismatched provider.",
+                "arguments": {"url": "https://example.com", "provider": "firecrawl"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "web.extract provider does not match selected service: "
+        "firecrawl via connector-web-local"
+    )
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "tool.failed",
+    ]
+
+
+def test_web_extract_firecrawl_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "firecrawl"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-firecrawl"],
+                available_service_capabilities={"connector-firecrawl": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-firecrawl": ["firecrawl:api_key"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_firecrawl_missing_key"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-firecrawl",
+                "reason": "Extract supplier page content with Firecrawl.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "FIRECRAWL_API_KEY is not configured"
+
+
+def test_tool_gate_executes_web_extract_firecrawl_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-test-key")
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "firecrawl"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-firecrawl"],
+                available_service_capabilities={"connector-firecrawl": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-firecrawl": ["firecrawl:api_key"]
+                },
+            )
+        }
+    )
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        assert url == "https://api.firecrawl.dev/v2/scrape"
+        assert headers["Authorization"] == "Bearer firecrawl-test-key"
+        assert json == {"url": "https://example.com", "formats": ["markdown"]}
+        assert timeout == gateway_main.settings.firecrawl_timeout_seconds
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "markdown": "# Example Domain\nSupplier evidence.",
+                    "metadata": {
+                        "title": "Example Domain",
+                        "sourceURL": "https://example.com",
+                    },
+                    "statusCode": 200,
+                },
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_firecrawl"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-firecrawl",
+                "project_id": "project_sourcing",
+                "reason": "Extract supplier page content with Firecrawl.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["adapter"] == "web.extract"
+    assert payload["output"]["provider"] == "firecrawl"
+    assert payload["output"]["markdown"] == "# Example Domain\nSupplier evidence."
+    assert payload["output"]["title"] == "Example Domain"
+    assert payload["output"]["status_code"] == 200
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert state_client.audit_logs[0].action == "tool.allowed"
 
 

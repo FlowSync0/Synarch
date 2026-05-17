@@ -110,6 +110,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             tools=[
                 "web.search",
                 "web.fetch",
+                "web.extract",
                 "spreadsheet.write",
                 "connector.job.create",
                 "connector.job.list",
@@ -124,6 +125,7 @@ DEFAULT_AGENTS: tuple[AgentDefinition, ...] = (
             allowed_tools=[
                 "web.search",
                 "web.fetch",
+                "web.extract",
                 "spreadsheet.write",
                 "connector.job.create",
                 "connector.job.list",
@@ -411,12 +413,39 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         capabilities=[
             "web.search",
             "web.fetch",
+            "web.extract",
             "connector.job.create",
             "connector.job.list",
             "connector.job.stop",
         ],
         allowed_divisions=["ops-sourcing"],
-        metadata={"connector_type": "supplier_research"},
+        metadata={"connector_type": "supplier_research", "web_provider": "local_fetch"},
+    ),
+    ServiceDefinition(
+        id="connector-web-local",
+        name="Local Web Extractor",
+        kind=ServiceKind.tool_provider,
+        capabilities=["web.fetch", "web.extract"],
+        allowed_divisions=["ops-sourcing", "admin-knowledge", "dev"],
+        metadata={
+            "connector_type": "web_extraction",
+            "web_provider": "local_fetch",
+            "requires_api_key": False,
+        },
+    ),
+    ServiceDefinition(
+        id="connector-firecrawl",
+        name="Firecrawl",
+        kind=ServiceKind.tool_provider,
+        capabilities=["web.extract"],
+        credential_scopes=["firecrawl:api_key"],
+        allowed_divisions=["ops-sourcing", "admin-knowledge"],
+        metadata={
+            "connector_type": "web_extraction",
+            "web_provider": "firecrawl",
+            "requires_api_key": True,
+            "api_key_env_var": "FIRECRAWL_API_KEY",
+        },
     ),
     ServiceDefinition(
         id="connector-documents",
@@ -496,7 +525,7 @@ DEFAULT_SKILLS: tuple[SkillDefinition, ...] = (
         id="supplier_search",
         name="Supplier Search",
         description="Find supplier candidates and preserve source evidence.",
-        required_tools=["web.search", "web.fetch", "event.emit"],
+        required_tools=["web.search", "web.fetch", "web.extract", "event.emit"],
         allowed_divisions=["ops-sourcing"],
     ),
     SkillDefinition(

@@ -105,6 +105,7 @@ from .task_runner import (
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolCredentialState = Literal["not_required", "ready", "missing_scopes"]
+WebExtractionProvider = Literal["local_fetch", "firecrawl"]
 
 
 class ToolAdapter(Protocol):
@@ -166,6 +167,36 @@ class ToolCredentialStatus:
         }
 
 
+@dataclass(frozen=True)
+class WebProviderManifest:
+    provider_id: str
+    name: str
+    category: str
+    implemented: bool
+    requires_api_key: bool
+    api_key_env_var: str | None
+    capabilities: tuple[str, ...]
+    notes: str
+
+    def as_response(self) -> dict[str, object]:
+        configured = (
+            True
+            if not self.requires_api_key or self.api_key_env_var is None
+            else bool(os.getenv(self.api_key_env_var))
+        )
+        return {
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "category": self.category,
+            "implemented": self.implemented,
+            "requires_api_key": self.requires_api_key,
+            "api_key_env_var": self.api_key_env_var,
+            "configured": configured,
+            "capabilities": list(self.capabilities),
+            "notes": self.notes,
+        }
+
+
 class Settings(BaseSettings):
     control_plane_url: str = "http://localhost:8010"
     state_service_url: str = "http://localhost:8020"
@@ -189,6 +220,10 @@ class Settings(BaseSettings):
     web_fetch_timeout_seconds: float = 10.0
     web_fetch_max_bytes: int = 50_000
     web_fetch_max_redirects: int = 5
+    web_extract_default_provider: str = "local_fetch"
+    firecrawl_base_url: str = "https://api.firecrawl.dev"
+    firecrawl_api_key_env_var: str = "FIRECRAWL_API_KEY"
+    firecrawl_timeout_seconds: float = 30.0
     service_health_timeout_seconds: float = 3.0
 
 
@@ -734,6 +769,14 @@ def call_tool(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except (StateServiceUnavailable, TaskRunnerUnavailable) as error:
         raise HTTPException(status_code=502, detail="Tool gate dependency unavailable") from error
+
+
+@app.get("/web/providers")
+def list_web_providers() -> list[dict[str, object]]:
+    return [
+        manifest.as_response()
+        for manifest in sorted(WEB_PROVIDER_MANIFESTS.values(), key=lambda item: item.provider_id)
+    ]
 
 
 @app.post(
@@ -1877,6 +1920,16 @@ def execute_web_fetch_adapter(
     return execute_web_fetch_tool(tool_call)
 
 
+def execute_web_extract_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_web_extract_tool(tool_call, state_client=state_client)
+
+
 def execute_connector_job_create_adapter(
     tool_call: ToolCallRequest,
     *,
@@ -1960,6 +2013,99 @@ def execute_web_fetch_tool(tool_call: ToolCallRequest) -> dict[str, object]:
     }
 
 
+def execute_web_extract_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+) -> dict[str, object]:
+    url = web_fetch_url_argument(tool_call)
+    max_bytes = web_fetch_max_bytes_argument(tool_call)
+    provider = web_extract_provider_argument(tool_call, state_client)
+    if provider == "local_fetch":
+        return extract_with_local_fetch(url, max_bytes=max_bytes)
+    if provider == "firecrawl":
+        return extract_with_firecrawl(url, max_bytes=max_bytes)
+    raise HTTPException(status_code=400, detail=f"Unsupported web.extract provider: {provider}")
+
+
+def extract_with_local_fetch(url: str, *, max_bytes: int) -> dict[str, object]:
+    fetch_result = fetch_http_url(url, max_bytes=max_bytes)
+    return {
+        "executed": True,
+        "adapter": "web.extract",
+        "provider": "local_fetch",
+        "url": fetch_result["url"],
+        "final_url": fetch_result["final_url"],
+        "status_code": fetch_result["status_code"],
+        "content_type": fetch_result["content_type"],
+        "bytes_read": fetch_result["bytes_read"],
+        "truncated": fetch_result["truncated"],
+        "title": fetch_result["title"],
+        "markdown": fetch_result["text_excerpt"],
+        "metadata": {"source_adapter": "web.fetch"},
+    }
+
+
+def extract_with_firecrawl(url: str, *, max_bytes: int) -> dict[str, object]:
+    api_key = os.getenv(settings.firecrawl_api_key_env_var)
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{settings.firecrawl_api_key_env_var} is not configured",
+        )
+
+    try:
+        response = httpx.post(
+            f"{settings.firecrawl_base_url.rstrip('/')}/v2/scrape",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={"url": url, "formats": ["markdown"]},
+            timeout=settings.firecrawl_timeout_seconds,
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="firecrawl request failed") from error
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "provider_status": response.status_code,
+                "error": web_response_detail(response),
+            },
+        )
+
+    body = response.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=502, detail="firecrawl returned an invalid response")
+    data = body.get("data", body)
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="firecrawl returned an invalid data payload")
+    markdown = string_payload_value(data.get("markdown")) or string_payload_value(
+        data.get("content")
+    )
+    markdown, truncated = truncate_text_bytes(markdown or "", max_bytes=max_bytes)
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    title = string_payload_value(metadata.get("title")) or string_payload_value(data.get("title"))
+    return {
+        "executed": True,
+        "adapter": "web.extract",
+        "provider": "firecrawl",
+        "url": url,
+        "final_url": string_payload_value(metadata.get("sourceURL")) or url,
+        "status_code": integer_payload_value(data.get("statusCode"), default=response.status_code),
+        "content_type": "text/markdown",
+        "bytes_read": len(markdown.encode("utf-8")),
+        "truncated": truncated,
+        "title": title,
+        "markdown": markdown,
+        "metadata": metadata,
+    }
+
+
 def web_fetch_url_argument(tool_call: ToolCallRequest) -> str:
     raw_url = tool_call.arguments.get("url")
     if not isinstance(raw_url, str) or not raw_url.strip():
@@ -1987,6 +2133,79 @@ def web_fetch_max_bytes_argument(tool_call: ToolCallRequest) -> int:
             detail=f"web.fetch max_bytes must be between 1 and {settings.web_fetch_max_bytes}",
         )
     return int(raw_max_bytes)
+
+
+def web_extract_provider_argument(
+    tool_call: ToolCallRequest,
+    state_client: StateClient,
+) -> WebExtractionProvider:
+    raw_provider = string_argument(tool_call, "provider")
+    service_provider = web_provider_from_service(tool_call.service_id, state_client)
+    provider = raw_provider or service_provider or settings.web_extract_default_provider
+    if (
+        raw_provider is not None
+        and service_provider is not None
+        and raw_provider != service_provider
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "web.extract provider does not match selected service: "
+                f"{raw_provider} via {tool_call.service_id}"
+            ),
+        )
+    if provider == "local_fetch":
+        return "local_fetch"
+    if provider == "firecrawl":
+        return "firecrawl"
+    raise HTTPException(
+        status_code=400,
+        detail="web.extract provider must be one of: local_fetch, firecrawl",
+    )
+
+
+def web_provider_from_service(
+    service_id: str | None,
+    state_client: StateClient,
+) -> str | None:
+    if service_id is None:
+        return None
+    for service in state_client.list_services(enabled=True):
+        if service.id != service_id:
+            continue
+        provider = service.metadata.get("web_provider")
+        return provider if isinstance(provider, str) and provider.strip() else None
+    return None
+
+
+def string_payload_value(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def integer_payload_value(value: object, *, default: int) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return default
+
+
+def truncate_text_bytes(text: str, *, max_bytes: int) -> tuple[str, bool]:
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text, False
+    truncated = encoded[:max_bytes].decode("utf-8", errors="ignore")
+    return truncated, True
+
+
+def web_response_detail(response: httpx.Response) -> object:
+    try:
+        body = response.json()
+    except ValueError:
+        return response.text
+    if isinstance(body, dict):
+        return body.get("error", body)
+    return body
 
 
 def ensure_public_http_host(hostname: str) -> None:
@@ -2350,7 +2569,101 @@ TOOL_ADAPTERS: dict[str, ToolAdapter] = {
     "connector.job.list": execute_connector_job_list_adapter,
     "connector.job.stop": execute_connector_job_stop_adapter,
     "event.emit": execute_event_emit_adapter,
+    "web.extract": execute_web_extract_adapter,
     "web.fetch": execute_web_fetch_adapter,
+}
+
+WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
+    "apify": WebProviderManifest(
+        provider_id="apify",
+        name="Apify",
+        category="scraping_platform",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="APIFY_TOKEN",
+        capabilities=("actors", "browser", "crawler", "proxy"),
+        notes="Candidate for marketplace actors and heavier scraping workflows.",
+    ),
+    "browserbase": WebProviderManifest(
+        provider_id="browserbase",
+        name="Browserbase",
+        category="cloud_browser",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="BROWSERBASE_API_KEY",
+        capabilities=("playwright", "sessions", "screenshots"),
+        notes="Candidate cloud Playwright provider for persistent browser sessions.",
+    ),
+    "browserless": WebProviderManifest(
+        provider_id="browserless",
+        name="Browserless",
+        category="cloud_browser",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="BROWSERLESS_API_KEY",
+        capabilities=("playwright", "puppeteer", "sessions"),
+        notes="Candidate cloud browser provider compatible with Playwright/Puppeteer.",
+    ),
+    "crawl4ai": WebProviderManifest(
+        provider_id="crawl4ai",
+        name="Crawl4AI",
+        category="local_extraction",
+        implemented=False,
+        requires_api_key=False,
+        api_key_env_var=None,
+        capabilities=("crawl", "markdown", "llm_context"),
+        notes="Candidate open source extractor once local crawler dependencies are added.",
+    ),
+    "firecrawl": WebProviderManifest(
+        provider_id="firecrawl",
+        name="Firecrawl",
+        category="extraction_api",
+        implemented=True,
+        requires_api_key=True,
+        api_key_env_var=settings.firecrawl_api_key_env_var,
+        capabilities=("scrape", "markdown"),
+        notes="Implemented for web.extract through FIRECRAWL_API_KEY.",
+    ),
+    "local_fetch": WebProviderManifest(
+        provider_id="local_fetch",
+        name="Local HTTP fetch",
+        category="local_fetch",
+        implemented=True,
+        requires_api_key=False,
+        api_key_env_var=None,
+        capabilities=("http", "html_summary"),
+        notes="Implemented no-key fallback. It does not execute JavaScript.",
+    ),
+    "local_playwright": WebProviderManifest(
+        provider_id="local_playwright",
+        name="Local Playwright",
+        category="local_browser",
+        implemented=False,
+        requires_api_key=False,
+        api_key_env_var=None,
+        capabilities=("browser", "javascript", "screenshots", "forms"),
+        notes="Next candidate for no-key browser sessions in Docker/local runs.",
+    ),
+    "scrapingbee": WebProviderManifest(
+        provider_id="scrapingbee",
+        name="ScrapingBee",
+        category="scraping_api",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="SCRAPINGBEE_API_KEY",
+        capabilities=("javascript", "proxy", "screenshots"),
+        notes="Candidate for paid scraping API workflows.",
+    ),
+    "zyte": WebProviderManifest(
+        provider_id="zyte",
+        name="Zyte API",
+        category="scraping_api",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="ZYTE_API_KEY",
+        capabilities=("browser", "extraction", "proxy"),
+        notes="Candidate for paid browser/rendering and extraction workflows.",
+    ),
 }
 
 TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
@@ -2395,6 +2708,14 @@ TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
         adapter="web.fetch",
         required_arguments=("url",),
         optional_arguments=("max_bytes",),
+        risk_level="medium",
+        network_access=True,
+    ),
+    "web.extract": ToolAdapterManifest(
+        tool_name="web.extract",
+        adapter="web.extract",
+        required_arguments=("url",),
+        optional_arguments=("provider", "max_bytes"),
         risk_level="medium",
         network_access=True,
     ),

@@ -330,6 +330,9 @@ def agent_messages(request: AgentTaskRequest) -> list[ModelMessage]:
                 "returns the target job, request connector.job.stop with the exact "
                 "job id from the tool result. "
                 "For connector.job.stop, arguments must include job_id and reason. "
+                "For web.extract, arguments must include url and may include "
+                "provider local_fetch or firecrawl plus max_bytes. Use local_fetch "
+                "when no external extraction API is required. "
                 "Keep the answer operational and auditable."
             ),
         ),

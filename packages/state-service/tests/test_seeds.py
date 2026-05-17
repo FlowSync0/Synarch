@@ -48,6 +48,15 @@ def test_seed_repositories_creates_default_divisions_and_agents() -> None:
     assert worker_policy.default_model_id == LOCAL_RUNTIME_MODEL_ID
     assert OPENROUTER_DEEPSEEK_V4_MODEL_ID in worker_policy.allowed_model_ids
     assert repositories.services.exists("connector-github")
+    assert repositories.services.exists("connector-web-local")
+    assert repositories.services.exists("connector-firecrawl")
+    ops_agent = repositories.agents.get("agent-ops-sourcing")
+    assert ops_agent is not None
+    assert "web.extract" in ops_agent.permissions.allowed_tools
+    assert "web.extract" in ops_agent.capabilities.tools
+    supplier_search = repositories.skills.get("supplier_search")
+    assert supplier_search is not None
+    assert "web.extract" in supplier_search.required_tools
     assert repositories.skills.exists("implementation")
 
 
