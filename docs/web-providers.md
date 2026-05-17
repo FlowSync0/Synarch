@@ -17,8 +17,8 @@ permission, credential, event, and audit gates.
 
 ## Current Implementation
 
-- `GET /web/providers` returns the provider catalog, implemented status, key requirement, and whether
-  the needed key is configured in the environment.
+- `GET /web/providers` returns the provider catalog, implemented status, key requirement, configured
+  status, risk level, and whether human approval is required before use.
 - Local development needs the Python `playwright` package and Chromium browser bundle. Docker installs
   Chromium automatically for the gateway image; outside Docker run `python -m playwright install chromium`
   after installing `packages/gateway`.
@@ -31,6 +31,8 @@ permission, credential, event, and audit gates.
   - `connector-web-browser-local` with `web_provider=local_playwright`
   - `connector-firecrawl` with `web_provider=firecrawl` and `credential_scopes=["firecrawl:api_key"]`
   - `connector-supplier-web` with `web.extract` and `web_provider=local_fetch`
+- Provider candidates are visible before implementation so the UI can offer clear choices:
+  Browserbase, Browserless, Bright Data, Apify, Zyte, ScrapingBee, and Crawl4AI.
 
 ## Safety Rule
 

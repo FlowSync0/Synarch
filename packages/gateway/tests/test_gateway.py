@@ -2630,6 +2630,12 @@ def test_web_provider_registry_reports_configured_key_status(
     assert providers["local_playwright"]["implemented"] is True
     assert providers["local_playwright"]["configured"] is False
     assert providers["local_playwright"]["python_module"] == "playwright"
+    assert providers["local_playwright"]["risk_level"] == "medium"
+    assert providers["local_playwright"]["requires_human_approval"] is False
+    assert providers["browserless"]["requires_human_approval"] is True
+    assert providers["browserless"]["risk_level"] == "high"
+    assert providers["brightdata_web_unlocker"]["requires_api_key"] is True
+    assert providers["brightdata_web_unlocker"]["risk_level"] == "high"
 
 
 def test_tool_gate_executes_web_extract_local_provider(

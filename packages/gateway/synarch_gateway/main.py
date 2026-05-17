@@ -180,6 +180,8 @@ class WebProviderManifest:
     capabilities: tuple[str, ...]
     notes: str
     python_module: str | None = None
+    risk_level: ToolRiskLevel = "low"
+    requires_human_approval: bool = False
 
     def as_response(self) -> dict[str, object]:
         key_configured = (
@@ -201,6 +203,8 @@ class WebProviderManifest:
             "python_module": self.python_module,
             "configured": configured,
             "capabilities": list(self.capabilities),
+            "risk_level": self.risk_level,
+            "requires_human_approval": self.requires_human_approval,
             "notes": self.notes,
         }
 
@@ -2662,6 +2666,32 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         api_key_env_var="APIFY_TOKEN",
         capabilities=("actors", "browser", "crawler", "proxy"),
         notes="Candidate for marketplace actors and heavier scraping workflows.",
+        risk_level="medium",
+        requires_human_approval=True,
+    ),
+    "brightdata_browser_api": WebProviderManifest(
+        provider_id="brightdata_browser_api",
+        name="Bright Data Browser API",
+        category="unblocking_api",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="BRIGHTDATA_API_KEY",
+        capabilities=("browser", "playwright", "proxy", "captcha"),
+        notes="Candidate for paid browser automation on anti-bot-heavy sites.",
+        risk_level="high",
+        requires_human_approval=True,
+    ),
+    "brightdata_web_unlocker": WebProviderManifest(
+        provider_id="brightdata_web_unlocker",
+        name="Bright Data Web Unlocker",
+        category="unblocking_api",
+        implemented=False,
+        requires_api_key=True,
+        api_key_env_var="BRIGHTDATA_API_KEY",
+        capabilities=("unblock", "proxy", "captcha", "html"),
+        notes="Candidate for paid unblocking when normal HTTP/browser extraction is blocked.",
+        risk_level="high",
+        requires_human_approval=True,
     ),
     "browserbase": WebProviderManifest(
         provider_id="browserbase",
@@ -2672,6 +2702,8 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         api_key_env_var="BROWSERBASE_API_KEY",
         capabilities=("playwright", "sessions", "screenshots"),
         notes="Candidate cloud Playwright provider for persistent browser sessions.",
+        risk_level="medium",
+        requires_human_approval=True,
     ),
     "browserless": WebProviderManifest(
         provider_id="browserless",
@@ -2680,8 +2712,10 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         implemented=False,
         requires_api_key=True,
         api_key_env_var="BROWSERLESS_API_KEY",
-        capabilities=("playwright", "puppeteer", "sessions"),
+        capabilities=("playwright", "puppeteer", "sessions", "captcha"),
         notes="Candidate cloud browser provider compatible with Playwright/Puppeteer.",
+        risk_level="high",
+        requires_human_approval=True,
     ),
     "crawl4ai": WebProviderManifest(
         provider_id="crawl4ai",
@@ -2702,6 +2736,7 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         api_key_env_var=settings.firecrawl_api_key_env_var,
         capabilities=("scrape", "markdown"),
         notes="Implemented for web.extract through FIRECRAWL_API_KEY.",
+        risk_level="medium",
     ),
     "local_fetch": WebProviderManifest(
         provider_id="local_fetch",
@@ -2723,6 +2758,7 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         capabilities=("browser", "javascript", "screenshots", "forms"),
         notes="Implemented for no-key Chromium extraction when Playwright browsers are installed.",
         python_module="playwright",
+        risk_level="medium",
     ),
     "scrapingbee": WebProviderManifest(
         provider_id="scrapingbee",
@@ -2733,6 +2769,8 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         api_key_env_var="SCRAPINGBEE_API_KEY",
         capabilities=("javascript", "proxy", "screenshots"),
         notes="Candidate for paid scraping API workflows.",
+        risk_level="medium",
+        requires_human_approval=True,
     ),
     "zyte": WebProviderManifest(
         provider_id="zyte",
@@ -2743,6 +2781,8 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         api_key_env_var="ZYTE_API_KEY",
         capabilities=("browser", "extraction", "proxy"),
         notes="Candidate for paid browser/rendering and extraction workflows.",
+        risk_level="medium",
+        requires_human_approval=True,
     ),
 }
 
