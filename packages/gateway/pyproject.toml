@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.111,<1",
   "httpx>=0.27,<1",
+  "playwright>=1.48,<2",
   "pydantic-settings>=2.2,<3",
   "uvicorn[standard]>=0.30,<1",
   "synarch-models"

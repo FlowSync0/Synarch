@@ -2616,6 +2616,7 @@ def test_web_provider_registry_reports_configured_key_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.setattr(gateway_main, "module_is_available", lambda module_name: False)
     response = TestClient(app).get("/web/providers")
 
     assert response.status_code == 200
@@ -2626,7 +2627,9 @@ def test_web_provider_registry_reports_configured_key_status(
     assert providers["firecrawl"]["implemented"] is True
     assert providers["firecrawl"]["requires_api_key"] is True
     assert providers["firecrawl"]["configured"] is False
-    assert providers["local_playwright"]["implemented"] is False
+    assert providers["local_playwright"]["implemented"] is True
+    assert providers["local_playwright"]["configured"] is False
+    assert providers["local_playwright"]["python_module"] == "playwright"
 
 
 def test_tool_gate_executes_web_extract_local_provider(
@@ -2700,6 +2703,90 @@ def test_tool_gate_executes_web_extract_local_provider(
     assert payload["output"]["provider"] == "local_fetch"
     assert payload["output"]["markdown"] == "Example Domain extracted text."
     assert payload["output"]["metadata"] == {"source_adapter": "web.fetch"}
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_tool_gate_executes_web_extract_local_playwright_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-web-browser-local",
+            name="Local Playwright Browser",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "local_playwright"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.extract"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-web-browser-local"],
+                available_service_capabilities={
+                    "connector-web-browser-local": ["web.extract"]
+                },
+                available_connector_ids=["connector-web-browser-local"],
+            )
+        }
+    )
+
+    def fake_fetch_with_local_playwright(url: str) -> dict[str, object]:
+        assert url == "https://example.com"
+        return {
+            "final_url": "https://example.com/rendered",
+            "status_code": 200,
+            "title": "Rendered Example",
+            "html": (
+                "<html><head><title>Rendered Example</title></head>"
+                "<body><main>Rendered supplier evidence from JavaScript.</main></body></html>"
+            ),
+        }
+
+    monkeypatch.setattr(
+        gateway_main,
+        "fetch_with_local_playwright",
+        fake_fetch_with_local_playwright,
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_playwright"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-web-browser-local",
+                "project_id": "project_sourcing",
+                "reason": "Extract browser-rendered supplier page content.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["adapter"] == "web.extract"
+    assert payload["output"]["provider"] == "local_playwright"
+    assert payload["output"]["final_url"] == "https://example.com/rendered"
+    assert payload["output"]["title"] == "Rendered Example"
+    assert "Rendered supplier evidence" in payload["output"]["markdown"]
+    assert payload["output"]["metadata"] == {
+        "browser": "chromium",
+        "wait_until": "domcontentloaded",
+    }
     assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert state_client.audit_logs[0].action == "tool.allowed"
 

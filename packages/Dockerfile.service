@@ -17,6 +17,10 @@ RUN python -m pip install --no-cache-dir --retries 5 --timeout 120 \
     -e /app/shared/models \
     -e /app/service
 
+RUN if [ "$SERVICE_PATH" = "packages/gateway" ]; then \
+      python -m playwright install --with-deps chromium; \
+    fi
+
 EXPOSE ${PORT}
 
 CMD ["sh", "-c", "uvicorn ${APP_MODULE} --host 0.0.0.0 --port ${PORT}"]

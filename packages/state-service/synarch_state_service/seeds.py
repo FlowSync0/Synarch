@@ -434,6 +434,19 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         },
     ),
     ServiceDefinition(
+        id="connector-web-browser-local",
+        name="Local Playwright Browser",
+        kind=ServiceKind.tool_provider,
+        capabilities=["web.extract"],
+        allowed_divisions=["ops-sourcing", "admin-knowledge", "dev"],
+        metadata={
+            "connector_type": "web_browser",
+            "web_provider": "local_playwright",
+            "requires_api_key": False,
+            "browser": "chromium",
+        },
+    ),
+    ServiceDefinition(
         id="connector-firecrawl",
         name="Firecrawl",
         kind=ServiceKind.tool_provider,

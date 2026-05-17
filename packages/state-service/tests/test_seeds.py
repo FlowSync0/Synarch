@@ -49,6 +49,7 @@ def test_seed_repositories_creates_default_divisions_and_agents() -> None:
     assert OPENROUTER_DEEPSEEK_V4_MODEL_ID in worker_policy.allowed_model_ids
     assert repositories.services.exists("connector-github")
     assert repositories.services.exists("connector-web-local")
+    assert repositories.services.exists("connector-web-browser-local")
     assert repositories.services.exists("connector-firecrawl")
     ops_agent = repositories.agents.get("agent-ops-sourcing")
     assert ops_agent is not None

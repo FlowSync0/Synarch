@@ -1,3 +1,5 @@
+import importlib
+import importlib.util
 import ipaddress
 import os
 import socket
@@ -105,7 +107,7 @@ from .task_runner import (
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolCredentialState = Literal["not_required", "ready", "missing_scopes"]
-WebExtractionProvider = Literal["local_fetch", "firecrawl"]
+WebExtractionProvider = Literal["local_fetch", "local_playwright", "firecrawl"]
 
 
 class ToolAdapter(Protocol):
@@ -177,13 +179,18 @@ class WebProviderManifest:
     api_key_env_var: str | None
     capabilities: tuple[str, ...]
     notes: str
+    python_module: str | None = None
 
     def as_response(self) -> dict[str, object]:
-        configured = (
+        key_configured = (
             True
             if not self.requires_api_key or self.api_key_env_var is None
             else bool(os.getenv(self.api_key_env_var))
         )
+        module_configured = (
+            True if self.python_module is None else module_is_available(self.python_module)
+        )
+        configured = key_configured and module_configured
         return {
             "provider_id": self.provider_id,
             "name": self.name,
@@ -191,6 +198,7 @@ class WebProviderManifest:
             "implemented": self.implemented,
             "requires_api_key": self.requires_api_key,
             "api_key_env_var": self.api_key_env_var,
+            "python_module": self.python_module,
             "configured": configured,
             "capabilities": list(self.capabilities),
             "notes": self.notes,
@@ -224,11 +232,17 @@ class Settings(BaseSettings):
     firecrawl_base_url: str = "https://api.firecrawl.dev"
     firecrawl_api_key_env_var: str = "FIRECRAWL_API_KEY"
     firecrawl_timeout_seconds: float = 30.0
+    web_extract_playwright_timeout_seconds: float = 30.0
+    web_extract_playwright_wait_until: str = "domcontentloaded"
     service_health_timeout_seconds: float = 3.0
 
 
 settings = Settings()
 app = FastAPI(title="Synarch Gateway", version="0.1.0")
+
+
+def module_is_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
 
 
 def choose_agent(goal: str) -> tuple[str, str]:
@@ -2023,6 +2037,8 @@ def execute_web_extract_tool(
     provider = web_extract_provider_argument(tool_call, state_client)
     if provider == "local_fetch":
         return extract_with_local_fetch(url, max_bytes=max_bytes)
+    if provider == "local_playwright":
+        return extract_with_local_playwright(url, max_bytes=max_bytes)
     if provider == "firecrawl":
         return extract_with_firecrawl(url, max_bytes=max_bytes)
     raise HTTPException(status_code=400, detail=f"Unsupported web.extract provider: {provider}")
@@ -2044,6 +2060,67 @@ def extract_with_local_fetch(url: str, *, max_bytes: int) -> dict[str, object]:
         "markdown": fetch_result["text_excerpt"],
         "metadata": {"source_adapter": "web.fetch"},
     }
+
+
+def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, object]:
+    page_result = fetch_with_local_playwright(url)
+    html = string_payload_value(page_result.get("html")) or ""
+    title, excerpt = summarize_fetched_text(html)
+    markdown, truncated = truncate_text_bytes(excerpt, max_bytes=max_bytes)
+    return {
+        "executed": True,
+        "adapter": "web.extract",
+        "provider": "local_playwright",
+        "url": url,
+        "final_url": string_payload_value(page_result.get("final_url")) or url,
+        "status_code": integer_payload_value(page_result.get("status_code"), default=0),
+        "content_type": "text/html",
+        "bytes_read": len(markdown.encode("utf-8")),
+        "truncated": truncated,
+        "title": string_payload_value(page_result.get("title")) or title,
+        "markdown": markdown,
+        "metadata": {
+            "browser": "chromium",
+            "wait_until": settings.web_extract_playwright_wait_until,
+        },
+    }
+
+
+def fetch_with_local_playwright(url: str) -> dict[str, object]:
+    try:
+        playwright_sync_api = importlib.import_module("playwright.sync_api")
+    except ImportError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Playwright is not installed for local_playwright",
+        ) from error
+    sync_playwright = playwright_sync_api.sync_playwright
+    playwright_error = playwright_sync_api.Error
+    playwright_timeout_error = playwright_sync_api.TimeoutError
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(user_agent="Synarch/0.1 web.extract")
+                response = page.goto(
+                    url,
+                    wait_until=settings.web_extract_playwright_wait_until,
+                    timeout=settings.web_extract_playwright_timeout_seconds * 1000,
+                )
+                html = page.content()
+                return {
+                    "final_url": page.url,
+                    "status_code": response.status if response is not None else None,
+                    "title": page.title() or None,
+                    "html": html,
+                }
+            finally:
+                browser.close()
+    except playwright_timeout_error as error:
+        raise HTTPException(status_code=504, detail="local_playwright timed out") from error
+    except playwright_error as error:
+        raise HTTPException(status_code=502, detail="local_playwright request failed") from error
 
 
 def extract_with_firecrawl(url: str, *, max_bytes: int) -> dict[str, object]:
@@ -2156,11 +2233,13 @@ def web_extract_provider_argument(
         )
     if provider == "local_fetch":
         return "local_fetch"
+    if provider == "local_playwright":
+        return "local_playwright"
     if provider == "firecrawl":
         return "firecrawl"
     raise HTTPException(
         status_code=400,
-        detail="web.extract provider must be one of: local_fetch, firecrawl",
+        detail="web.extract provider must be one of: local_fetch, local_playwright, firecrawl",
     )
 
 
@@ -2638,11 +2717,12 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         provider_id="local_playwright",
         name="Local Playwright",
         category="local_browser",
-        implemented=False,
+        implemented=True,
         requires_api_key=False,
         api_key_env_var=None,
         capabilities=("browser", "javascript", "screenshots", "forms"),
-        notes="Next candidate for no-key browser sessions in Docker/local runs.",
+        notes="Implemented for no-key Chromium extraction when Playwright browsers are installed.",
+        python_module="playwright",
     ),
     "scrapingbee": WebProviderManifest(
         provider_id="scrapingbee",

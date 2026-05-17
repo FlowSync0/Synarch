@@ -9,36 +9,56 @@ permission, credential, event, and audit gates.
 | Tier | Providers | Key Required | Synarch Use |
 | --- | --- | --- | --- |
 | Basic HTTP | `local_fetch` | No | Cheap public HTML retrieval, no JavaScript. Implemented for `web.fetch` and `web.extract`. |
-| Local browser | Playwright | No | JavaScript pages, forms, screenshots, human-assisted sessions. Planned as `local_playwright`. |
+| Local browser | Playwright | No | JavaScript pages and browser-rendered extraction. Implemented as `local_playwright`. |
 | Cloud browser | Browserbase, Browserless | Yes | Server-side browser sessions with Playwright/Puppeteer compatibility. Planned. |
 | Extraction API | Firecrawl, Crawl4AI | Firecrawl yes, Crawl4AI no | Markdown/LLM-ready extraction. Firecrawl is implemented for `web.extract`; Crawl4AI is planned as local extraction. |
+| Unblocking API | Browserless, Bright Data | Yes | CAPTCHA, proxy, stealth, and anti-bot-heavy flows. Planned only behind explicit human-approved provider config. |
 | Scraping API | Apify, Zyte, ScrapingBee | Yes | Higher-volume scraping, proxies, marketplace actors, hosted extraction. Planned only behind explicit provider config. |
 
 ## Current Implementation
 
 - `GET /web/providers` returns the provider catalog, implemented status, key requirement, and whether
   the needed key is configured in the environment.
+- Local development needs the Python `playwright` package and Chromium browser bundle. Docker installs
+  Chromium automatically for the gateway image; outside Docker run `python -m playwright install chromium`
+  after installing `packages/gateway`.
 - `web.extract` supports:
   - `local_fetch`: no key, uses the existing public-HTTP fetch path and returns normalized markdown-like text.
+  - `local_playwright`: no key, launches local Chromium through Playwright and extracts browser-rendered HTML text.
   - `firecrawl`: requires `FIRECRAWL_API_KEY`, calls Firecrawl `/v2/scrape`, and returns markdown.
 - Service registry defaults include:
   - `connector-web-local` with `web_provider=local_fetch`
+  - `connector-web-browser-local` with `web_provider=local_playwright`
   - `connector-firecrawl` with `web_provider=firecrawl` and `credential_scopes=["firecrawl:api_key"]`
   - `connector-supplier-web` with `web.extract` and `web_provider=local_fetch`
 
 ## Safety Rule
 
-Synarch should not implement an explicit CAPTCHA or bot-check bypass tool. When a browser or scraper
-hits CAPTCHA, login, 2FA, or a robots block, the correct task status is `blocked` or `needs_review`
-with URL, screenshot/error, provider, and trace ID. A human can then approve a different connector,
-provide credentials, or choose an official API.
+Synarch should not hide CAPTCHA or bot-check bypass inside the default local provider. When a browser
+or scraper hits CAPTCHA, login, 2FA, or a robots block, the correct task status is `blocked` or
+`needs_review` with URL, screenshot/error, provider, and trace ID. A human can then approve a
+different connector, provide credentials, choose an official API, or explicitly enable a paid
+unblocking provider.
+
+## Provider Selection
+
+- Use `local_fetch` first for cheap public pages without JavaScript.
+- Use `local_playwright` when JavaScript rendering is required and no provider key should be needed.
+- Use `firecrawl` when the expected output is clean markdown/JSON extraction and API spend is acceptable.
+- Add Browserbase or Browserless next for long-running cloud browser sessions, recording, debugging, and
+  agentic browser control.
+- Add Browserless CAPTCHA solving or Bright Data Web Unlocker/Browser API only as an explicit
+  high-risk/high-cost connector, not as an automatic fallback.
 
 ## Sources
 
 - Playwright browser automation: https://playwright.dev/docs/intro
-- Browserbase Playwright integration: https://docs.browserbase.com/integrations/playwright
+- Browserbase Playwright integration: https://docs.browserbase.com/introduction/playwright
 - Browserless browser automation docs: https://docs.browserless.io/
+- Browserless CAPTCHA solving docs: https://docs.browserless.io/baas/bot-detection/captchas
 - Firecrawl scrape API: https://docs.firecrawl.dev/api-reference/endpoint/scrape
+- Bright Data Web Unlocker docs: https://docs.brightdata.com/scraping-automation/web-unlocker/introduction
+- Bright Data Browser API docs: https://docs.brightdata.com/scraping-automation/scraping-browser
 - Crawl4AI docs: https://docs.crawl4ai.com/
 - Apify docs: https://docs.apify.com/
 - Zyte API docs: https://docs.zyte.com/zyte-api/
