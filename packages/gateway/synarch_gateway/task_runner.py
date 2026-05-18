@@ -1154,17 +1154,28 @@ def proposed_memory_candidates(
     world_view: LocalWorldView,
     agent_result: AgentResult,
 ) -> list[MemoryItem]:
-    return [
-        candidate.model_copy(
-            update={
-                "scope": f"project:{task.project_id}",
-                "agent_id": world_view.agent_id,
-                "project_id": task.project_id,
-                "status": MemoryStatus.proposed,
-            }
+    proposed_candidates: list[MemoryItem] = []
+    seen_content: set[str] = set()
+    for candidate in agent_result.memory_candidates:
+        content_key = normalized_memory_content(candidate.content)
+        if not content_key or content_key in seen_content:
+            continue
+        seen_content.add(content_key)
+        proposed_candidates.append(
+            candidate.model_copy(
+                update={
+                    "scope": f"project:{task.project_id}",
+                    "agent_id": world_view.agent_id,
+                    "project_id": task.project_id,
+                    "status": MemoryStatus.proposed,
+                }
+            )
         )
-        for candidate in agent_result.memory_candidates
-    ]
+    return proposed_candidates
+
+
+def normalized_memory_content(content: str) -> str:
+    return " ".join(content.split()).casefold()
 
 
 def child_task_record(

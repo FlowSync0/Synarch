@@ -1244,6 +1244,42 @@ class FakeAgentRuntimeClient:
         )
 
 
+class DuplicateMemoryAgentRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.needs_review,
+            actions_taken=["Prepared duplicate memory candidates"],
+            memory_candidates=[
+                MemoryItem(
+                    scope="global",
+                    content="Blocked web extraction requires human review.",
+                ),
+                MemoryItem(
+                    scope="global",
+                    content="  Blocked   web extraction requires human review.  ",
+                ),
+                MemoryItem(
+                    scope="global",
+                    content="",
+                ),
+            ],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=12,
+                output_tokens=6,
+                total_cost=0.000002,
+            ),
+            summary="Prepared memory candidates for review.",
+        )
+
+
 class CompletingAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -4340,6 +4376,60 @@ def test_run_next_task_executes_first_ready_task() -> None:
     ]
     assert payload["memory_events"][0]["payload"]["status"] == "proposed"
     assert state_client.headers[-1]["x-synarch-actor-id"] == "gateway-task-runner"
+
+
+def test_run_next_task_deduplicates_memory_candidates() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_memory_dedupe",
+            title="Memory dedupe project",
+            goal="Keep proposed memory clean.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            project_id="project_memory_dedupe",
+            title="Record extraction blocker",
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Duplicate memory candidates are not persisted."],
+        )
+    )
+    memory_client = FakeMemoryClient()
+    runtime_client = DuplicateMemoryAgentRuntimeClient()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(),
+        memory=memory_client,
+        runtime=runtime_client,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_memory_dedupe_test"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["status"] == "needs_review"
+    assert len(payload["agent_result"]["memory_candidates"]) == 1
+    assert len(memory_client.items) == 1
+    assert memory_client.items[0].content == "Blocked web extraction requires human review."
+    assert memory_client.items[0].scope == "project:project_memory_dedupe"
+    assert memory_client.items[0].status == "proposed"
+    assert [event["type"] for event in payload["memory_events"]] == [
+        "memory.candidate_created",
+    ]
+    assert [
+        event.type
+        for event in state_client.events
+        if event.type == EventType.memory_candidate_created
+    ] == [EventType.memory_candidate_created]
 
 
 def test_task_runner_resolves_model_route_from_world_view_policy() -> None:
