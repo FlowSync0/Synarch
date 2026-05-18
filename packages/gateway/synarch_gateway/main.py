@@ -238,6 +238,7 @@ class Settings(BaseSettings):
     firecrawl_timeout_seconds: float = 30.0
     web_extract_playwright_timeout_seconds: float = 30.0
     web_extract_playwright_wait_until: str = "domcontentloaded"
+    web_extract_review_evidence_max_bytes: int = 4_096
     service_health_timeout_seconds: float = 3.0
 
 
@@ -1399,12 +1400,14 @@ def execute_tool_call_through_gate(
     tool_status = tool_result_status_from_execution_output(execution_output)
     tool_error = tool_result_error_from_execution_output(execution_output, tool_status)
     if tool_status != TaskStatus.completed:
+        log_payload = tool_result_log_payload(execution_output)
         state_client.create_event(
             tool_call_event(
                 tool_call,
                 EventType.tool_failed,
                 trace_id,
                 error=tool_error,
+                extra_payload=log_payload,
             ),
             headers=headers,
         )
@@ -1414,6 +1417,7 @@ def execute_tool_call_through_gate(
                 f"tool.{tool_status.value}",
                 trace_id,
                 error=tool_error,
+                extra_payload=log_payload,
             ),
             headers=headers,
         )
@@ -1431,6 +1435,21 @@ def execute_tool_call_through_gate(
         },
         error=tool_error,
     )
+
+
+def tool_result_log_payload(execution_output: dict[str, object]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key in (
+        "tool_status",
+        "blocked_reason",
+        "requires_human_review",
+        "block_signals",
+        "review_evidence",
+    ):
+        value = execution_output.get(key)
+        if value is not None:
+            payload[key] = value
+    return payload
 
 
 def connector_job_execution_run_request(
@@ -2145,6 +2164,16 @@ def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, obje
     )
     if blocked is not None:
         output.update(blocked)
+        output["review_evidence"] = web_blocked_review_evidence(
+            provider="local_playwright",
+            url=url,
+            final_url=string_payload_value(output.get("final_url")) or url,
+            status_code=status_code,
+            title=string_payload_value(output.get("title")) or "",
+            markdown=markdown,
+            html=html,
+            block_signals=blocked["block_signals"],
+        )
         metadata = output["metadata"]
         if isinstance(metadata, dict):
             metadata["requires_human_review"] = True
@@ -2205,6 +2234,42 @@ def web_blocked_result(reason: str, signals: tuple[str, ...]) -> dict[str, objec
         "blocked_reason": reason,
         "requires_human_review": True,
         "block_signals": list(signals),
+    }
+
+
+def web_blocked_review_evidence(
+    *,
+    provider: str,
+    url: str,
+    final_url: str,
+    status_code: int,
+    title: str,
+    markdown: str,
+    html: str,
+    block_signals: object,
+) -> dict[str, object]:
+    markdown_excerpt, markdown_truncated = truncate_text_bytes(
+        markdown,
+        max_bytes=settings.web_extract_review_evidence_max_bytes,
+    )
+    html_excerpt, html_truncated = truncate_text_bytes(
+        html,
+        max_bytes=settings.web_extract_review_evidence_max_bytes,
+    )
+    signals = block_signals if isinstance(block_signals, list) else []
+    return {
+        "kind": "web_extract_block",
+        "provider": provider,
+        "url": url,
+        "final_url": final_url,
+        "status_code": status_code,
+        "title": title,
+        "content_type": "text/html",
+        "block_signals": signals,
+        "markdown_excerpt": markdown_excerpt,
+        "html_excerpt": html_excerpt,
+        "truncated": markdown_truncated or html_truncated,
+        "max_bytes": settings.web_extract_review_evidence_max_bytes,
     }
 
 
@@ -3009,10 +3074,13 @@ def tool_call_event(
     trace_id: str,
     *,
     error: str | None = None,
+    extra_payload: dict[str, object] | None = None,
 ) -> EventRecord:
     payload = tool_call_payload(tool_call)
     if error is not None:
         payload["error"] = error
+    if extra_payload is not None:
+        payload.update(extra_payload)
     return EventRecord(
         type=event_type,
         source_agent_id=tool_call.agent_id,
@@ -3028,10 +3096,13 @@ def tool_call_audit(
     trace_id: str,
     *,
     error: str | None = None,
+    extra_payload: dict[str, object] | None = None,
 ) -> AuditLogRecord:
     payload = tool_call_payload(tool_call)
     if error is not None:
         payload["error"] = error
+    if extra_payload is not None:
+        payload.update(extra_payload)
     return AuditLogRecord(
         actor_type=ActorType.agent,
         actor_id=tool_call.agent_id,

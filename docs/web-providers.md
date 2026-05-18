@@ -44,7 +44,11 @@ unblocking provider.
 
 `local_playwright` marks obvious CAPTCHA, human-verification, authentication, 401/403, and 429 pages
 as `ToolResult.status=blocked`. The tool output includes `blocked_reason`, `block_signals`,
-`requires_human_review=true`, provider metadata, and the same trace ID carried by the tool gate.
+`requires_human_review=true`, provider metadata, bounded `review_evidence`, and the same trace ID
+carried by the tool gate. `review_evidence` is also copied into the `tool.failed` event and
+`tool.blocked` audit log so reviewers can inspect the final URL, HTTP status, title, block signals,
+text excerpt, and HTML excerpt without rerunning the browser. Its size is capped by
+`WEB_EXTRACT_REVIEW_EVIDENCE_MAX_BYTES`.
 
 ## Provider Selection
 

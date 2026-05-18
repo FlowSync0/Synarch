@@ -2899,12 +2899,25 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     assert payload["output"]["requires_human_review"] is True
     assert payload["output"]["metadata"]["requires_human_review"] is True
     assert "verify you are human" in payload["output"]["block_signals"]
+    evidence = payload["output"]["review_evidence"]
+    assert evidence["kind"] == "web_extract_block"
+    assert evidence["provider"] == "local_playwright"
+    assert evidence["final_url"] == "https://example.com/protected"
+    assert evidence["title"] == "Security check"
+    assert evidence["status_code"] == 200
+    assert "Verify you are human" in evidence["markdown_excerpt"]
+    assert "Verify you are human" in evidence["html_excerpt"]
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
         EventType.tool_failed,
     ]
+    blocked_payload = state_client.events[1].payload
+    assert blocked_payload["blocked_reason"] == "captcha_or_human_verification"
+    assert blocked_payload["requires_human_review"] is True
+    assert blocked_payload["review_evidence"] == evidence
     assert state_client.audit_logs[0].action == "tool.allowed"
     assert state_client.audit_logs[1].action == "tool.blocked"
+    assert state_client.audit_logs[1].payload["review_evidence"] == evidence
 
 
 def test_web_extract_rejects_provider_service_mismatch() -> None:
