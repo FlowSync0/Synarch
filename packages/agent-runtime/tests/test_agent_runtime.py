@@ -275,6 +275,44 @@ def test_agent_messages_describe_connector_job_list_filter_values() -> None:
     assert "use status for active, stopped, or paused" in system_content
 
 
+def test_runtime_parses_structured_memory_candidate_content() -> None:
+    request = AgentTaskRequest.model_validate(
+        {
+            "task": {
+                "id": "task_memory_candidate",
+                "project_id": "project_demo",
+                "title": "Record blocker",
+                "assigned_agent_id": "agent-ops-sourcing",
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+        }
+    )
+
+    candidates = runtime_main.parsed_memory_candidates(
+        {
+            "memory_candidates": [
+                {
+                    "scope": "global",
+                    "content": "Blocked web extraction requires human review.",
+                    "metadata": {"blocked_reason": "http_access_denied"},
+                }
+            ]
+        },
+        request,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].scope == "project:project_demo"
+    assert candidates[0].agent_id == "agent-ops-sourcing"
+    assert candidates[0].project_id == "project_demo"
+    assert candidates[0].content == "Blocked web extraction requires human review."
+    assert candidates[0].metadata == {"blocked_reason": "http_access_denied"}
+
+
 def test_runtime_repairs_missing_lifecycle_request_from_openrouter(
     monkeypatch: MonkeyPatch,
 ) -> None:

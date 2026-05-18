@@ -927,16 +927,35 @@ def parsed_memory_candidates(
     candidates = parsed.get("memory_candidates", [])
     if not isinstance(candidates, list):
         return []
-    return [
-        MemoryItem(
-            scope=f"project:{request.task.project_id}",
-            agent_id=request.world_view.agent_id,
-            project_id=request.task.project_id,
-            content=str(candidate),
-        )
-        for candidate in candidates
-        if str(candidate).strip()
-    ]
+    memory_items: list[MemoryItem] = []
+    for candidate in candidates:
+        memory_item = parsed_memory_candidate(candidate, request)
+        if memory_item is not None:
+            memory_items.append(memory_item)
+    return memory_items
+
+
+def parsed_memory_candidate(
+    candidate: Any,
+    request: AgentTaskRequest,
+) -> MemoryItem | None:
+    metadata: dict[str, Any] = {}
+    if isinstance(candidate, dict):
+        content = string_value(candidate.get("content")).strip()
+        raw_metadata = candidate.get("metadata", {})
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+    else:
+        content = str(candidate).strip()
+    if not content:
+        return None
+    return MemoryItem(
+        scope=f"project:{request.task.project_id}",
+        agent_id=request.world_view.agent_id,
+        project_id=request.task.project_id,
+        content=content,
+        metadata=metadata,
+    )
 
 
 def parsed_summary(parsed: dict[str, Any], content: str) -> str:
