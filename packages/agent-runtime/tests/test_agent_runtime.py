@@ -689,6 +689,110 @@ def test_runtime_repairs_completed_result_with_unresolved_failed_tool(
     assert payload["model_usage"]["output_tokens"] == 22
 
 
+def test_runtime_repairs_completed_result_with_unresolved_blocked_tool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime_main.settings, "agent_runtime_mode", "model_gateway")
+    monkeypatch.setattr(runtime_main.settings, "model_gateway_url", "http://model-gateway:8060")
+    calls: list[dict[str, object]] = []
+
+    def fake_post(
+        url: str,
+        *,
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        calls.append(json)
+        if len(calls) == 1:
+            content = (
+                '{"status":"completed",'
+                '"summary":"Fetched the protected source.",'
+                '"actions_taken":["Claimed source despite blocked tool"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 42,
+                "output_tokens": 10,
+                "total_cost": 0.000005,
+                "currency": "USD",
+            }
+        else:
+            messages = json["messages"]
+            assert isinstance(messages, list)
+            repair_content = str(messages[-1]["content"])
+            assert "web.fetch: http_access_denied" in repair_content
+            assert "blocked without a later completed result" in repair_content
+            content = (
+                '{"status":"blocked",'
+                '"summary":"The protected source fetch is blocked for human review.",'
+                '"actions_taken":["Reported unresolved tool block"],'
+                '"sub_tasks_created":[],'
+                '"tool_calls_requested":[],'
+                '"memory_candidates":[]}'
+            )
+            usage = {
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "input_tokens": 58,
+                "output_tokens": 12,
+                "total_cost": 0.000007,
+                "currency": "USD",
+            }
+        return httpx.Response(
+            200,
+            json={
+                "provider_id": "provider-openrouter",
+                "model_id": "deepseek/deepseek-v4-flash",
+                "content": content,
+                "usage": usage,
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/tasks/run",
+        json={
+            "provider_id": "provider-openrouter",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "task": {
+                "id": "task_blocked_tool_repair",
+                "project_id": "project_demo",
+                "title": "Fetch protected supplier source",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "acceptance_criteria": ["The source is fetched or a blocker is reported."],
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+            "tool_results": [
+                {
+                    "tool_name": "web.fetch",
+                    "status": "blocked",
+                    "error": "http_access_denied",
+                    "output": {"blocked_reason": "http_access_denied"},
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(calls) == 2
+    assert payload["status"] == "blocked"
+    assert payload["summary"] == "The protected source fetch is blocked for human review."
+    assert payload["tool_calls_requested"] == []
+    assert payload["model_usage"]["input_tokens"] == 100
+    assert payload["model_usage"]["output_tokens"] == 22
+
+
 def test_runtime_allows_completed_result_when_failed_tool_was_retried_successfully(
     monkeypatch: MonkeyPatch,
 ) -> None:

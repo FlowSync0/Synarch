@@ -421,6 +421,14 @@ def agent_result_repair_messages(
 ) -> list[ModelMessage] | None:
     if lifecycle_repair_required(request, result):
         return lifecycle_repair_messages(request, messages, previous_content)
+    blocked_tools = unresolved_blocked_completed_tool_results(request, result)
+    if blocked_tools:
+        return blocked_tool_repair_messages(
+            request,
+            messages,
+            previous_content,
+            blocked_tools,
+        )
     failed_tools = unresolved_failed_completed_tool_results(request, result)
     if failed_tools:
         return failed_tool_repair_messages(
@@ -479,6 +487,28 @@ def unresolved_failed_completed_tool_results(
             continue
         failed_tools.append(failed_tool_result_summary(tool_result.tool_name, tool_result.error))
     return failed_tools
+
+
+def unresolved_blocked_completed_tool_results(
+    request: AgentTaskRequest,
+    result: AgentResult,
+) -> list[str]:
+    if result.status != TaskStatus.completed:
+        return []
+
+    blocked_tools: list[str] = []
+    for index, tool_result in enumerate(request.tool_results):
+        if tool_result.status != TaskStatus.blocked:
+            continue
+        has_later_success = any(
+            later_result.tool_name == tool_result.tool_name
+            and later_result.status == TaskStatus.completed
+            for later_result in request.tool_results[index + 1 :]
+        )
+        if has_later_success:
+            continue
+        blocked_tools.append(failed_tool_result_summary(tool_result.tool_name, tool_result.error))
+    return blocked_tools
 
 
 def failed_tool_result_summary(tool_name: str, error: str | None) -> str:
@@ -562,6 +592,29 @@ def failed_tool_repair_messages(
                 "but these tool_results failed without a later completed result "
                 f"for the same tool: {', '.join(failed_tools)}. Do not mark the "
                 "task completed while tool failures are unresolved. Return "
+                "corrected JSON only. Request a corrected allowed tool if possible; "
+                "otherwise use status needs_review or blocked."
+            ),
+        ),
+    ]
+
+
+def blocked_tool_repair_messages(
+    request: AgentTaskRequest,
+    messages: list[ModelMessage],
+    previous_content: str,
+    blocked_tools: list[str],
+) -> list[ModelMessage]:
+    return [
+        *messages,
+        ModelMessage(role="assistant", content=previous_content),
+        ModelMessage(
+            role="user",
+            content=(
+                "Your previous JSON failed validation: status was completed, "
+                "but these tool_results were blocked without a later completed "
+                f"result for the same tool: {', '.join(blocked_tools)}. Do not "
+                "mark the task completed while tool blocks are unresolved. Return "
                 "corrected JSON only. Request a corrected allowed tool if possible; "
                 "otherwise use status needs_review or blocked."
             ),
