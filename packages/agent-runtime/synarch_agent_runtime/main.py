@@ -619,6 +619,11 @@ def parse_agent_json(content: str) -> dict[str, Any]:
             parsed = json_dict_from_candidate(repaired_candidate)
             if parsed is not None:
                 return parsed
+        closed_candidate = close_unclosed_json_containers(repaired_candidate)
+        if closed_candidate != repaired_candidate:
+            parsed = json_dict_from_candidate(closed_candidate)
+            if parsed is not None:
+                return parsed
     return {}
 
 
@@ -656,6 +661,38 @@ def json_dict_from_candidate(candidate: str) -> dict[str, Any] | None:
 def remove_malformed_empty_key_lines(candidate: str) -> str:
     lines = candidate.splitlines()
     return "\n".join(line for line in lines if not line.strip().startswith('":'))
+
+
+def close_unclosed_json_containers(candidate: str) -> str:
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    for char in candidate:
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\" and in_string:
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            stack.append("}")
+            continue
+        if char == "[":
+            stack.append("]")
+            continue
+        if char in ("}", "]"):
+            if not stack or stack[-1] != char:
+                return candidate
+            stack.pop()
+
+    if in_string or not stack:
+        return candidate
+    return f"{candidate}{''.join(reversed(stack))}"
 
 
 def deduplicate_strings(values: list[str]) -> list[str]:

@@ -224,6 +224,33 @@ def test_parse_agent_json_recovers_fenced_json_with_malformed_empty_key_line() -
     )
 
 
+def test_parse_agent_json_closes_truncated_container_response() -> None:
+    parsed = runtime_main.parse_agent_json(
+        """{
+  "status": "needs_review",
+  "summary": "Requested connector.job.list on connector-supplier-web.",
+  "actions_taken": [
+    "Requested connector.job.list on service connector-supplier-web with status active."
+  ],
+  "sub_tasks_created": [],
+  "memory_candidates": [],
+  "tool_calls_requested": [
+    {
+      "tool_name": "connector.job.list",
+      "service_id": "connector-supplier-web",
+      "reason": "Discover the active owned connector job before stopping it.",
+      "arguments": {
+        "status": "active"
+      }
+    }
+  """
+    )
+
+    assert parsed["status"] == "needs_review"
+    assert parsed["tool_calls_requested"][0]["tool_name"] == "connector.job.list"
+    assert parsed["tool_calls_requested"][0]["arguments"] == {"status": "active"}
+
+
 def test_agent_messages_describe_connector_job_list_filter_values() -> None:
     request = AgentTaskRequest.model_validate(
         {
