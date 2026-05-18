@@ -144,8 +144,11 @@ Implemented baseline:
 
 - Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
 - Gateway `/web/providers` exposes the web provider catalog and whether API-key providers are configured.
-- `web.extract` supports no-key `local_fetch`, no-key `local_playwright`, and optional Firecrawl extraction through `FIRECRAWL_API_KEY`.
-- State-service seeds and migrations register `connector-web-local`, `connector-web-browser-local`, `connector-firecrawl`, and `web.extract` access for ops sourcing.
+- `web.extract` supports no-key `local_fetch`, no-key `local_playwright`, optional Firecrawl
+  extraction through `FIRECRAWL_API_KEY`, and optional Browserless `/content` extraction through
+  `BROWSERLESS_API_KEY`.
+- State-service seeds and migrations register `connector-web-local`, `connector-web-browser-local`,
+  `connector-firecrawl`, `connector-browserless`, and `web.extract` access for ops sourcing.
 - `connector.job.create` lets an authorized agent create a durable cron/webhook connector job after the same service and tool gate.
 - `connector.job.list` lets an authorized agent inspect its own durable connector jobs through the same service and tool gate.
 - `connector.job.stop` lets an authorized agent stop its own durable connector job after the same service and tool gate.
