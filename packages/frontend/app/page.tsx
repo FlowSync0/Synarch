@@ -353,7 +353,16 @@ type ProjectViewModel = {
 
 type FailedToolViewModel = {
   name: string;
+  status: "failed" | "blocked";
   error?: string;
+  providerOptions: ProviderEscalationOptionViewModel[];
+};
+
+type ProviderEscalationOptionViewModel = {
+  providerId: string;
+  label: string;
+  riskLevel: string;
+  actionRequired: string[];
 };
 
 type TaskReviewViewModel = {
@@ -801,18 +810,49 @@ function taskFailedTools(task: TaskRecord): FailedToolViewModel[] {
   const failedToolRows: FailedToolViewModel[] = [];
   const seen = new Set<string>();
   for (const toolResult of taskToolResults(task)) {
-    if (toolResult.status !== "failed") {
+    if (toolResult.status !== "failed" && toolResult.status !== "blocked") {
       continue;
     }
     const error = typeof toolResult.error === "string" ? toolResult.error : undefined;
-    const key = `${toolResult.tool_name}:${error ?? ""}`;
+    const key = `${toolResult.tool_name}:${toolResult.status}:${error ?? ""}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    failedToolRows.push({ name: toolResult.tool_name, error });
+    failedToolRows.push({
+      name: toolResult.tool_name,
+      status: toolResult.status,
+      error,
+      providerOptions: providerEscalationOptions(toolResult)
+    });
   }
   return failedToolRows;
+}
+
+function providerEscalationOptions(toolResult: ToolResult): ProviderEscalationOptionViewModel[] {
+  const rawOptions = toolResult.output.provider_escalation_options;
+  if (!Array.isArray(rawOptions)) {
+    return [];
+  }
+  return rawOptions.flatMap((option) => {
+    if (typeof option !== "object" || option === null) {
+      return [];
+    }
+    const record = option as Record<string, unknown>;
+    if (typeof record.provider_id !== "string") {
+      return [];
+    }
+    return [
+      {
+        providerId: record.provider_id,
+        label: typeof record.name === "string" ? record.name : record.provider_id,
+        riskLevel: typeof record.risk_level === "string" ? record.risk_level : "unknown",
+        actionRequired: Array.isArray(record.action_required)
+          ? record.action_required.filter((action): action is string => typeof action === "string")
+          : []
+      }
+    ];
+  });
 }
 
 function taskReviewRow(task: TaskRecord): TaskReviewViewModel {
@@ -4303,17 +4343,38 @@ export default function DashboardPage() {
                           {taskReview.reason}
                         </BalancedText>
                         {taskReview.failedTools.length > 0 ? (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {taskReview.failedTools.map((tool) => (
-                              <span
-                                key={`${taskReview.id}-${tool.name}-${tool.error ?? ""}`}
-                                title={tool.error ?? tool.name}
-                                className="inline-flex max-w-full truncate rounded-md bg-risk-soft px-2 py-0.5 text-[11px] font-semibold text-risk ring-1 ring-risk/15"
-                              >
-                                failed: {tool.name}
-                                {tool.error ? ` / ${tool.error}` : ""}
-                              </span>
-                            ))}
+                          <div className="mt-2 grid gap-1.5">
+                            <div className="flex flex-wrap gap-1">
+                              {taskReview.failedTools.map((tool) => (
+                                <span
+                                  key={`${taskReview.id}-${tool.name}-${tool.status}-${tool.error ?? ""}`}
+                                  title={tool.error ?? tool.name}
+                                  className={`inline-flex max-w-full truncate rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                                    tool.status === "blocked"
+                                      ? "bg-warn-soft text-warn ring-warn/15"
+                                      : "bg-risk-soft text-risk ring-risk/15"
+                                  }`}
+                                >
+                                  {tool.status}: {tool.name}
+                                  {tool.error ? ` / ${tool.error}` : ""}
+                                </span>
+                              ))}
+                            </div>
+                            {taskReview.failedTools.some((tool) => tool.providerOptions.length > 0) ? (
+                              <div className="flex flex-wrap gap-1">
+                                {taskReview.failedTools.flatMap((tool) =>
+                                  tool.providerOptions.slice(0, 3).map((option) => (
+                                    <span
+                                      key={`${taskReview.id}-${tool.name}-${option.providerId}`}
+                                      title={option.actionRequired.join(", ") || option.providerId}
+                                      className="inline-flex max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border"
+                                    >
+                                      {option.providerId} / {option.riskLevel}
+                                    </span>
+                                  ))
+                                )}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
                         <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
