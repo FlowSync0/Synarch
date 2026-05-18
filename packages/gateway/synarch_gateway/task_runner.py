@@ -868,6 +868,21 @@ class TaskRunner:
                 }
             )
 
+        unresolved_tools = unresolved_non_completed_tool_result_summaries(tool_results)
+        if agent_result.status == TaskStatus.completed and unresolved_tools:
+            combined_actions.append(
+                "Completion overridden because tool results still need review."
+            )
+            agent_result = agent_result.model_copy(
+                update={
+                    "status": TaskStatus.needs_review,
+                    "summary": (
+                        "Task cannot be completed because tool results still need "
+                        f"review: {', '.join(unresolved_tools)}."
+                    ),
+                }
+            )
+
         return agent_result.model_copy(
             update={
                 "actions_taken": deduplicate(combined_actions),
@@ -1073,6 +1088,46 @@ def pending_tool_names(agent_result: AgentResult) -> list[str]:
     return deduplicate(
         [tool_call.tool_name for tool_call in agent_result.tool_calls_requested]
     )
+
+
+def unresolved_non_completed_tool_result_summaries(
+    tool_results: list[ToolResult],
+) -> list[str]:
+    completed_tool_names: set[str] = set()
+    unresolved_summaries: list[str] = []
+    seen_summaries: set[str] = set()
+    for tool_result in reversed(tool_results):
+        if tool_result.status == TaskStatus.completed:
+            completed_tool_names.add(tool_result.tool_name)
+            continue
+        if tool_result.tool_name in completed_tool_names:
+            continue
+        summary = non_completed_tool_result_summary(tool_result)
+        if summary in seen_summaries:
+            continue
+        unresolved_summaries.append(summary)
+        seen_summaries.add(summary)
+    return list(reversed(unresolved_summaries))
+
+
+def non_completed_tool_result_summary(tool_result: ToolResult) -> str:
+    status = (
+        tool_result.status.value
+        if isinstance(tool_result.status, TaskStatus)
+        else str(tool_result.status)
+    )
+    error = tool_result.error or string_output_value(
+        tool_result.output.get("blocked_reason")
+    ) or string_output_value(tool_result.output.get("error"))
+    if error:
+        return f"{tool_result.tool_name} {status}: {error}"
+    return f"{tool_result.tool_name} {status}"
+
+
+def string_output_value(value: object) -> str | None:
+    if value is None:
+        return None
+    return str(value)
 
 
 def combine_model_usage(

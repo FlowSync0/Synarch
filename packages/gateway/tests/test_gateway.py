@@ -1486,6 +1486,56 @@ class RepeatingFailedToolRuntimeClient:
         )
 
 
+class CompletingAfterBlockedToolRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        if not request.tool_results:
+            return AgentResult(
+                agent_id=request.world_view.agent_id,
+                task_id=request.task.id,
+                status=TaskStatus.needs_review,
+                actions_taken=["Requested protected supplier page fetch"],
+                tool_calls_requested=[
+                    ToolCallRequest(
+                        agent_id=request.world_view.agent_id,
+                        tool_name="web.fetch",
+                        service_id="connector-supplier-web",
+                        project_id=request.task.project_id,
+                        task_id=request.task.id,
+                        reason="Fetch protected source evidence for supplier research.",
+                        arguments={"url": "https://protected.example", "max_bytes": 2048},
+                    )
+                ],
+                model_usage=ModelUsage(
+                    provider_id=request.provider_id or "provider-local-runtime-stub",
+                    model_id=request.model_id or "model-local-runtime-stub",
+                    input_tokens=20,
+                    output_tokens=10,
+                    total_cost=0.000002,
+                ),
+                summary="Need protected supplier source evidence before final answer.",
+            )
+
+        assert request.tool_results[0].status == TaskStatus.blocked
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Incorrectly treated blocked source as sufficient"],
+            model_usage=ModelUsage(
+                provider_id=request.provider_id or "provider-local-runtime-stub",
+                model_id=request.model_id or "model-local-runtime-stub",
+                input_tokens=24,
+                output_tokens=12,
+                total_cost=0.000003,
+            ),
+            summary="Completed despite blocked supplier source.",
+        )
+
+
 class CorrectedFailedToolRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -5022,6 +5072,88 @@ def test_run_next_task_counts_blocked_tool_results_in_completion_event() -> None
     assert completed_payload["blocked_tool_errors"] == [
         {"tool_name": "web.fetch", "error": "http_access_denied"}
     ]
+
+
+def test_run_next_task_rejects_completion_with_unresolved_blocked_tool() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_blocked_tool_completion_guard",
+            title="Blocked tool completion guard",
+            goal="Prevent completion when protected source evidence is still blocked.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_blocked_tool_completion_guard",
+            project_id="project_blocked_tool_completion_guard",
+            title="Fetch protected supplier source",
+            assigned_agent_id="agent-ops-sourcing",
+            acceptance_criteria=["Blocked source evidence cannot be marked complete."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"],
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = CompletingAfterBlockedToolRuntimeClient()
+    tool_runner = BlockedToolRunner()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=tool_runner,
+        max_tool_rounds=3,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_blocked_tool_completion_guard"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert len(tool_runner.calls) == 1
+    assert payload["task"]["status"] == "needs_review"
+    assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["agent_result"]["summary"] == (
+        "Task cannot be completed because tool results still need review: "
+        "web.fetch blocked: http_access_denied."
+    )
+    assert "Completion overridden because tool results still need review." in (
+        payload["agent_result"]["actions_taken"]
+    )
+    assert payload["tool_results"][0]["status"] == "blocked"
+    assert payload["tool_results"][0]["error"] == "http_access_denied"
+    completed_payload = next(
+        event.payload
+        for event in state_client.events
+        if event.type == EventType.model_call_completed
+    )
+    assert completed_payload["blocked_tool_result_count"] == 1
+    assert completed_payload["blocked_tool_names"] == ["web.fetch"]
+    assert completed_payload["pending_tool_call_count"] == 0
 
 
 def test_run_next_task_allows_corrected_tool_call_after_failure() -> None:
