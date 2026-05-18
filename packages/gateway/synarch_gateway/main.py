@@ -1444,6 +1444,8 @@ def tool_result_log_payload(execution_output: dict[str, object]) -> dict[str, ob
         "blocked_reason",
         "requires_human_review",
         "block_signals",
+        "recommended_action",
+        "provider_escalation_options",
         "review_evidence",
     ):
         value = execution_output.get(key)
@@ -2164,6 +2166,10 @@ def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, obje
     )
     if blocked is not None:
         output.update(blocked)
+        output["provider_escalation_options"] = web_provider_escalation_options(
+            current_provider="local_playwright",
+            blocked_reason=string_payload_value(blocked.get("blocked_reason")) or "blocked",
+        )
         output["review_evidence"] = web_blocked_review_evidence(
             provider="local_playwright",
             url=url,
@@ -2234,7 +2240,86 @@ def web_blocked_result(reason: str, signals: tuple[str, ...]) -> dict[str, objec
         "blocked_reason": reason,
         "requires_human_review": True,
         "block_signals": list(signals),
+        "recommended_action": "review_provider_escalation",
     }
+
+
+def web_provider_escalation_options(
+    *,
+    current_provider: str,
+    blocked_reason: str,
+) -> list[dict[str, object]]:
+    provider_ids = (
+        "firecrawl",
+        "browserbase",
+        "browserless",
+        "brightdata_web_unlocker",
+        "brightdata_browser_api",
+        "scrapingbee",
+        "zyte",
+        "apify",
+    )
+    return [
+        web_provider_escalation_option(
+            manifest,
+            current_provider=current_provider,
+            blocked_reason=blocked_reason,
+        )
+        for provider_id in provider_ids
+        if (manifest := WEB_PROVIDER_MANIFESTS.get(provider_id)) is not None
+    ]
+
+
+def web_provider_escalation_option(
+    manifest: WebProviderManifest,
+    *,
+    current_provider: str,
+    blocked_reason: str,
+) -> dict[str, object]:
+    response = manifest.as_response()
+    configured = bool(response["configured"])
+    action_required: list[str] = []
+    if not manifest.implemented:
+        action_required.append("provider_adapter_not_implemented")
+    if manifest.requires_api_key and not configured:
+        action_required.append("configure_api_key")
+    if manifest.requires_human_approval:
+        action_required.append("human_approval_required")
+    return {
+        "provider_id": manifest.provider_id,
+        "name": manifest.name,
+        "category": manifest.category,
+        "implemented": manifest.implemented,
+        "configured": configured,
+        "requires_api_key": manifest.requires_api_key,
+        "api_key_env_var": manifest.api_key_env_var,
+        "risk_level": manifest.risk_level,
+        "requires_human_approval": manifest.requires_human_approval,
+        "action_required": action_required,
+        "reason": web_provider_escalation_reason(
+            manifest,
+            current_provider=current_provider,
+            blocked_reason=blocked_reason,
+        ),
+    }
+
+
+def web_provider_escalation_reason(
+    manifest: WebProviderManifest,
+    *,
+    current_provider: str,
+    blocked_reason: str,
+) -> str:
+    if manifest.provider_id == "firecrawl":
+        return "Try managed markdown extraction when local browser output is blocked."
+    if manifest.provider_id in {"browserbase", "browserless"}:
+        return "Use a cloud browser session when local browser execution is insufficient."
+    if manifest.provider_id.startswith("brightdata"):
+        return "Use only with explicit approval for high-risk anti-bot or proxy-heavy pages."
+    return (
+        f"Candidate escalation from {current_provider} after {blocked_reason}; "
+        "requires provider-specific review before use."
+    )
 
 
 def web_blocked_review_evidence(

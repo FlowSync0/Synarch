@@ -2914,6 +2914,9 @@ def test_tool_gate_executes_web_extract_local_playwright_provider(
 def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.delenv("BROWSERLESS_API_KEY", raising=False)
+    monkeypatch.delenv("BRIGHTDATA_API_KEY", raising=False)
     state_client = FakeStateClient()
     state_client.services.append(
         ServiceDefinition(
@@ -2983,8 +2986,25 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     assert payload["output"]["tool_status"] == "blocked"
     assert payload["output"]["blocked_reason"] == "captcha_or_human_verification"
     assert payload["output"]["requires_human_review"] is True
+    assert payload["output"]["recommended_action"] == "review_provider_escalation"
     assert payload["output"]["metadata"]["requires_human_review"] is True
     assert "verify you are human" in payload["output"]["block_signals"]
+    provider_options = {
+        option["provider_id"]: option
+        for option in payload["output"]["provider_escalation_options"]
+    }
+    assert provider_options["firecrawl"]["implemented"] is True
+    assert provider_options["firecrawl"]["requires_api_key"] is True
+    assert provider_options["firecrawl"]["configured"] is False
+    assert provider_options["firecrawl"]["action_required"] == ["configure_api_key"]
+    assert provider_options["browserless"]["implemented"] is False
+    assert provider_options["browserless"]["requires_human_approval"] is True
+    assert provider_options["browserless"]["action_required"] == [
+        "provider_adapter_not_implemented",
+        "configure_api_key",
+        "human_approval_required",
+    ]
+    assert provider_options["brightdata_web_unlocker"]["risk_level"] == "high"
     evidence = payload["output"]["review_evidence"]
     assert evidence["kind"] == "web_extract_block"
     assert evidence["provider"] == "local_playwright"
@@ -3000,6 +3020,10 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     blocked_payload = state_client.events[1].payload
     assert blocked_payload["blocked_reason"] == "captcha_or_human_verification"
     assert blocked_payload["requires_human_review"] is True
+    assert blocked_payload["recommended_action"] == "review_provider_escalation"
+    assert blocked_payload["provider_escalation_options"] == payload["output"][
+        "provider_escalation_options"
+    ]
     assert blocked_payload["review_evidence"] == evidence
     assert state_client.audit_logs[0].action == "tool.allowed"
     assert state_client.audit_logs[1].action == "tool.blocked"
