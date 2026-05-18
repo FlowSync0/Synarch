@@ -107,7 +107,7 @@ from .task_runner import (
 CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolCredentialState = Literal["not_required", "ready", "missing_scopes"]
-WebExtractionProvider = Literal["local_fetch", "local_playwright", "firecrawl"]
+WebExtractionProvider = Literal["local_fetch", "local_playwright", "firecrawl", "browserless"]
 
 
 class ToolAdapter(Protocol):
@@ -236,6 +236,9 @@ class Settings(BaseSettings):
     firecrawl_base_url: str = "https://api.firecrawl.dev"
     firecrawl_api_key_env_var: str = "FIRECRAWL_API_KEY"
     firecrawl_timeout_seconds: float = 30.0
+    browserless_base_url: str = "https://production-sfo.browserless.io"
+    browserless_api_key_env_var: str = "BROWSERLESS_API_KEY"
+    browserless_timeout_seconds: float = 30.0
     web_extract_playwright_timeout_seconds: float = 30.0
     web_extract_playwright_wait_until: str = "domcontentloaded"
     web_extract_review_evidence_max_bytes: int = 4_096
@@ -2115,6 +2118,8 @@ def execute_web_extract_tool(
         return extract_with_local_playwright(url, max_bytes=max_bytes)
     if provider == "firecrawl":
         return extract_with_firecrawl(url, max_bytes=max_bytes)
+    if provider == "browserless":
+        return extract_with_browserless(url, max_bytes=max_bytes)
     raise HTTPException(status_code=400, detail=f"Unsupported web.extract provider: {provider}")
 
 
@@ -2159,23 +2164,44 @@ def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, obje
             "wait_until": settings.web_extract_playwright_wait_until,
         },
     }
-    blocked = web_extraction_blocker(
+    return apply_web_extraction_blocker(
+        output,
+        provider="local_playwright",
+        url=url,
         status_code=status_code,
         title=string_payload_value(output.get("title")) or "",
+        markdown=markdown,
+        html=html,
+    )
+
+
+def apply_web_extraction_blocker(
+    output: dict[str, object],
+    *,
+    provider: WebExtractionProvider,
+    url: str,
+    status_code: int,
+    title: str,
+    markdown: str,
+    html: str,
+) -> dict[str, object]:
+    blocked = web_extraction_blocker(
+        status_code=status_code,
+        title=title,
         markdown=markdown,
     )
     if blocked is not None:
         output.update(blocked)
         output["provider_escalation_options"] = web_provider_escalation_options(
-            current_provider="local_playwright",
+            current_provider=provider,
             blocked_reason=string_payload_value(blocked.get("blocked_reason")) or "blocked",
         )
         output["review_evidence"] = web_blocked_review_evidence(
-            provider="local_playwright",
+            provider=provider,
             url=url,
             final_url=string_payload_value(output.get("final_url")) or url,
             status_code=status_code,
-            title=string_payload_value(output.get("title")) or "",
+            title=title,
             markdown=markdown,
             html=html,
             block_signals=blocked["block_signals"],
@@ -2455,6 +2481,67 @@ def extract_with_firecrawl(url: str, *, max_bytes: int) -> dict[str, object]:
     }
 
 
+def extract_with_browserless(url: str, *, max_bytes: int) -> dict[str, object]:
+    api_key = os.getenv(settings.browserless_api_key_env_var)
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{settings.browserless_api_key_env_var} is not configured",
+        )
+
+    try:
+        response = httpx.post(
+            f"{settings.browserless_base_url.rstrip('/')}/content",
+            params={"token": api_key},
+            headers={
+                "Cache-Control": "no-cache",
+                "Content-Type": "application/json",
+            },
+            json={"url": url},
+            timeout=settings.browserless_timeout_seconds,
+        )
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail="browserless request failed") from error
+
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "provider_status": response.status_code,
+                "error": web_response_detail(response),
+            },
+        )
+
+    html = response.text
+    parsed_title, excerpt = summarize_fetched_text(html)
+    title = parsed_title or ""
+    markdown, truncated = truncate_text_bytes(excerpt, max_bytes=max_bytes)
+    status_code = response.status_code
+    output = {
+        "executed": True,
+        "adapter": "web.extract",
+        "provider": "browserless",
+        "url": url,
+        "final_url": url,
+        "status_code": status_code,
+        "content_type": response.headers.get("content-type", "text/html"),
+        "bytes_read": len(markdown.encode("utf-8")),
+        "truncated": truncated,
+        "title": title,
+        "markdown": markdown,
+        "metadata": {"source_adapter": "browserless.content"},
+    }
+    return apply_web_extraction_blocker(
+        output,
+        provider="browserless",
+        url=url,
+        status_code=status_code,
+        title=title,
+        markdown=markdown,
+        html=html,
+    )
+
+
 def web_fetch_url_argument(tool_call: ToolCallRequest) -> str:
     raw_url = tool_call.arguments.get("url")
     if not isinstance(raw_url, str) or not raw_url.strip():
@@ -2509,9 +2596,14 @@ def web_extract_provider_argument(
         return "local_playwright"
     if provider == "firecrawl":
         return "firecrawl"
+    if provider == "browserless":
+        return "browserless"
     raise HTTPException(
         status_code=400,
-        detail="web.extract provider must be one of: local_fetch, local_playwright, firecrawl",
+        detail=(
+            "web.extract provider must be one of: local_fetch, local_playwright, "
+            "firecrawl, browserless"
+        ),
     )
 
 
@@ -2977,11 +3069,14 @@ WEB_PROVIDER_MANIFESTS: dict[str, WebProviderManifest] = {
         provider_id="browserless",
         name="Browserless",
         category="cloud_browser",
-        implemented=False,
+        implemented=True,
         requires_api_key=True,
         api_key_env_var="BROWSERLESS_API_KEY",
-        capabilities=("playwright", "puppeteer", "sessions", "captcha"),
-        notes="Candidate cloud browser provider compatible with Playwright/Puppeteer.",
+        capabilities=("content", "playwright", "puppeteer", "sessions", "captcha"),
+        notes=(
+            "Implemented for web.extract through Browserless /content when "
+            "BROWSERLESS_API_KEY is configured."
+        ),
         risk_level="high",
         requires_human_approval=True,
     ),

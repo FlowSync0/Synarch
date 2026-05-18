@@ -461,6 +461,21 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         },
     ),
     ServiceDefinition(
+        id="connector-browserless",
+        name="Browserless",
+        kind=ServiceKind.tool_provider,
+        capabilities=["web.extract"],
+        credential_scopes=["browserless:api_key"],
+        allowed_divisions=["ops-sourcing", "admin-knowledge"],
+        metadata={
+            "connector_type": "cloud_browser",
+            "web_provider": "browserless",
+            "requires_api_key": True,
+            "api_key_env_var": "BROWSERLESS_API_KEY",
+            "requires_human_approval": True,
+        },
+    ),
+    ServiceDefinition(
         id="connector-documents",
         name="Documents",
         kind=ServiceKind.tool_provider,

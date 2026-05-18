@@ -51,6 +51,11 @@ def test_seed_repositories_creates_default_divisions_and_agents() -> None:
     assert repositories.services.exists("connector-web-local")
     assert repositories.services.exists("connector-web-browser-local")
     assert repositories.services.exists("connector-firecrawl")
+    assert repositories.services.exists("connector-browserless")
+    browserless = repositories.services.get("connector-browserless")
+    assert browserless is not None
+    assert browserless.credential_scopes == ["browserless:api_key"]
+    assert browserless.metadata["web_provider"] == "browserless"
     ops_agent = repositories.agents.get("agent-ops-sourcing")
     assert ops_agent is not None
     assert "web.extract" in ops_agent.permissions.allowed_tools

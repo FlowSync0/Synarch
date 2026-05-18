@@ -10,7 +10,7 @@ permission, credential, event, and audit gates.
 | --- | --- | --- | --- |
 | Basic HTTP | `local_fetch` | No | Cheap public HTML retrieval, no JavaScript. Implemented for `web.fetch` and `web.extract`. |
 | Local browser | Playwright | No | JavaScript pages and browser-rendered extraction. Implemented as `local_playwright`. |
-| Cloud browser | Browserbase, Browserless | Yes | Server-side browser sessions with Playwright/Puppeteer compatibility. Planned. |
+| Cloud browser | Browserbase, Browserless | Yes | Server-side browser sessions with Playwright/Puppeteer compatibility. Browserless `/content` extraction is implemented. |
 | Extraction API | Firecrawl, Crawl4AI | Firecrawl yes, Crawl4AI no | Markdown/LLM-ready extraction. Firecrawl is implemented for `web.extract`; Crawl4AI is planned as local extraction. |
 | Unblocking API | Browserless, Bright Data | Yes | CAPTCHA, proxy, stealth, and anti-bot-heavy flows. Planned only behind explicit human-approved provider config. |
 | Scraping API | Apify, Zyte, ScrapingBee | Yes | Higher-volume scraping, proxies, marketplace actors, hosted extraction. Planned only behind explicit provider config. |
@@ -27,10 +27,12 @@ permission, credential, event, and audit gates.
   - `local_fetch`: no key, uses the existing public-HTTP fetch path and returns normalized markdown-like text.
   - `local_playwright`: no key, launches local Chromium through Playwright and extracts browser-rendered HTML text.
   - `firecrawl`: requires `FIRECRAWL_API_KEY`, calls Firecrawl `/v2/scrape`, and returns markdown.
+  - `browserless`: requires `BROWSERLESS_API_KEY`, calls Browserless `/content`, and returns rendered HTML text.
 - Service registry defaults include:
   - `connector-web-local` with `web_provider=local_fetch`
   - `connector-web-browser-local` with `web_provider=local_playwright`
   - `connector-firecrawl` with `web_provider=firecrawl` and `credential_scopes=["firecrawl:api_key"]`
+  - `connector-browserless` with `web_provider=browserless` and `credential_scopes=["browserless:api_key"]`
   - `connector-supplier-web` with `web.extract` and `web_provider=local_fetch`
 - Provider candidates are visible before implementation so the UI can offer clear choices:
   Browserbase, Browserless, Bright Data, Apify, Zyte, ScrapingBee, and Crawl4AI.
@@ -59,8 +61,9 @@ and provider choices without rerunning the browser. Evidence size is capped by
 - Use `local_fetch` first for cheap public pages without JavaScript.
 - Use `local_playwright` when JavaScript rendering is required and no provider key should be needed.
 - Use `firecrawl` when the expected output is clean markdown/JSON extraction and API spend is acceptable.
-- Add Browserbase or Browserless next for long-running cloud browser sessions, recording, debugging, and
-  agentic browser control.
+- Use `browserless` when cloud JavaScript rendering is needed and a Browserless key is configured.
+- Add Browserbase next for long-running cloud browser sessions, recording, debugging, and agentic browser
+  control.
 - Add Browserless CAPTCHA solving or Bright Data Web Unlocker/Browser API only as an explicit
   high-risk/high-cost connector, not as an automatic fallback.
 
@@ -68,6 +71,7 @@ and provider choices without rerunning the browser. Evidence size is capped by
 
 - Playwright browser automation: https://playwright.dev/docs/intro
 - Browserbase Playwright integration: https://docs.browserbase.com/introduction/playwright
+- Browserless Content API: https://docs.browserless.io/rest-apis/content
 - Browserless browser automation docs: https://docs.browserless.io/
 - Browserless CAPTCHA solving docs: https://docs.browserless.io/baas/bot-detection/captchas
 - Firecrawl scrape API: https://docs.firecrawl.dev/api-reference/endpoint/scrape

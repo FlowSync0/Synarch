@@ -2730,6 +2730,7 @@ def test_web_provider_registry_reports_configured_key_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.delenv("BROWSERLESS_API_KEY", raising=False)
     monkeypatch.setattr(gateway_main, "module_is_available", lambda module_name: False)
     response = TestClient(app).get("/web/providers")
 
@@ -2748,6 +2749,8 @@ def test_web_provider_registry_reports_configured_key_status(
     assert providers["local_playwright"]["requires_human_approval"] is False
     assert providers["browserless"]["requires_human_approval"] is True
     assert providers["browserless"]["risk_level"] == "high"
+    assert providers["browserless"]["implemented"] is True
+    assert providers["browserless"]["configured"] is False
     assert providers["brightdata_web_unlocker"]["requires_api_key"] is True
     assert providers["brightdata_web_unlocker"]["risk_level"] == "high"
 
@@ -2997,10 +3000,9 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     assert provider_options["firecrawl"]["requires_api_key"] is True
     assert provider_options["firecrawl"]["configured"] is False
     assert provider_options["firecrawl"]["action_required"] == ["configure_api_key"]
-    assert provider_options["browserless"]["implemented"] is False
+    assert provider_options["browserless"]["implemented"] is True
     assert provider_options["browserless"]["requires_human_approval"] is True
     assert provider_options["browserless"]["action_required"] == [
-        "provider_adapter_not_implemented",
         "configure_api_key",
         "human_approval_required",
     ]
@@ -3226,6 +3228,237 @@ def test_tool_gate_executes_web_extract_firecrawl_provider(
     assert payload["output"]["status_code"] == 200
     assert [event.type for event in state_client.events] == [EventType.tool_called]
     assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_web_extract_browserless_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BROWSERLESS_API_KEY", raising=False)
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-browserless",
+            name="Browserless",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["browserless:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "browserless"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-browserless"],
+                available_service_capabilities={"connector-browserless": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-browserless": ["browserless:api_key"]
+                },
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_browserless_missing_key"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-browserless",
+                "reason": "Extract supplier page content with Browserless.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "BROWSERLESS_API_KEY is not configured"
+
+
+def test_tool_gate_executes_web_extract_browserless_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSERLESS_API_KEY", "browserless-test-key")
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-browserless",
+            name="Browserless",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["browserless:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "browserless"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-browserless"],
+                available_service_capabilities={"connector-browserless": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-browserless": ["browserless:api_key"]
+                },
+            )
+        }
+    )
+
+    def fake_post(
+        url: str,
+        *,
+        params: dict[str, str],
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        assert url == "https://production-sfo.browserless.io/content"
+        assert params == {"token": "browserless-test-key"}
+        assert headers["Content-Type"] == "application/json"
+        assert json == {"url": "https://example.com"}
+        assert timeout == gateway_main.settings.browserless_timeout_seconds
+        return httpx.Response(
+            200,
+            text=(
+                "<html><head><title>Rendered Example</title></head>"
+                "<body><main>Rendered supplier evidence from Browserless.</main></body></html>"
+            ),
+            headers={"content-type": "text/html"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_browserless"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-browserless",
+                "project_id": "project_sourcing",
+                "reason": "Extract supplier page content with Browserless.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["adapter"] == "web.extract"
+    assert payload["output"]["provider"] == "browserless"
+    assert payload["output"]["title"] == "Rendered Example"
+    assert "Rendered supplier evidence from Browserless." in payload["output"]["markdown"]
+    assert payload["output"]["status_code"] == 200
+    assert payload["output"]["metadata"] == {"source_adapter": "browserless.content"}
+    assert [event.type for event in state_client.events] == [EventType.tool_called]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+
+
+def test_tool_gate_marks_web_extract_browserless_challenge_as_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BROWSERLESS_API_KEY", "browserless-test-key")
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-browserless",
+            name="Browserless",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["browserless:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "browserless"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-browserless"],
+                available_service_capabilities={"connector-browserless": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-browserless": ["browserless:api_key"]
+                },
+            )
+        }
+    )
+
+    def fake_post(
+        url: str,
+        *,
+        params: dict[str, str],
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        return httpx.Response(
+            200,
+            text="<html><body>Verify you are human before continuing.</body></html>",
+            headers={"content-type": "text/html"},
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_browserless_blocked"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-browserless",
+                "project_id": "project_sourcing",
+                "reason": "Extract protected supplier page content with Browserless.",
+                "arguments": {"url": "https://example.com/protected"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["error"] == "captcha_or_human_verification"
+    assert payload["output"]["provider"] == "browserless"
+    assert payload["output"]["recommended_action"] == "review_provider_escalation"
+    assert payload["output"]["metadata"]["requires_human_review"] is True
+    provider_options = {
+        option["provider_id"]: option
+        for option in payload["output"]["provider_escalation_options"]
+    }
+    assert provider_options["browserless"]["implemented"] is True
+    assert provider_options["browserless"]["configured"] is True
+    assert provider_options["browserless"]["action_required"] == [
+        "human_approval_required"
+    ]
+    evidence = payload["output"]["review_evidence"]
+    assert evidence["provider"] == "browserless"
+    assert "Verify you are human" in evidence["html_excerpt"]
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
+    assert state_client.audit_logs[1].action == "tool.blocked"
 
 
 def test_tool_gate_creates_connector_job_after_permission_check() -> None:
