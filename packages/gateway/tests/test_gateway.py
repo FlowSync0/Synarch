@@ -1590,6 +1590,34 @@ class FailingToolRunner:
         )
 
 
+class BlockedToolRunner:
+    def __init__(self) -> None:
+        self.calls: list[ToolCallRequest] = []
+
+    def call_tool(
+        self,
+        tool_call: ToolCallRequest,
+        *,
+        state_client: object,
+        control_plane: object,
+        headers: dict[str, str],
+        trace_id: str,
+    ) -> ToolResult:
+        self.calls.append(tool_call)
+        return ToolResult(
+            tool_name=tool_call.tool_name,
+            status=TaskStatus.blocked,
+            output={
+                "authorized": True,
+                "trace_id": trace_id,
+                "service_id": tool_call.service_id,
+                "blocked_reason": "http_access_denied",
+                "requires_human_review": True,
+            },
+            error="http_access_denied",
+        )
+
+
 class FailingThenCompletingToolRunner:
     def __init__(self) -> None:
         self.calls: list[ToolCallRequest] = []
@@ -4893,11 +4921,94 @@ def test_run_next_task_does_not_replay_identical_failed_tool_call() -> None:
     assert completed_payload["failed_tool_errors"] == [
         {"tool_name": "web.fetch", "error": "web.fetch request failed"}
     ]
+    assert completed_payload["blocked_tool_result_count"] == 0
+    assert completed_payload["blocked_tool_names"] == []
+    assert completed_payload["blocked_tool_errors"] == []
     assert completed_payload["tool_names"] == ["web.fetch"]
     assert completed_payload["pending_tool_call_count"] == 1
     assert completed_payload["pending_tool_names"] == ["web.fetch"]
     assert state_client.tasks[0].result is not None
     assert state_client.tasks[0].result["tool_results"][0]["status"] == "failed"
+
+
+def test_run_next_task_counts_blocked_tool_results_in_completion_event() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_blocked_tool_replay",
+            title="Blocked tool replay",
+            goal="Surface blocked source fetches in run telemetry.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_blocked_tool_replay",
+            project_id="project_blocked_tool_replay",
+            title="Fetch protected supplier source",
+            assigned_agent_id="agent-ops-sourcing",
+            acceptance_criteria=["A blocked fetch is surfaced without duplicate execution."],
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.fetch"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-supplier-web"],
+                available_service_capabilities={
+                    "connector-supplier-web": ["web.fetch"],
+                },
+                available_connector_ids=["connector-supplier-web"],
+            )
+        }
+    )
+    runtime_client = RepeatingFailedToolRuntimeClient()
+    tool_runner = BlockedToolRunner()
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=control_plane,
+        memory=FakeMemoryClient(),
+        runtime=runtime_client,
+        tool_runner=tool_runner,
+        max_tool_rounds=3,
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_blocked_tool_replay"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(runtime_client.requests) == 2
+    assert len(tool_runner.calls) == 1
+    assert payload["task"]["status"] == "needs_review"
+    assert payload["tool_results"][0]["status"] == "blocked"
+    assert payload["tool_results"][0]["error"] == "http_access_denied"
+    completed_payload = next(
+        event.payload
+        for event in state_client.events
+        if event.type == EventType.model_call_completed
+    )
+    assert completed_payload["tool_result_count"] == 1
+    assert completed_payload["failed_tool_result_count"] == 0
+    assert completed_payload["failed_tool_names"] == []
+    assert completed_payload["failed_tool_errors"] == []
+    assert completed_payload["blocked_tool_result_count"] == 1
+    assert completed_payload["blocked_tool_names"] == ["web.fetch"]
+    assert completed_payload["blocked_tool_errors"] == [
+        {"tool_name": "web.fetch", "error": "http_access_denied"}
+    ]
 
 
 def test_run_next_task_allows_corrected_tool_call_after_failure() -> None:
@@ -6240,6 +6351,9 @@ def test_run_ready_tasks_records_empty_scheduler_tick() -> None:
         "failed_tool_result_count": 0,
         "failed_tool_names": [],
         "failed_tool_errors": [],
+        "blocked_tool_result_count": 0,
+        "blocked_tool_names": [],
+        "blocked_tool_errors": [],
         "tool_names": [],
         "cost_ids": [],
         "total_cost": 0,

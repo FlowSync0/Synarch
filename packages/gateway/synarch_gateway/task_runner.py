@@ -1454,6 +1454,9 @@ def model_call_completed_event(
             "failed_tool_result_count": failed_tool_result_count(agent_result),
             "failed_tool_names": failed_tool_result_names(agent_result),
             "failed_tool_errors": failed_tool_result_errors(agent_result),
+            "blocked_tool_result_count": blocked_tool_result_count(agent_result),
+            "blocked_tool_names": blocked_tool_result_names(agent_result),
+            "blocked_tool_errors": blocked_tool_result_errors(agent_result),
             "tool_names": tool_result_names(agent_result),
             "pending_tool_call_count": len(agent_result.tool_calls_requested),
             "pending_tool_names": pending_tool_names(agent_result),
@@ -1506,10 +1509,46 @@ def failed_tool_result_names(agent_result: AgentResult) -> list[str]:
 
 
 def failed_tool_result_errors(agent_result: AgentResult) -> list[dict[str, str]]:
+    return tool_result_errors_by_status(agent_result, TaskStatus.failed)
+
+
+def blocked_tool_result_count(agent_result: AgentResult) -> int:
+    return tool_result_count_by_status(agent_result, TaskStatus.blocked)
+
+
+def blocked_tool_result_names(agent_result: AgentResult) -> list[str]:
+    return tool_result_names_by_status(agent_result, TaskStatus.blocked)
+
+
+def blocked_tool_result_errors(agent_result: AgentResult) -> list[dict[str, str]]:
+    return tool_result_errors_by_status(agent_result, TaskStatus.blocked)
+
+
+def tool_result_count_by_status(agent_result: AgentResult, status: TaskStatus) -> int:
+    return sum(1 for tool_result in agent_result.tool_results if tool_result.status == status)
+
+
+def tool_result_names_by_status(
+    agent_result: AgentResult,
+    status: TaskStatus,
+) -> list[str]:
+    return deduplicate(
+        [
+            tool_result.tool_name
+            for tool_result in agent_result.tool_results
+            if tool_result.status == status
+        ]
+    )
+
+
+def tool_result_errors_by_status(
+    agent_result: AgentResult,
+    status: TaskStatus,
+) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for tool_result in agent_result.tool_results:
-        if tool_result.status != TaskStatus.failed:
+        if tool_result.status != status:
             continue
         error = tool_result.error or ""
         key = (tool_result.tool_name, error)
@@ -1675,6 +1714,21 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
             ]
         ),
         "failed_tool_errors": scheduler_failed_tool_errors(batch_result),
+        "blocked_tool_result_count": sum(
+            1
+            for run in batch_result.runs
+            for tool_result in run.tool_results
+            if tool_result.status == TaskStatus.blocked
+        ),
+        "blocked_tool_names": deduplicate(
+            [
+                tool_result.tool_name
+                for run in batch_result.runs
+                for tool_result in run.tool_results
+                if tool_result.status == TaskStatus.blocked
+            ]
+        ),
+        "blocked_tool_errors": scheduler_blocked_tool_errors(batch_result),
         "tool_names": deduplicate(
             [
                 tool_result.tool_name
@@ -1701,11 +1755,24 @@ def scheduler_tick_payload(batch_result: TaskRunBatchResult) -> dict[str, object
 def scheduler_failed_tool_errors(
     batch_result: TaskRunBatchResult,
 ) -> list[dict[str, str]]:
+    return scheduler_tool_errors_by_status(batch_result, TaskStatus.failed)
+
+
+def scheduler_blocked_tool_errors(
+    batch_result: TaskRunBatchResult,
+) -> list[dict[str, str]]:
+    return scheduler_tool_errors_by_status(batch_result, TaskStatus.blocked)
+
+
+def scheduler_tool_errors_by_status(
+    batch_result: TaskRunBatchResult,
+    status: TaskStatus,
+) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     for run in batch_result.runs:
         for tool_result in run.tool_results:
-            if tool_result.status != TaskStatus.failed:
+            if tool_result.status != status:
                 continue
             error = tool_result.error or ""
             key = (tool_result.tool_name, error)
