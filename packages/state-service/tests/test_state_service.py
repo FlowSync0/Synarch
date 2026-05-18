@@ -1457,7 +1457,7 @@ def test_recover_expired_task_lease_needs_review_after_max_attempts() -> None:
     assert events[0]["payload"]["dead_letter_reason"] == "lease_expired"
 
 
-def test_task_review_queue_lists_needs_review_tasks() -> None:
+def test_task_review_queue_lists_reviewable_tasks() -> None:
     client = TestClient(app)
     project_response = client.post(
         "/projects",
@@ -1479,6 +1479,25 @@ def test_task_review_queue_lists_needs_review_tasks() -> None:
         ),
     )
     assert task_response.status_code == 201
+    blocked_task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Blocked web extraction",
+            status="blocked",
+            result={"summary": "web.extract returned http_access_denied."},
+        ),
+    )
+    assert blocked_task_response.status_code == 201
+    queued_task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Queued task",
+            status="queued",
+        ),
+    )
+    assert queued_task_response.status_code == 201
 
     review_response = client.get(
         "/tasks/review-queue",
@@ -1486,7 +1505,10 @@ def test_task_review_queue_lists_needs_review_tasks() -> None:
     )
 
     assert review_response.status_code == 200
-    assert [task["id"] for task in review_response.json()] == [task_response.json()["id"]]
+    assert [task["id"] for task in review_response.json()] == [
+        task_response.json()["id"],
+        blocked_task_response.json()["id"],
+    ]
 
 
 def test_task_review_retry_updates_task_and_allows_start() -> None:
@@ -1543,6 +1565,74 @@ def test_task_review_retry_updates_task_and_allows_start() -> None:
     assert reviewed_task["result"]["review"]["action"] == "retry"
     assert review["event"]["type"] == "task.reviewed"
     assert review["audit_log"]["action"] == "task.reviewed"
+
+    start_response = client.post(f"/tasks/{reviewed_task['id']}/start")
+    assert start_response.status_code == 200
+    assert start_response.json()["status"] == "running"
+
+
+def test_task_review_retry_accepts_blocked_task() -> None:
+    client = TestClient(app)
+    trace_id = "trace_task_review_blocked_retry"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Blocked review",
+            "goal": "Human reviewer can resume blocked work.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Blocked extraction",
+            status="blocked",
+            attempt_count=1,
+            max_attempts=1,
+            result={
+                "summary": "web.extract blocked with http_access_denied.",
+                "tool_results": [
+                    {
+                        "tool_name": "web.extract",
+                        "status": "blocked",
+                        "error": "http_access_denied",
+                    }
+                ],
+            },
+            dead_letter_reason="web_extract_blocked",
+            dead_lettered_at=datetime.now(UTC).isoformat(),
+        ),
+    )
+    assert task_response.status_code == 201
+
+    review_response = client.post(
+        f"/tasks/{task_response.json()['id']}/review-decisions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "hugo",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "action": "retry",
+            "reason": "Human reviewed the blocked evidence and provided a safer retry path.",
+            "description": "Retry with the reviewed source evidence and summarize the blocker.",
+            "acceptance_criteria": ["The retry uses the reviewed blocker context."],
+        },
+    )
+
+    assert review_response.status_code == 200
+    review = review_response.json()
+    reviewed_task = review["task"]
+    assert reviewed_task["status"] == "queued"
+    assert reviewed_task["max_attempts"] == 2
+    assert reviewed_task["dead_letter_reason"] is None
+    assert reviewed_task["dead_lettered_at"] is None
+    assert reviewed_task["result"]["review"]["action"] == "retry"
+    assert reviewed_task["result"]["review"]["next_status"] == "queued"
+    assert review["event"]["payload"]["previous_status"] == "blocked"
+    assert review["event"]["payload"]["next_status"] == "queued"
 
     start_response = client.post(f"/tasks/{reviewed_task['id']}/start")
     assert start_response.status_code == 200

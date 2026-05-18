@@ -311,7 +311,7 @@ class FakeStateClient:
         return [
             task
             for task in self.tasks
-            if task.status == TaskStatus.needs_review
+            if task.status in {TaskStatus.needs_review, TaskStatus.blocked}
             and (project_id is None or task.project_id == project_id)
         ]
 
@@ -324,7 +324,7 @@ class FakeStateClient:
     ) -> TaskReviewResult:
         self.headers.append(headers)
         task = next(task for task in self.tasks if task.id == task_id)
-        if task.status != TaskStatus.needs_review:
+        if task.status not in {TaskStatus.needs_review, TaskStatus.blocked}:
             raise StateServiceRequestError(409, f"Task is not in review: {task.status}")
         next_status = {
             "retry": TaskStatus.queued,
@@ -6613,6 +6613,27 @@ def test_list_task_review_queue_reads_state_service() -> None:
             dead_lettered_at=datetime.now(UTC),
         )
     )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_gateway_blocked_review",
+            project_id="project_gateway_review",
+            title="Blocked gateway task",
+            status=TaskStatus.blocked,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Reviewer can see blocked tasks."],
+            result={"summary": "Tool blocked."},
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_gateway_queued",
+            project_id="project_gateway_review",
+            title="Queued gateway task",
+            status=TaskStatus.queued,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Queued task is not in review queue."],
+        )
+    )
     app.dependency_overrides[get_state_client] = lambda: state_client
 
     try:
@@ -6624,7 +6645,10 @@ def test_list_task_review_queue_reads_state_service() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 200
-    assert [task["id"] for task in response.json()] == ["task_gateway_review"]
+    assert [task["id"] for task in response.json()] == [
+        "task_gateway_review",
+        "task_gateway_blocked_review",
+    ]
 
 
 def test_apply_task_review_decision_forwards_reviewer_headers() -> None:
@@ -6671,6 +6695,44 @@ def test_apply_task_review_decision_forwards_reviewer_headers() -> None:
         "x-synarch-actor-id": "hugo",
         "x-synarch-trace-id": "trace_gateway_review",
     }
+
+
+def test_apply_task_review_decision_retries_blocked_task_through_gateway() -> None:
+    state_client = FakeStateClient()
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_gateway_blocked_retry",
+            project_id="project_gateway_blocked_retry",
+            title="Retry blocked task through gateway",
+            status=TaskStatus.blocked,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Reviewer can retry this blocked task."],
+            result={"summary": "web.extract blocked."},
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/task_gateway_blocked_retry/review-decisions",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_gateway_blocked_review",
+            },
+            json={
+                "action": "retry",
+                "reason": "Human reviewed the blocked tool output.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["status"] == "queued"
+    assert payload["task"]["result"]["review"]["action"] == "retry"
+    assert payload["event"]["payload"]["next_status"] == "queued"
 
 
 def test_list_memory_items_filters_review_queue() -> None:

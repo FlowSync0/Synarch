@@ -1675,7 +1675,7 @@ def list_task_review_queue(project_id: str | None = None) -> list[TaskRecord]:
     tasks = [
         task
         for task in REPOSITORIES.tasks.list_records()
-        if task.status == TaskStatus.needs_review
+        if is_task_reviewable(task)
         and (project_id is None or task.project_id == project_id)
     ]
     return sorted(tasks, key=lambda task: task.dead_lettered_at or task.created_at)
@@ -1964,6 +1964,10 @@ def validate_review_assignment(task: TaskRecord) -> None:
         )
 
 
+def is_task_reviewable(task: TaskRecord) -> bool:
+    return task.status in {TaskStatus.needs_review, TaskStatus.blocked}
+
+
 def reviewed_task_result(
     task: TaskRecord,
     *,
@@ -2060,7 +2064,7 @@ def apply_task_review_decision(
     request: Request,
 ) -> TaskReviewResult:
     task = read_record(REPOSITORIES.tasks, task_id, "task")
-    if task.status != TaskStatus.needs_review:
+    if not is_task_reviewable(task):
         raise HTTPException(status_code=409, detail=f"Task is not in review: {task.status}")
 
     audit_context = audit_context_from_request(request)
@@ -2071,7 +2075,7 @@ def apply_task_review_decision(
         REPOSITORIES.tasks,
         task_id,
         updated_task,
-        {"status": TaskStatus.needs_review},
+        {"status": task.status},
     )
     if record is None:
         current_task = read_record(REPOSITORIES.tasks, task_id, "task")
