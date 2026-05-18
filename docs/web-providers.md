@@ -42,6 +42,10 @@ or scraper hits CAPTCHA, login, 2FA, or a robots block, the correct task status 
 different connector, provide credentials, choose an official API, or explicitly enable a paid
 unblocking provider.
 
+`local_playwright` marks obvious CAPTCHA, human-verification, authentication, 401/403, and 429 pages
+as `ToolResult.status=blocked`. The tool output includes `blocked_reason`, `block_signals`,
+`requires_human_review=true`, provider metadata, and the same trace ID carried by the tool gate.
+
 ## Provider Selection
 
 - Use `local_fetch` first for cheap public pages without JavaScript.

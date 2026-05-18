@@ -804,15 +804,15 @@ class TaskRunner:
                 )
                 if failed_pending_tools:
                     combined_actions.append(
-                        "Tool loop paused because requested tool calls already failed."
+                        "Tool loop paused because requested tool calls already failed or blocked."
                     )
                     agent_result = agent_result.model_copy(
                         update={
                             "status": TaskStatus.needs_review,
                             "summary": (
                                 "Tool loop paused because requested tool calls already "
-                                "failed with the same arguments; corrected tool calls "
-                                f"are required for: {', '.join(failed_pending_tools)}."
+                                "failed or blocked with the same arguments; corrected "
+                                f"tool calls are required for: {', '.join(failed_pending_tools)}."
                             ),
                         }
                     )
@@ -830,7 +830,7 @@ class TaskRunner:
                 combined_actions.append(f"Tool gate executed {tool_result.tool_name}.")
                 if tool_result.status == TaskStatus.completed:
                     completed_tool_call_keys.add(tool_call_key)
-                if tool_result.status == TaskStatus.failed:
+                if tool_result.status != TaskStatus.completed:
                     failed_tool_call_keys.add(tool_call_key)
 
             completed_tool_rounds += 1

@@ -1268,6 +1268,31 @@ class GatewayToolReadinessChecker:
         return blockers
 
 
+def tool_result_status_from_execution_output(
+    execution_output: dict[str, object],
+) -> TaskStatus:
+    raw_status = execution_output.get("tool_status")
+    if not isinstance(raw_status, str):
+        return TaskStatus.completed
+    try:
+        return TaskStatus(raw_status)
+    except ValueError:
+        return TaskStatus.completed
+
+
+def tool_result_error_from_execution_output(
+    execution_output: dict[str, object],
+    status: TaskStatus,
+) -> str | None:
+    if status == TaskStatus.completed:
+        return None
+    for key in ("error", "blocked_reason", "review_reason"):
+        value = execution_output.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"Tool returned non-completed status: {status.value}"
+
+
 def execute_tool_call_through_gate(
     tool_call: ToolCallRequest,
     *,
@@ -1371,8 +1396,31 @@ def execute_tool_call_through_gate(
             error=detail,
         )
 
+    tool_status = tool_result_status_from_execution_output(execution_output)
+    tool_error = tool_result_error_from_execution_output(execution_output, tool_status)
+    if tool_status != TaskStatus.completed:
+        state_client.create_event(
+            tool_call_event(
+                tool_call,
+                EventType.tool_failed,
+                trace_id,
+                error=tool_error,
+            ),
+            headers=headers,
+        )
+        state_client.create_audit_log(
+            tool_call_audit(
+                tool_call,
+                f"tool.{tool_status.value}",
+                trace_id,
+                error=tool_error,
+            ),
+            headers=headers,
+        )
+
     return ToolResult(
         tool_name=tool_call.tool_name,
+        status=tool_status,
         output={
             "authorized": True,
             "trace_id": trace_id,
@@ -1381,6 +1429,7 @@ def execute_tool_call_through_gate(
             "service_id": tool_call.service_id,
             **execution_output,
         },
+        error=tool_error,
     )
 
 
@@ -2071,13 +2120,14 @@ def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, obje
     html = string_payload_value(page_result.get("html")) or ""
     title, excerpt = summarize_fetched_text(html)
     markdown, truncated = truncate_text_bytes(excerpt, max_bytes=max_bytes)
-    return {
+    status_code = integer_payload_value(page_result.get("status_code"), default=0)
+    output = {
         "executed": True,
         "adapter": "web.extract",
         "provider": "local_playwright",
         "url": url,
         "final_url": string_payload_value(page_result.get("final_url")) or url,
-        "status_code": integer_payload_value(page_result.get("status_code"), default=0),
+        "status_code": status_code,
         "content_type": "text/html",
         "bytes_read": len(markdown.encode("utf-8")),
         "truncated": truncated,
@@ -2087,6 +2137,74 @@ def extract_with_local_playwright(url: str, *, max_bytes: int) -> dict[str, obje
             "browser": "chromium",
             "wait_until": settings.web_extract_playwright_wait_until,
         },
+    }
+    blocked = web_extraction_blocker(
+        status_code=status_code,
+        title=string_payload_value(output.get("title")) or "",
+        markdown=markdown,
+    )
+    if blocked is not None:
+        output.update(blocked)
+        metadata = output["metadata"]
+        if isinstance(metadata, dict):
+            metadata["requires_human_review"] = True
+            metadata["block_signals"] = blocked["block_signals"]
+    return output
+
+
+def web_extraction_blocker(
+    *,
+    status_code: int,
+    title: str,
+    markdown: str,
+) -> dict[str, object] | None:
+    if status_code in {401, 403}:
+        return web_blocked_result("http_access_denied", ("http_status",))
+    if status_code == 429:
+        return web_blocked_result("rate_limited_or_bot_check", ("http_status",))
+
+    normalized_title = title.casefold()
+    normalized_text = f"{title}\n{markdown}".casefold()
+    signal_sets: tuple[tuple[str, tuple[str, ...]], ...] = (
+        (
+            "captcha_or_human_verification",
+            (
+                "captcha",
+                "verify you are human",
+                "verify you're human",
+                "checking your browser",
+                "cloudflare ray id",
+                "are you a robot",
+            ),
+        ),
+        (
+            "authentication_required",
+            (
+                "sign in to continue",
+                "log in to continue",
+                "login required",
+                "please sign in",
+                "please log in",
+            ),
+        ),
+    )
+    for reason, phrases in signal_sets:
+        matches = tuple(
+            phrase
+            for phrase in phrases
+            if phrase in normalized_text or phrase in normalized_title
+        )
+        if matches:
+            return web_blocked_result(reason, matches)
+    return None
+
+
+def web_blocked_result(reason: str, signals: tuple[str, ...]) -> dict[str, object]:
+    return {
+        "tool_status": TaskStatus.blocked,
+        "blocked_reason": reason,
+        "requires_human_review": True,
+        "block_signals": list(signals),
     }
 
 

@@ -2797,6 +2797,88 @@ def test_tool_gate_executes_web_extract_local_playwright_provider(
     assert state_client.audit_logs[0].action == "tool.allowed"
 
 
+def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-web-browser-local",
+            name="Local Playwright Browser",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "local_playwright"},
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.extract"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-web-browser-local"],
+                available_service_capabilities={
+                    "connector-web-browser-local": ["web.extract"]
+                },
+                available_connector_ids=["connector-web-browser-local"],
+            )
+        }
+    )
+
+    def fake_fetch_with_local_playwright(url: str) -> dict[str, object]:
+        return {
+            "final_url": url,
+            "status_code": 200,
+            "title": "Security check",
+            "html": "<html><body>Verify you are human before continuing.</body></html>",
+        }
+
+    monkeypatch.setattr(
+        gateway_main,
+        "fetch_with_local_playwright",
+        fake_fetch_with_local_playwright,
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_blocked"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-web-browser-local",
+                "project_id": "project_sourcing",
+                "reason": "Extract browser-rendered supplier page content.",
+                "arguments": {"url": "https://example.com/protected"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["error"] == "captcha_or_human_verification"
+    assert payload["output"]["tool_status"] == "blocked"
+    assert payload["output"]["blocked_reason"] == "captcha_or_human_verification"
+    assert payload["output"]["requires_human_review"] is True
+    assert payload["output"]["metadata"]["requires_human_review"] is True
+    assert "verify you are human" in payload["output"]["block_signals"]
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+    ]
+    assert state_client.audit_logs[0].action == "tool.allowed"
+    assert state_client.audit_logs[1].action == "tool.blocked"
+
+
 def test_web_extract_rejects_provider_service_mismatch() -> None:
     state_client = FakeStateClient()
     state_client.services.append(
@@ -4792,10 +4874,10 @@ def test_run_next_task_does_not_replay_identical_failed_tool_call() -> None:
     assert len(tool_runner.calls) == 1
     assert payload["task"]["status"] == "needs_review"
     assert payload["agent_result"]["summary"] == (
-        "Tool loop paused because requested tool calls already failed with the same "
-        "arguments; corrected tool calls are required for: web.fetch."
+        "Tool loop paused because requested tool calls already failed or blocked with the "
+        "same arguments; corrected tool calls are required for: web.fetch."
     )
-    assert "Tool loop paused because requested tool calls already failed." in (
+    assert "Tool loop paused because requested tool calls already failed or blocked." in (
         payload["agent_result"]["actions_taken"]
     )
     assert payload["tool_results"][0]["status"] == "failed"
