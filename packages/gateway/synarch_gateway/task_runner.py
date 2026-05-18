@@ -806,9 +806,10 @@ class TaskRunner:
                     combined_actions.append(
                         "Tool loop paused because requested tool calls already failed or blocked."
                     )
+                    next_status = unresolved_tool_result_review_status(tool_results)
                     agent_result = agent_result.model_copy(
                         update={
-                            "status": TaskStatus.needs_review,
+                            "status": next_status,
                             "summary": (
                                 "Tool loop paused because requested tool calls already "
                                 "failed or blocked with the same arguments; corrected "
@@ -873,9 +874,10 @@ class TaskRunner:
             combined_actions.append(
                 "Completion overridden because tool results still need review."
             )
+            next_status = unresolved_tool_result_review_status(tool_results)
             agent_result = agent_result.model_copy(
                 update={
-                    "status": TaskStatus.needs_review,
+                    "status": next_status,
                     "summary": (
                         "Task cannot be completed because tool results still need "
                         f"review: {', '.join(unresolved_tools)}."
@@ -1093,21 +1095,53 @@ def pending_tool_names(agent_result: AgentResult) -> list[str]:
 def unresolved_non_completed_tool_result_summaries(
     tool_results: list[ToolResult],
 ) -> list[str]:
+    return [
+        non_completed_tool_result_summary(tool_result)
+        for tool_result in unresolved_non_completed_tool_results(tool_results)
+    ]
+
+
+def unresolved_non_completed_tool_results(
+    tool_results: list[ToolResult],
+) -> list[ToolResult]:
     completed_tool_names: set[str] = set()
-    unresolved_summaries: list[str] = []
-    seen_summaries: set[str] = set()
+    unresolved_results: list[ToolResult] = []
+    seen_keys: set[str] = set()
     for tool_result in reversed(tool_results):
         if tool_result.status == TaskStatus.completed:
             completed_tool_names.add(tool_result.tool_name)
             continue
         if tool_result.tool_name in completed_tool_names:
             continue
-        summary = non_completed_tool_result_summary(tool_result)
-        if summary in seen_summaries:
+        key = non_completed_tool_result_key(tool_result)
+        if key in seen_keys:
             continue
-        unresolved_summaries.append(summary)
-        seen_summaries.add(summary)
-    return list(reversed(unresolved_summaries))
+        unresolved_results.append(tool_result)
+        seen_keys.add(key)
+    return list(reversed(unresolved_results))
+
+
+def non_completed_tool_result_key(tool_result: ToolResult) -> str:
+    return json.dumps(
+        {
+            "tool_name": tool_result.tool_name,
+            "status": str(tool_result.status),
+            "error": tool_result.error,
+            "blocked_reason": tool_result.output.get("blocked_reason"),
+            "error_output": tool_result.output.get("error"),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def unresolved_tool_result_review_status(tool_results: list[ToolResult]) -> TaskStatus:
+    if any(
+        tool_result.status == TaskStatus.blocked
+        for tool_result in unresolved_non_completed_tool_results(tool_results)
+    ):
+        return TaskStatus.blocked
+    return TaskStatus.needs_review
 
 
 def non_completed_tool_result_summary(tool_result: ToolResult) -> str:

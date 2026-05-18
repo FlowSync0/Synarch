@@ -4331,6 +4331,7 @@ def test_run_next_task_executes_first_ready_task() -> None:
     assert runtime_client.requests[0].project is not None
     assert runtime_client.requests[0].project.goal == "Deliver a verified backend slice."
     assert payload["task"]["status"] == "needs_review"
+    assert payload["agent_result"]["status"] == "needs_review"
     assert payload["task"]["result"]["summary"] == "Runtime stub prepared the task for review."
     assert payload["world_view"]["agent_id"] == "agent-dev"
     assert payload["memory_context"]["summary"] == "Fake context assembled."
@@ -5145,7 +5146,8 @@ def test_run_next_task_counts_blocked_tool_results_in_completion_event() -> None
     payload = response.json()
     assert len(runtime_client.requests) == 2
     assert len(tool_runner.calls) == 1
-    assert payload["task"]["status"] == "needs_review"
+    assert payload["task"]["status"] == "blocked"
+    assert payload["agent_result"]["status"] == "blocked"
     assert payload["tool_results"][0]["status"] == "blocked"
     assert payload["tool_results"][0]["error"] == "http_access_denied"
     completed_payload = next(
@@ -5225,8 +5227,8 @@ def test_run_next_task_rejects_completion_with_unresolved_blocked_tool() -> None
     payload = response.json()
     assert len(runtime_client.requests) == 2
     assert len(tool_runner.calls) == 1
-    assert payload["task"]["status"] == "needs_review"
-    assert payload["agent_result"]["status"] == "needs_review"
+    assert payload["task"]["status"] == "blocked"
+    assert payload["agent_result"]["status"] == "blocked"
     assert payload["agent_result"]["summary"] == (
         "Task cannot be completed because tool results still need review: "
         "web.fetch blocked: http_access_denied."
