@@ -19,9 +19,10 @@ permission, credential, event, and audit gates.
 
 - `GET /web/providers` returns the provider catalog, implemented status, key requirement, configured
   status, risk level, and whether human approval is required before use.
-- Local development needs the Python `playwright` package and Chromium browser bundle. Docker installs
-  Chromium automatically for the gateway image; outside Docker run `python -m playwright install chromium`
-  after installing `packages/gateway`.
+- Local development needs the Python `playwright` package and Chromium browser bundle. Synarch pins
+  Playwright in `packages/gateway/pyproject.toml` so the Python package and browser bundle stay
+  reproducible. Docker installs Chromium automatically for the gateway image; outside Docker run
+  `python -m playwright install chromium` after installing `packages/gateway`.
 - `web.extract` supports:
   - `local_fetch`: no key, uses the existing public-HTTP fetch path and returns normalized markdown-like text.
   - `local_playwright`: no key, launches local Chromium through Playwright and extracts browser-rendered HTML text.
