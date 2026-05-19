@@ -1115,10 +1115,36 @@ function modelPolicyShortLabel(policyId?: string | null): string {
   return policyId.replace(/^policy-/, "");
 }
 
+function connectorJobBlockedReviewDetail(lastRun?: ConnectorJobRunRecord): string | null {
+  if (lastRun?.status !== "blocked") {
+    return null;
+  }
+
+  const toolResult = isRecord(lastRun.output.tool_result) ? lastRun.output.tool_result : null;
+  const toolOutput = toolResult && isRecord(toolResult.output) ? toolResult.output : null;
+  const candidates = [
+    lastRun.error,
+    lastRun.output.blocked_reason,
+    lastRun.output.reason,
+    toolResult?.error,
+    toolOutput?.blocked_reason,
+    toolOutput?.recommended_action
+  ];
+  const detail = candidates.find((value): value is string => {
+    return typeof value === "string" && value.trim().length > 0;
+  });
+  return detail ? `human review: ${detail.trim()}` : "human review required";
+}
+
 function connectorJobStopDetail(
   job: ConnectorJobRecord,
   lastRun?: ConnectorJobRunRecord
 ): string | null {
+  const blockedDetail = connectorJobBlockedReviewDetail(lastRun);
+  if (blockedDetail) {
+    return blockedDetail;
+  }
+
   const stopReason = lastRun?.output.stop_reason ?? lastRun?.output.reason;
   if (typeof stopReason === "string" && stopReason.trim().length > 0) {
     return stopReason;
@@ -2082,6 +2108,9 @@ export default function DashboardPage() {
         (auditLog) => traceIdForConnectorRecord(auditLog) === effectiveSelectedConnectorTraceId
       )
     : selectedConnectorAuditLogs.slice(0, 6);
+  const blockedConnectorJobCount = visibleConnectorJobRows.filter((job) => {
+    return connectorJobRunsByJobId.get(job.id)?.[0]?.status === "blocked";
+  }).length;
   const connectorJobMode =
     connectorJobsQuery.isLoading || connectorJobRunsQuery.isLoading || auditLogsQuery.isLoading
       ? "syncing"
@@ -2097,7 +2126,7 @@ export default function DashboardPage() {
     connectorJobMode === "live"
       ? `${visibleConnectorJobRows.length}/${connectorJobRows.length} jobs visibles / ${
           connectorJobRunsQuery.data?.length ?? 0
-        } runs`
+        } runs / ${blockedConnectorJobCount} blocked`
       : connectorJobMode === "syncing"
         ? "Loading connector jobs from state-service"
         : "State-service connector jobs or audit logs unavailable";
@@ -3616,6 +3645,7 @@ export default function DashboardPage() {
                 const lastRun = connectorJobRunsByJobId.get(job.id)?.[0];
                 const policyLabels = connectorJobPolicyLabels(job);
                 const stopDetail = connectorJobStopDetail(job, lastRun);
+                const blockedReviewDetail = connectorJobBlockedReviewDetail(lastRun);
                 const nextRunLabel =
                   job.status === "active"
                     ? job.next_run_at
@@ -3706,6 +3736,12 @@ export default function DashboardPage() {
                             >
                               last {lastRun.status}
                             </span>
+                            {blockedReviewDetail ? (
+                              <span className="inline-flex items-center gap-1 rounded-md bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn ring-1 ring-warn/15">
+                                <AlertTriangle size={12} />
+                                review
+                              </span>
+                            ) : null}
                             <span className="min-w-0 truncate text-[11px] text-muted">
                               {formatRelativeTimestamp(lastRun.completed_at)}
                             </span>
@@ -3784,7 +3820,11 @@ export default function DashboardPage() {
                           <button
                             className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
                             disabled={pendingConnectorJobAction}
-                            title="Resume connector job"
+                            title={
+                              blockedReviewDetail
+                                ? "Resume connector job after review"
+                                : "Resume connector job"
+                            }
                             type="button"
                             onClick={() =>
                               connectorJobActionMutation.mutate({
