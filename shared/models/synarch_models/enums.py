@@ -139,4 +139,5 @@ class ConnectorJobStatus(StrEnum):
 class ConnectorJobRunStatus(StrEnum):
     completed = "completed"
     failed = "failed"
+    blocked = "blocked"
     skipped = "skipped"

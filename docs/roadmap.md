@@ -292,8 +292,8 @@ Progress:
   recording `service_health.checked` and `services.health_checked` with the same trace ID.
 - Done: state-service can create active cron/webhook connector jobs, record bounded job runs, and
   stop jobs through traceable `connector_job.*` events and audit logs.
-- Done: state-service can tick active connector jobs with a bounded limit, recording explicit
-  `skipped` runs and `connector_job.tick` audit/event traces until real connector adapters are wired.
+- Done: state-service can tick active connector jobs with a bounded limit, recording completed,
+  failed, blocked, and skipped runs with `connector_job.tick` audit/event traces.
 - Done: gateway can execute connector jobs through the existing tool gate, preserving permission,
   service capability, credential scope, tool event, connector run, and audit boundaries.
 - Done: gateway can execute active connector jobs in bounded batches and record a durable
@@ -306,6 +306,8 @@ Progress:
   `output.stop_job`, and `metadata.max_runs` stops bounded follow-up loops after N recorded runs.
 - Done: failed connector job runs can use `metadata.failure_cooldown_seconds` for retry backoff,
   and `metadata.max_failures` stops jobs after a bounded number of failed runs.
+- Done: blocked connector job runs stop the connector job for human review instead of retrying
+  indefinitely.
 - Done: frontend reads connector jobs and connector job runs through state-service proxy routes,
   showing status, next run, policies, latest run/error, and stop detail in the dashboard.
 - Done: connector jobs can be resumed with a durable `connector_job.resumed` event/audit, and

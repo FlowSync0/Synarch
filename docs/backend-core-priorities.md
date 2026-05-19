@@ -152,6 +152,8 @@ Implemented baseline:
 - `connector.job.create` lets an authorized agent create a durable cron/webhook connector job after the same service and tool gate.
 - `connector.job.list` lets an authorized agent inspect its own durable connector jobs through the same service and tool gate.
 - `connector.job.stop` lets an authorized agent stop its own durable connector job after the same service and tool gate.
+- Connector job runs distinguish `blocked` from `failed`; blocked runs stop the job for human
+  review instead of retrying indefinitely.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
 - `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.

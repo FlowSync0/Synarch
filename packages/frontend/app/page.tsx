@@ -182,6 +182,7 @@ const connectorJobStatusClass: Record<string, string> = {
 const connectorJobRunStatusClass: Record<string, string> = {
   completed: "bg-ok-soft text-ok ring-ok/15",
   failed: "bg-risk-soft text-risk ring-risk/15",
+  blocked: "bg-warn-soft text-warn ring-warn/15",
   skipped: "bg-warn-soft text-warn ring-warn/15"
 };
 

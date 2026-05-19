@@ -46,6 +46,7 @@ def test_connector_job_result_summary_counts_statuses() -> None:
             "runs": [
                 {"run": {"status": "completed"}},
                 {"run": {"status": "failed"}},
+                {"run": {"status": "blocked"}},
                 {"run": {"status": "skipped"}},
             ],
         }
@@ -53,9 +54,10 @@ def test_connector_job_result_summary_counts_statuses() -> None:
 
     assert summary == {
         "stop_reason": "max_jobs_reached",
-        "run_count": 3,
+        "run_count": 4,
         "completed_run_count": 1,
         "failed_run_count": 1,
+        "blocked_run_count": 1,
         "skipped_run_count": 1,
     }
 

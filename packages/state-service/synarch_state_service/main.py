@@ -490,6 +490,8 @@ def validate_connector_job(job: ConnectorJobRecord) -> None:
 def validate_connector_job_run_request(run_request: ConnectorJobRunRequest) -> None:
     if run_request.status == ConnectorJobRunStatus.failed and not run_request.error:
         raise HTTPException(status_code=400, detail="Failed connector job runs require error")
+    if run_request.status == ConnectorJobRunStatus.blocked and not run_request.error:
+        raise HTTPException(status_code=400, detail="Blocked connector job runs require error")
     if (
         run_request.status == ConnectorJobRunStatus.completed
         and run_request.error is not None
@@ -596,6 +598,9 @@ def connector_job_run_stop_reason(
         and connector_job_run_count(job.id, ConnectorJobRunStatus.failed) >= max_failures
     ):
         return f"Connector job reached max_failures={max_failures}."
+
+    if run.status == ConnectorJobRunStatus.blocked:
+        return "Connector job blocked and requires human review."
 
     max_runs = connector_job_max_runs(job)
     if max_runs is not None and connector_job_run_count(job.id) >= max_runs:

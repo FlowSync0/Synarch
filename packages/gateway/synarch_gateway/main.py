@@ -1482,11 +1482,7 @@ def connector_job_execution_run_request(
         trace_id=trace_id,
         raise_on_failure=False,
     )
-    run_status = (
-        ConnectorJobRunStatus.completed
-        if tool_result.status == TaskStatus.completed
-        else ConnectorJobRunStatus.failed
-    )
+    run_status = connector_job_run_status_from_tool_result(tool_result)
     return ConnectorJobRunRequest(
         status=run_status,
         triggered_by_type=ActorType.service,
@@ -1497,8 +1493,18 @@ def connector_job_execution_run_request(
             "service_id": job.service_id,
             "tool_result": tool_result.model_dump(mode="json"),
         },
-        error=tool_result.error if run_status == ConnectorJobRunStatus.failed else None,
+        error=tool_result.error
+        if run_status in {ConnectorJobRunStatus.failed, ConnectorJobRunStatus.blocked}
+        else None,
     )
+
+
+def connector_job_run_status_from_tool_result(tool_result: ToolResult) -> ConnectorJobRunStatus:
+    if tool_result.status == TaskStatus.completed:
+        return ConnectorJobRunStatus.completed
+    if tool_result.status == TaskStatus.blocked:
+        return ConnectorJobRunStatus.blocked
+    return ConnectorJobRunStatus.failed
 
 
 def connector_job_tool_call(

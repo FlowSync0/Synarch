@@ -10,7 +10,7 @@ export type ProjectStatus =
 export type Priority = "low" | "medium" | "high" | "critical";
 export type ConnectorJobKind = "cron" | "webhook";
 export type ConnectorJobStatus = "active" | "stopped";
-export type ConnectorJobRunStatus = "completed" | "failed" | "skipped";
+export type ConnectorJobRunStatus = "completed" | "failed" | "blocked" | "skipped";
 export type ConnectorActorType = "user" | "agent" | "system" | "service";
 
 export type ProjectRecord = {

@@ -4312,6 +4312,109 @@ def test_connector_job_run_ready_executes_bounded_jobs_and_records_tick(
     ]
 
 
+def test_connector_job_run_ready_records_blocked_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-web-browser-local",
+            name="Local Playwright Browser",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "local_playwright"},
+        )
+    )
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="connector-job-protected-page",
+            service_id="connector-web-browser-local",
+            project_id="project_sourcing",
+            task_id="task_supplier_followup",
+            owner_agent_id="agent-ops-sourcing",
+            kind="cron",
+            schedule="*/15 * * * *",
+            purpose="Check protected supplier page.",
+            created_by_type="agent",
+            created_by_id="agent-ops-sourcing",
+            metadata={
+                "tool_name": "web.extract",
+                "arguments": {
+                    "url": "https://example.com/protected",
+                    "provider": "local_playwright",
+                },
+            },
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(
+                    allowed_tools=["web.extract"],
+                    denied_tools=[],
+                ),
+                available_services=["connector-web-browser-local"],
+                available_service_capabilities={
+                    "connector-web-browser-local": ["web.extract"]
+                },
+            )
+        }
+    )
+
+    def fake_fetch_with_local_playwright(url: str) -> dict[str, object]:
+        assert url == "https://example.com/protected"
+        return {
+            "final_url": url,
+            "status_code": 403,
+            "title": "Access denied",
+            "html": "<html><body>Access denied.</body></html>",
+        }
+
+    monkeypatch.setattr(
+        gateway_main,
+        "fetch_with_local_playwright",
+        fake_fetch_with_local_playwright,
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/connector-jobs/run-ready",
+            params={"project_id": "project_sourcing", "max_jobs": 1},
+            headers={"X-Synarch-Trace-Id": "trace_connector_job_blocked"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    run = payload["runs"][0]["run"]
+    assert run["status"] == "blocked"
+    assert run["error"] == "http_access_denied"
+    tool_result = run["output"]["tool_result"]
+    assert tool_result["status"] == "blocked"
+    assert tool_result["error"] == "http_access_denied"
+    assert tool_result["output"]["requires_human_review"] is True
+    assert payload["tick_event"]["payload"]["run_statuses"] == ["blocked"]
+    assert [event.type for event in state_client.events] == [
+        EventType.tool_called,
+        EventType.tool_failed,
+        EventType.connector_job_run_recorded,
+        EventType.connector_job_tick,
+    ]
+    assert [audit.action for audit in state_client.audit_logs] == [
+        "tool.allowed",
+        "tool.blocked",
+        "connector_job.run_recorded",
+        "connector_job.tick",
+    ]
+
+
 def test_connector_job_run_ready_records_empty_tick() -> None:
     state_client = FakeStateClient()
     app.dependency_overrides[get_state_client] = lambda: state_client

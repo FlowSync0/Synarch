@@ -90,6 +90,7 @@ def connector_job_result_summary(payload: Any) -> dict[str, Any]:
             "run_count": 0,
             "completed_run_count": 0,
             "failed_run_count": 0,
+            "blocked_run_count": 0,
             "skipped_run_count": 0,
         }
     runs = payload.get("runs", [])
@@ -101,6 +102,7 @@ def connector_job_result_summary(payload: Any) -> dict[str, Any]:
         "run_count": len(runs),
         "completed_run_count": statuses.count("completed"),
         "failed_run_count": statuses.count("failed"),
+        "blocked_run_count": statuses.count("blocked"),
         "skipped_run_count": statuses.count("skipped"),
     }
 

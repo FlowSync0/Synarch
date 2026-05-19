@@ -75,7 +75,7 @@ GoalEnvelope
   -> Model Gateway can return deterministic typed completions through ModelCompletionResponse
   -> Agent Runtime can call Model Gateway instead of directly owning provider-specific calls
   -> Durable connector jobs can be created, run-recorded, and stopped with event/audit traces
-  -> Bounded connector-job tick records explicit skipped runs until real adapters are wired
+  -> Bounded connector-job tick records completed, failed, blocked, and skipped runs
   -> Gateway connector-job execution uses the existing tool gate before recording runs
   -> Authorized agents can create durable connector jobs through `connector.job.create`
   -> Authorized agents can inspect their own connector jobs through `connector.job.list`
@@ -87,6 +87,7 @@ GoalEnvelope
   -> Cron connector jobs update next_run_at after each run and are skipped until due
   -> Connector jobs can self-stop through run output or metadata.max_runs
   -> Failed connector jobs back off and can stop after metadata.max_failures
+  -> Blocked connector job runs stop the job for human review instead of retrying forever
   -> Frontend connector panel reads state-service connector jobs/runs through same-origin proxies
   -> Frontend connector controls run, stop, and resume jobs through Gateway with event/audit traces
   -> Frontend connector history reads audit logs and shows job runs/events/audits by trace_id
@@ -197,7 +198,7 @@ make connector-job-worker
 
 This worker is not started by default. Each tick calls Gateway `/connector-jobs/run-ready` with an
 explicit `max_jobs` limit. Gateway only selects connector jobs whose `next_run_at` is empty or due.
-The worker writes structured JSON stdout with run counts, completed/failed/skipped counts,
+The worker writes structured JSON stdout with run counts, completed/failed/blocked/skipped counts,
 timestamps, duration, and transient errors.
 
 Connector jobs can stop themselves without a separate manual request when a recorded run outputs
@@ -206,6 +207,9 @@ bounded follow-up loop after N recorded runs.
 
 Failed connector runs can use `metadata.failure_cooldown_seconds` to delay the next retry. A job can
 also declare `metadata.max_failures` to stop after a bounded number of failed runs.
+
+Blocked connector runs stop the job immediately with a human-review reason, so CAPTCHA, access, or
+credential blocks do not loop indefinitely.
 
 Run one memory compaction policy tick for a known scope with:
 

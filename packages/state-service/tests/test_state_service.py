@@ -1017,6 +1017,129 @@ def test_connector_job_failure_policy_backs_off_and_stops_after_max_failures() -
     ]
 
 
+def test_connector_job_blocked_run_stops_for_human_review() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_job_blocked_policy"
+    agent_response = client.post(
+        "/agents",
+        json={
+            "id": "agent-ops-blocked-policy",
+            "name": "IA Ops Blocked Policy",
+            "role": "Supplier blocked-run owner",
+            "division": "ops-sourcing",
+        },
+    )
+    assert agent_response.status_code == 201
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-supplier-blocked-policy",
+            "name": "Supplier Blocked Connector",
+            "kind": "tool_provider",
+            "capabilities": ["web.extract"],
+            "allowed_divisions": ["ops-sourcing"],
+        },
+    )
+    assert service_response.status_code == 201
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier blocked policy",
+            "goal": "Stop connector jobs that require human review.",
+            "owner_agent_id": "agent-ops-blocked-policy",
+        },
+    )
+    assert project_response.status_code == 201
+    project_id = project_response.json()["id"]
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_id,
+            "Review supplier protection page",
+            assigned_agent_id="agent-ops-blocked-policy",
+            required_tools=["web.extract"],
+        ),
+    )
+    assert task_response.status_code == 201
+    job_response = client.post(
+        "/connector-jobs",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-blocked-policy",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "connector-job-blocked-policy",
+            "service_id": "connector-supplier-blocked-policy",
+            "project_id": project_id,
+            "task_id": task_response.json()["id"],
+            "owner_agent_id": "agent-ops-blocked-policy",
+            "kind": "cron",
+            "schedule": "*/5 * * * *",
+            "purpose": "Retry supplier extraction unless human review is required.",
+            "created_by_type": "agent",
+            "created_by_id": "agent-ops-blocked-policy",
+            "metadata": {"cooldown_seconds": 60},
+        },
+    )
+    assert job_response.status_code == 201
+
+    missing_error_response = client.post(
+        "/connector-jobs/connector-job-blocked-policy/runs",
+        json={
+            "status": "blocked",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {"requires_human_review": True},
+        },
+    )
+    assert missing_error_response.status_code == 400
+    assert missing_error_response.json()["detail"] == (
+        "Blocked connector job runs require error"
+    )
+
+    blocked_response = client.post(
+        "/connector-jobs/connector-job-blocked-policy/runs",
+        headers={
+            "X-Synarch-Actor-Type": "service",
+            "X-Synarch-Actor-Id": "connector-job-runner",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "status": "blocked",
+            "triggered_by_type": "service",
+            "triggered_by_id": "connector-job-runner",
+            "output": {
+                "requires_human_review": True,
+                "blocked_reason": "captcha_or_human_verification",
+            },
+            "error": "captcha_or_human_verification",
+        },
+    )
+    assert blocked_response.status_code == 201
+    run = blocked_response.json()["run"]
+    assert run["status"] == "blocked"
+    blocked_job = client.get("/connector-jobs/connector-job-blocked-policy").json()
+    assert blocked_job["status"] == "stopped"
+    assert blocked_job["next_run_at"] is None
+    assert blocked_job["stopped_at"] is not None
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    stopped_events = [
+        event for event in events if event["type"] == "connector_job.stopped"
+    ]
+    assert [event["payload"]["reason"] for event in stopped_events] == [
+        "Connector job blocked and requires human review."
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    stopped_audits = [
+        audit for audit in audits if audit["action"] == "connector_job.stopped"
+    ]
+    assert [audit["payload"]["reason"] for audit in stopped_audits] == [
+        "Connector job blocked and requires human review."
+    ]
+
+
 def test_connector_job_tick_records_bounded_skipped_runs_and_audits() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_job_tick"

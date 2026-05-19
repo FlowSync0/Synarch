@@ -440,7 +440,7 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
         stop_reason="max_jobs_reached",
         runs=[
             ConnectorJobRunResult(
-                run=run.model_copy(update={"status": ConnectorJobRunStatus.skipped}),
+                run=run.model_copy(update={"status": ConnectorJobRunStatus.blocked}),
                 event=EventRecord(type=EventType.connector_job_run_recorded),
             )
         ],
@@ -458,7 +458,7 @@ def test_connector_job_lifecycle_contracts_are_serializable() -> None:
     assert resume.model_dump(mode="json")["resumed_by_id"] == "local-user"
     assert run_payload["status"] == "completed"
     assert run_payload["output"] == {"message": "Follow-up sent."}
-    assert batch_payload["runs"][0]["run"]["status"] == "skipped"
+    assert batch_payload["runs"][0]["run"]["status"] == "blocked"
     assert batch_payload["tick_event"]["type"] == "connector_job.tick"
 
 
