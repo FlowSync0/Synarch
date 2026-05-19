@@ -581,6 +581,17 @@ def connector_job_run_count(
     )
 
 
+def connector_job_latest_run(job_id: str) -> ConnectorJobRunRecord | None:
+    runs = [
+        run
+        for run in REPOSITORIES.connector_job_runs.list_records()
+        if run.job_id == job_id
+    ]
+    if not runs:
+        return None
+    return max(runs, key=lambda run: (utc_datetime(run.completed_at), run.id))
+
+
 def connector_job_run_stop_reason(
     job: ConnectorJobRecord,
     run: ConnectorJobRunRecord,
@@ -2568,6 +2579,7 @@ def list_connector_jobs(
     owner_agent_id: str | None = None,
     kind: str | None = None,
     status: str | None = None,
+    last_run_status: ConnectorJobRunStatus | None = None,
     due_before: datetime | None = None,
 ) -> list[ConnectorJobRecord]:
     jobs = REPOSITORIES.connector_jobs.list_records()
@@ -2583,6 +2595,13 @@ def list_connector_jobs(
         jobs = [job for job in jobs if job.kind == kind]
     if status is not None:
         jobs = [job for job in jobs if job.status == status]
+    if last_run_status is not None:
+        jobs = [
+            job
+            for job in jobs
+            if (latest_run := connector_job_latest_run(job.id)) is not None
+            and latest_run.status == last_run_status
+        ]
     if due_before is not None:
         jobs = [job for job in jobs if connector_job_is_due(job, due_before)]
         return sorted(jobs, key=connector_job_sort_key)

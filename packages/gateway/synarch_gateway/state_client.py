@@ -255,6 +255,7 @@ class StateClient(Protocol):
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        last_run_status: str | None = None,
         due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]: ...
 
@@ -652,6 +653,7 @@ class HttpStateClient:
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        last_run_status: str | None = None,
         due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]:
         response = self._get(
@@ -663,6 +665,7 @@ class HttpStateClient:
                 owner_agent_id=owner_agent_id,
                 kind=kind,
                 status=status,
+                last_run_status=last_run_status,
                 due_before=due_before.isoformat() if due_before is not None else None,
             ),
         )

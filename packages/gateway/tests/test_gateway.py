@@ -685,6 +685,7 @@ class FakeStateClient:
         owner_agent_id: str | None = None,
         kind: str | None = None,
         status: str | None = None,
+        last_run_status: str | None = None,
         due_before: datetime | None = None,
     ) -> list[ConnectorJobRecord]:
         jobs = self.connector_jobs
@@ -700,6 +701,24 @@ class FakeStateClient:
             jobs = [job for job in jobs if job.kind == kind]
         if status is not None:
             jobs = [job for job in jobs if job.status == status]
+        if last_run_status is not None:
+            jobs = [
+                job
+                for job in jobs
+                if (
+                    latest_run := max(
+                        (
+                            run
+                            for run in self.connector_job_runs
+                            if run.job_id == job.id
+                        ),
+                        key=lambda run: run.completed_at,
+                        default=None,
+                    )
+                )
+                is not None
+                and latest_run.status == last_run_status
+            ]
         if due_before is not None:
             jobs = [
                 job

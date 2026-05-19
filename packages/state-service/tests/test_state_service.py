@@ -1123,6 +1123,16 @@ def test_connector_job_blocked_run_stops_for_human_review() -> None:
     assert blocked_job["status"] == "stopped"
     assert blocked_job["next_run_at"] is None
     assert blocked_job["stopped_at"] is not None
+    blocked_jobs = client.get(
+        "/connector-jobs",
+        params={"project_id": project_id, "last_run_status": "blocked"},
+    ).json()
+    assert [job["id"] for job in blocked_jobs] == ["connector-job-blocked-policy"]
+    failed_jobs = client.get(
+        "/connector-jobs",
+        params={"project_id": project_id, "last_run_status": "failed"},
+    ).json()
+    assert failed_jobs == []
 
     events = client.get("/events", params={"trace_id": trace_id}).json()
     stopped_events = [

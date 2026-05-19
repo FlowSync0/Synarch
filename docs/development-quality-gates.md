@@ -209,7 +209,8 @@ Failed connector runs can use `metadata.failure_cooldown_seconds` to delay the n
 also declare `metadata.max_failures` to stop after a bounded number of failed runs.
 
 Blocked connector runs stop the job immediately with a human-review reason, so CAPTCHA, access, or
-credential blocks do not loop indefinitely.
+credential blocks do not loop indefinitely. The state-service connector job list can be filtered by
+`last_run_status=blocked` for review surfaces and monitors.
 
 Run one memory compaction policy tick for a known scope with:
 
