@@ -2365,6 +2365,7 @@ def connector_job_run_event(
 def connector_job_tick_payload(
     batch_result: ConnectorJobRunBatchResult,
 ) -> dict[str, object]:
+    run_statuses = [run_result.run.status for run_result in batch_result.runs]
     return {
         "max_jobs": batch_result.max_jobs,
         "kind": batch_result.kind,
@@ -2375,7 +2376,11 @@ def connector_job_tick_payload(
         "run_count": len(batch_result.runs),
         "connector_job_ids": [run_result.run.job_id for run_result in batch_result.runs],
         "connector_job_run_ids": [run_result.run.id for run_result in batch_result.runs],
-        "run_statuses": [run_result.run.status for run_result in batch_result.runs],
+        "run_statuses": run_statuses,
+        "completed_run_count": run_statuses.count(ConnectorJobRunStatus.completed),
+        "failed_run_count": run_statuses.count(ConnectorJobRunStatus.failed),
+        "blocked_run_count": run_statuses.count(ConnectorJobRunStatus.blocked),
+        "skipped_run_count": run_statuses.count(ConnectorJobRunStatus.skipped),
     }
 
 

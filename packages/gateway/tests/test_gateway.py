@@ -4299,6 +4299,10 @@ def test_connector_job_run_ready_executes_bounded_jobs_and_records_tick(
         "connector-job-batch-cron-a"
     ]
     assert payload["tick_event"]["payload"]["run_statuses"] == ["completed"]
+    assert payload["tick_event"]["payload"]["completed_run_count"] == 1
+    assert payload["tick_event"]["payload"]["failed_run_count"] == 0
+    assert payload["tick_event"]["payload"]["blocked_run_count"] == 0
+    assert payload["tick_event"]["payload"]["skipped_run_count"] == 0
     assert payload["tick_audit_log"]["action"] == "connector_job.tick"
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
@@ -4401,6 +4405,10 @@ def test_connector_job_run_ready_records_blocked_tool_result(
     assert tool_result["error"] == "http_access_denied"
     assert tool_result["output"]["requires_human_review"] is True
     assert payload["tick_event"]["payload"]["run_statuses"] == ["blocked"]
+    assert payload["tick_event"]["payload"]["completed_run_count"] == 0
+    assert payload["tick_event"]["payload"]["failed_run_count"] == 0
+    assert payload["tick_event"]["payload"]["blocked_run_count"] == 1
+    assert payload["tick_event"]["payload"]["skipped_run_count"] == 0
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
         EventType.tool_failed,
@@ -4444,6 +4452,10 @@ def test_connector_job_run_ready_records_empty_tick() -> None:
         "connector_job_ids": [],
         "connector_job_run_ids": [],
         "run_statuses": [],
+        "completed_run_count": 0,
+        "failed_run_count": 0,
+        "blocked_run_count": 0,
+        "skipped_run_count": 0,
         "executor": "gateway-connector-job-executor",
     }
     assert payload["tick_audit_log"]["target_id"] == "project_empty"

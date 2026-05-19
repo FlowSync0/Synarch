@@ -1255,6 +1255,10 @@ def test_connector_job_tick_records_bounded_skipped_runs_and_audits() -> None:
     assert tick["tick_audit_log"]["action"] == "connector_job.tick"
     assert tick["tick_event"]["payload"]["connector_job_ids"] == [run["job_id"]]
     assert tick["tick_event"]["payload"]["run_statuses"] == ["skipped"]
+    assert tick["tick_event"]["payload"]["completed_run_count"] == 0
+    assert tick["tick_event"]["payload"]["failed_run_count"] == 0
+    assert tick["tick_event"]["payload"]["blocked_run_count"] == 0
+    assert tick["tick_event"]["payload"]["skipped_run_count"] == 1
 
     runs = client.get("/connector-job-runs", params={"status": "skipped"}).json()
     assert [record["id"] for record in runs] == [run["id"]]
