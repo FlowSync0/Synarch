@@ -154,6 +154,9 @@ Implemented baseline:
 - `connector.job.stop` lets an authorized agent stop its own durable connector job after the same service and tool gate.
 - Connector job runs distinguish `blocked` from `failed`; blocked runs stop the job for human
   review instead of retrying indefinitely.
+- `human.assistance.request` gives agents a durable escape hatch for CAPTCHA, login/manual action,
+  ambiguous external errors, PDF/document verification, and key decisions; requests and resolutions
+  are project-scoped, evented, audited, shown in project briefs, and resolvable from the dashboard.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
 - `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.

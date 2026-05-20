@@ -56,8 +56,10 @@ import {
   decideTaskReview,
   getProjectTimeline,
   listCredentialAccessRequests,
+  listHumanAssistanceRequests,
   listProjectBriefs,
   listTaskReviewQueue,
+  resolveHumanAssistanceRequest,
   resumeConnectorJob,
   runReadyTasks,
   runConnectorJobNow,
@@ -71,6 +73,7 @@ import {
   type GoalPriority,
   type GoalSubmissionResult,
   type CredentialAccessRequest,
+  type HumanAssistanceRequest,
   type MemoryItem,
   type MemoryStatus,
   type ProjectBrief,
@@ -167,7 +170,9 @@ const approvalStatusClass: Record<string, string> = {
   requested: "bg-warn-soft text-warn ring-warn/15",
   approved: "bg-info-soft text-info ring-info/15",
   applied: "bg-ok-soft text-ok ring-ok/15",
-  rejected: "bg-risk-soft text-risk ring-risk/15"
+  rejected: "bg-risk-soft text-risk ring-risk/15",
+  answered: "bg-ok-soft text-ok ring-ok/15",
+  dismissed: "bg-risk-soft text-risk ring-risk/15"
 };
 
 const memoryStatusClass: Record<MemoryStatus, string> = {
@@ -324,8 +329,9 @@ type ApprovalViewModel = {
   tone: Tone;
   icon: typeof UserRoundPlus;
   impact: string;
-  source: "api" | "credential" | "sample";
+  source: "api" | "credential" | "human_assistance" | "sample";
   candidateServiceIds?: string[];
+  humanAssistanceKind?: string;
 };
 
 type AgentViewModel = {
@@ -435,6 +441,10 @@ type LifecycleUpdateDraft = {
 type LifecycleDeactivateDraft = {
   targetAgentId: string;
   reason: string;
+};
+
+type HumanAssistanceResolutionDraft = {
+  response: string;
 };
 
 type TimelineViewModel = {
@@ -691,6 +701,52 @@ function credentialApprovalRow(request: CredentialAccessRequest): ApprovalViewMo
     impact: `${request.reason} / ${scopes}`,
     source: "credential",
     candidateServiceIds: request.candidate_service_ids
+  };
+}
+
+function humanAssistanceTone(request: HumanAssistanceRequest): Tone {
+  if (request.status === "answered") {
+    return "ok";
+  }
+  if (request.status === "dismissed") {
+    return "risk";
+  }
+  if (request.urgency === "critical" || request.urgency === "high") {
+    return "warn";
+  }
+  return "info";
+}
+
+function humanAssistanceApprovalRow(request: HumanAssistanceRequest): ApprovalViewModel {
+  return {
+    id: request.id,
+    agentId: request.agent_id,
+    createdAtMs: timestampMs(request.created_at),
+    title: request.title,
+    action: request.kind,
+    requester: request.requested_by_id,
+    division: request.agent_id,
+    status: request.status,
+    age: formatLifecycleAge(request.created_at),
+    tone: humanAssistanceTone(request),
+    icon: AlertTriangle,
+    impact: request.description,
+    source: "human_assistance",
+    humanAssistanceKind: request.kind
+  };
+}
+
+function humanAssistanceDraft(request: ApprovalViewModel): HumanAssistanceResolutionDraft {
+  const responseByKind: Record<string, string> = {
+    captcha: "Manual verification completed. Retry the blocked step.",
+    pdf_review: "PDF reviewed. Key point: ",
+    error_resolution: "Error reviewed. Recommended next step: ",
+    key_decision: "Decision: ",
+    manual_action: "Manual action completed. Continue.",
+    other: "Human response: "
+  };
+  return {
+    response: responseByKind[request.humanAssistanceKind ?? "other"] ?? responseByKind.other
   };
 }
 
@@ -978,6 +1034,17 @@ function toolCallFromDraft(
       max_bytes: 12000
     };
   }
+  if (toolName === "human.assistance.request") {
+    argumentsPayload = {
+      kind: "manual_action",
+      title: draft.summary.trim() || "Human assistance requested",
+      description: draft.reason.trim(),
+      urgency: "medium",
+      evidence: {
+        source: "frontend.permission_gate"
+      }
+    };
+  }
 
   return {
     agent_id: agentId,
@@ -1000,6 +1067,9 @@ function preferredServiceForTool(toolName: string, serviceIds: string[]): string
   if (toolName === "event.emit") {
     return serviceIds.find((serviceId) => serviceId.includes("event-log")) ?? null;
   }
+  if (toolName === "human.assistance.request") {
+    return serviceIds.find((serviceId) => serviceId.includes("event-log")) ?? null;
+  }
   return null;
 }
 
@@ -1008,6 +1078,9 @@ function serviceMatchesTool(toolName: string, serviceId: string): boolean {
     return serviceId.includes("supplier-web") || serviceId.includes("web-fetch");
   }
   if (toolName === "event.emit") {
+    return serviceId.includes("event-log");
+  }
+  if (toolName === "human.assistance.request") {
     return serviceId.includes("event-log");
   }
   return true;
@@ -1413,6 +1486,9 @@ export default function DashboardPage() {
   const [selectedMemoryItemId, setSelectedMemoryItemId] = useState("");
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [taskReviewDrafts, setTaskReviewDrafts] = useState<Record<string, TaskReviewDraft>>({});
+  const [humanAssistanceDrafts, setHumanAssistanceDrafts] = useState<
+    Record<string, HumanAssistanceResolutionDraft>
+  >({});
   const eventsQuery = useQuery({
     queryKey: ["events"],
     queryFn: listEvents,
@@ -1453,6 +1529,11 @@ export default function DashboardPage() {
     queryFn: listCredentialAccessRequests,
     refetchInterval: 15_000
   });
+  const humanAssistanceQuery = useQuery({
+    queryKey: ["human-assistance-requests"],
+    queryFn: listHumanAssistanceRequests,
+    refetchInterval: 15_000
+  });
   const taskReviewsQuery = useQuery({
     queryKey: ["task-review-queue"],
     queryFn: listTaskReviewQueue,
@@ -1485,7 +1566,9 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1503,10 +1586,12 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1522,10 +1607,12 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["agent-lifecycle-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["connector-jobs"] });
       void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1619,6 +1706,7 @@ export default function DashboardPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1627,7 +1715,18 @@ export default function DashboardPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["credential-access-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+    }
+  });
+  const humanAssistanceResolutionMutation = useMutation({
+    mutationFn: resolveHumanAssistanceRequest,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
+      setHumanAssistanceDrafts({});
     }
   });
   const taskReviewMutation = useMutation({
@@ -1638,6 +1737,7 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
       setEditingTaskId(null);
       setTaskReviewDrafts({});
@@ -1648,6 +1748,8 @@ export default function DashboardPage() {
     onSuccess: (result) => {
       setLastToolResult(result);
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1670,6 +1772,8 @@ export default function DashboardPage() {
       void queryClient.invalidateQueries({ queryKey: ["connector-job-runs"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
       void queryClient.invalidateQueries({ queryKey: ["audit-logs"] });
+      void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
     }
   });
@@ -1682,10 +1786,15 @@ export default function DashboardPage() {
     []
   );
   const approvalRows = useMemo<ApprovalViewModel[]>(() => {
-    if (lifecycleQuery.isSuccess || credentialAccessQuery.isSuccess) {
+    if (
+      lifecycleQuery.isSuccess ||
+      credentialAccessQuery.isSuccess ||
+      humanAssistanceQuery.isSuccess
+    ) {
       return sortApprovalRows([
         ...(lifecycleQuery.data ?? []).map(lifecycleApprovalRow),
-        ...(credentialAccessQuery.data ?? []).map(credentialApprovalRow)
+        ...(credentialAccessQuery.data ?? []).map(credentialApprovalRow),
+        ...(humanAssistanceQuery.data ?? []).map(humanAssistanceApprovalRow)
       ]);
     }
 
@@ -1699,12 +1808,14 @@ export default function DashboardPage() {
   }, [
     credentialAccessQuery.data,
     credentialAccessQuery.isSuccess,
+    humanAssistanceQuery.data,
+    humanAssistanceQuery.isSuccess,
     lifecycleQuery.data,
     lifecycleQuery.isSuccess
   ]);
-  const approvalMode = lifecycleQuery.isLoading || credentialAccessQuery.isLoading
+  const approvalMode = lifecycleQuery.isLoading || credentialAccessQuery.isLoading || humanAssistanceQuery.isLoading
     ? "syncing"
-    : lifecycleQuery.isError && credentialAccessQuery.isError
+    : lifecycleQuery.isError && credentialAccessQuery.isError && humanAssistanceQuery.isError
       ? "sample"
       : "live";
   const approvalModeLabel = {
@@ -1717,7 +1828,7 @@ export default function DashboardPage() {
       ? `${approvalRows.length} approval records from control-plane/gateway`
       : approvalMode === "syncing"
         ? "Connecting to control-plane/gateway"
-        : "Control-plane and gateway unavailable, showing sample records";
+        : "Control-plane, gateway, and human assistance queue unavailable, showing sample records";
   const agentRows = useMemo<AgentViewModel[]>(() => {
     if (agentsQuery.isSuccess) {
       return agentsQuery.data.map(agentRow);
@@ -2463,7 +2574,7 @@ export default function DashboardPage() {
       : (preferredToolServiceId ?? availableServiceOptions[0] ?? toolCallDraft.serviceId);
   const effectiveToolProjectId = toolCallDraft.projectId.trim() || effectiveSelectedProjectId;
   const hasToolArguments =
-    effectiveToolName === "event.emit"
+    effectiveToolName === "event.emit" || effectiveToolName === "human.assistance.request"
       ? toolCallDraft.summary.trim().length > 0
       : effectiveToolName === "web.fetch"
         ? toolCallDraft.url.trim().length > 0
@@ -2554,6 +2665,43 @@ export default function DashboardPage() {
     taskReviewMutation.mutate({
       taskId: row.id,
       decision
+    });
+  };
+  const updateHumanAssistanceDraft = (requestId: string, response: string) => {
+    setHumanAssistanceDrafts((drafts) => ({
+      ...drafts,
+      [requestId]: {
+        ...(drafts[requestId] ??
+          humanAssistanceDraft(
+            approvalRows.find((row) => row.id === requestId) ?? {
+              id: requestId,
+              createdAtMs: 0,
+              title: "",
+              action: "other",
+              requester: "agent",
+              division: "agent",
+              status: "requested",
+              age: "now",
+              tone: "warn",
+              icon: AlertTriangle,
+              impact: "",
+              source: "human_assistance",
+              humanAssistanceKind: "other"
+            }
+          )),
+        response
+      }
+    }));
+  };
+  const resolveHumanAssistance = (
+    row: ApprovalViewModel,
+    status: "answered" | "dismissed"
+  ) => {
+    const draft = humanAssistanceDrafts[row.id] ?? humanAssistanceDraft(row);
+    humanAssistanceResolutionMutation.mutate({
+      requestId: row.id,
+      status,
+      response: draft.response.trim() || `${status} from Synarch dashboard.`
     });
   };
 
@@ -2982,7 +3130,8 @@ export default function DashboardPage() {
                         <div className="min-w-0">
                           <p className="text-[11px] font-semibold uppercase text-muted">Review</p>
                           <p className="mt-1 truncate text-xs text-ink">
-                            {selectedProjectBrief.review_tasks[0]?.title ??
+                            {selectedProjectBrief.human_assistance_requests[0]?.title ??
+                              selectedProjectBrief.review_tasks[0]?.title ??
                               selectedProjectBrief.blocked_connector_jobs[0]?.purpose ??
                               "No review item"}
                           </p>
@@ -4329,10 +4478,15 @@ export default function DashboardPage() {
                 value={toolCallDraft.reason}
                 onChange={(event) => updateToolCallDraft("reason", event.target.value)}
               />
-              {effectiveToolName === "event.emit" ? (
+              {effectiveToolName === "event.emit" ||
+              effectiveToolName === "human.assistance.request" ? (
                 <textarea
                   className="min-h-16 resize-y rounded-md border border-border bg-white px-2 py-2 text-xs text-ink outline-none transition focus:border-accent"
-                  aria-label="Event summary"
+                  aria-label={
+                    effectiveToolName === "human.assistance.request"
+                      ? "Human assistance title"
+                      : "Event summary"
+                  }
                   value={toolCallDraft.summary}
                   onChange={(event) => updateToolCallDraft("summary", event.target.value)}
                 />
@@ -4858,13 +5012,14 @@ export default function DashboardPage() {
                 <article className="px-4 py-5">
                   <p className="text-sm font-medium text-ink">Aucune demande</p>
                   <p className="mt-1 text-xs text-muted">
-                    Les queues control-plane et credentials sont vides.
+                    Les queues control-plane, credentials et assistance humaine sont vides.
                   </p>
                 </article>
               ) : null}
               {approvalRows.map((approval) => {
                 const Icon = approval.icon;
                 const isCredentialApproval = approval.source === "credential";
+                const isHumanAssistance = approval.source === "human_assistance";
                 const isPending = approval.status === "requested" && approval.source !== "sample";
                 const candidateServiceId = approval.candidateServiceIds?.[0];
                 const canApplyGrant =
@@ -4872,9 +5027,13 @@ export default function DashboardPage() {
                 const isDecisionPending =
                   decisionMutation.isPending ||
                   credentialDecisionMutation.isPending ||
-                  credentialGrantMutation.isPending;
+                  credentialGrantMutation.isPending ||
+                  humanAssistanceResolutionMutation.isPending;
                 const isMutatingThisApproval =
-                  isCredentialApproval
+                  isHumanAssistance
+                    ? humanAssistanceResolutionMutation.isPending &&
+                      humanAssistanceResolutionMutation.variables?.requestId === approval.id
+                    : isCredentialApproval
                     ? credentialDecisionMutation.isPending &&
                       credentialDecisionMutation.variables?.requestId === approval.id
                     : decisionMutation.isPending &&
@@ -4890,6 +5049,8 @@ export default function DashboardPage() {
                   }
                   decisionMutation.mutate(payload);
                 };
+                const humanDraft =
+                  humanAssistanceDrafts[approval.id] ?? humanAssistanceDraft(approval);
                 const applyGrant = () => {
                   if (!candidateServiceId) {
                     return;
@@ -4922,6 +5083,17 @@ export default function DashboardPage() {
                         <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
                           {approval.impact}
                         </BalancedText>
+                        {isHumanAssistance ? (
+                          <textarea
+                            className="mt-3 min-h-20 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-xs text-ink outline-none transition focus:border-accent disabled:bg-slate-100 disabled:text-muted"
+                            aria-label={`Human response for ${approval.title}`}
+                            disabled={!isPending || isDecisionPending}
+                            value={humanDraft.response}
+                            onChange={(event) =>
+                              updateHumanAssistanceDraft(approval.id, event.target.value)
+                            }
+                          />
+                        ) : null}
                         <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
                           <p className="min-w-0 truncate text-xs text-muted">
                             {approval.requester} / {approval.age}
@@ -4944,19 +5116,43 @@ export default function DashboardPage() {
                             ) : null}
                             <button
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
-                              aria-label={`Approve ${approval.title}`}
-                              title={`Approve ${approval.title}`}
+                              aria-label={
+                                isHumanAssistance
+                                  ? `Answer ${approval.title}`
+                                  : `Approve ${approval.title}`
+                              }
+                              title={
+                                isHumanAssistance
+                                  ? `Answer ${approval.title}`
+                                  : `Approve ${approval.title}`
+                              }
                               disabled={!isPending || isDecisionPending}
-                              onClick={() => decideApproval("approved")}
+                              onClick={() =>
+                                isHumanAssistance
+                                  ? resolveHumanAssistance(approval, "answered")
+                                  : decideApproval("approved")
+                              }
                             >
                               <Check size={15} />
                             </button>
                             <button
                               className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
-                              aria-label={`Reject ${approval.title}`}
-                              title={`Reject ${approval.title}`}
+                              aria-label={
+                                isHumanAssistance
+                                  ? `Dismiss ${approval.title}`
+                                  : `Reject ${approval.title}`
+                              }
+                              title={
+                                isHumanAssistance
+                                  ? `Dismiss ${approval.title}`
+                                  : `Reject ${approval.title}`
+                              }
                               disabled={!isPending || isDecisionPending}
-                              onClick={() => decideApproval("rejected")}
+                              onClick={() =>
+                                isHumanAssistance
+                                  ? resolveHumanAssistance(approval, "dismissed")
+                                  : decideApproval("rejected")
+                              }
                             >
                               <X size={15} />
                             </button>

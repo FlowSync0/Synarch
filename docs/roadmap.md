@@ -308,6 +308,10 @@ Progress:
   and `metadata.max_failures` stops jobs after a bounded number of failed runs.
 - Done: blocked connector job runs stop the connector job for human review instead of retrying
   indefinitely.
+- Done: agents can create durable human assistance requests for CAPTCHA, PDF review, external
+  errors, key decisions, and manual actions through `human.assistance.request`; state-service emits
+  request/resolution events and audit logs, gateway project briefs prioritize unresolved requests,
+  and the dashboard approval queue can answer or dismiss them.
 - Done: frontend reads connector jobs and connector job runs through state-service proxy routes,
   showing status, next run, policies, latest run/error, and stop detail in the dashboard.
 - Done: connector jobs can be resumed with a durable `connector_job.resumed` event/audit, and

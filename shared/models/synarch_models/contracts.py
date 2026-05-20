@@ -13,6 +13,8 @@ from .enums import (
     ConnectorJobRunStatus,
     ConnectorJobStatus,
     EventType,
+    HumanAssistanceKind,
+    HumanAssistanceStatus,
     LifecycleAction,
     MemoryStatus,
     Priority,
@@ -235,6 +237,26 @@ class CredentialAccessRequest(SynarchModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class HumanAssistanceRequest(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("human_assistance"))
+    project_id: str
+    task_id: str | None = None
+    agent_id: str
+    kind: HumanAssistanceKind = HumanAssistanceKind.other
+    title: str = Field(min_length=1)
+    description: str = ""
+    urgency: Priority = Priority.medium
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    requested_by_type: ActorType = ActorType.agent
+    requested_by_id: str
+    status: HumanAssistanceStatus = HumanAssistanceStatus.requested
+    response: str | None = None
+    resolved_by_type: ActorType | None = None
+    resolved_by_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    resolved_at: datetime | None = None
+
+
 class CredentialGrant(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("credential_grant"))
     request_id: str
@@ -357,6 +379,16 @@ class EventRecord(SynarchModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     trace_id: str | None = None
+
+
+class HumanAssistanceResolution(SynarchModel):
+    request_id: str
+    status: HumanAssistanceStatus
+    response: str = Field(min_length=1)
+    resolved_by_type: ActorType
+    resolved_by_id: str
+    events_emitted: list[EventRecord] = Field(default_factory=list)
+    resolved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class GoalSubmissionResult(SynarchModel):
@@ -898,6 +930,7 @@ class ProjectTimeline(SynarchModel):
 class ProjectBriefAction(SynarchModel):
     kind: Literal[
         "task_review",
+        "human_assistance",
         "connector_job_review",
         "task_next",
         "project_planning",
@@ -914,6 +947,7 @@ class ProjectBrief(SynarchModel):
     next_tasks: list[TaskRecord] = Field(default_factory=list)
     review_tasks: list[TaskRecord] = Field(default_factory=list)
     blocked_connector_jobs: list[ConnectorJobRecord] = Field(default_factory=list)
+    human_assistance_requests: list[HumanAssistanceRequest] = Field(default_factory=list)
     latest_events: list[EventRecord] = Field(default_factory=list)
     reminders: list[str] = Field(default_factory=list)
     next_action: ProjectBriefAction

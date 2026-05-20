@@ -75,6 +75,8 @@ class EventType(StrEnum):
     approval_requested = "approval.requested"
     approval_decided = "approval.decided"
     credential_grant_applied = "credential_grant.applied"
+    human_assistance_requested = "human_assistance.requested"
+    human_assistance_resolved = "human_assistance.resolved"
 
 
 class AiProviderType(StrEnum):
@@ -105,6 +107,21 @@ class ApprovalStatus(StrEnum):
     approved = "approved"
     rejected = "rejected"
     applied = "applied"
+
+
+class HumanAssistanceKind(StrEnum):
+    captcha = "captcha"
+    pdf_review = "pdf_review"
+    error_resolution = "error_resolution"
+    key_decision = "key_decision"
+    manual_action = "manual_action"
+    other = "other"
+
+
+class HumanAssistanceStatus(StrEnum):
+    requested = "requested"
+    answered = "answered"
+    dismissed = "dismissed"
 
 
 class MemoryStatus(StrEnum):

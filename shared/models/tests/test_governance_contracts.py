@@ -11,6 +11,8 @@ from synarch_models import (
     CredentialGrant,
     CredentialGrantApplicationRequest,
     DivisionRecord,
+    HumanAssistanceRequest,
+    HumanAssistanceResolution,
     LifecycleAction,
     LocalWorldView,
     ModelDefinition,
@@ -159,6 +161,43 @@ def test_credential_access_request_captures_blocking_tool_scope() -> None:
     assert payload["requested_by_id"] == "gateway-scheduler"
     assert payload["requested_scopes"] == ["browser:authenticated_fetch"]
     assert payload["candidate_service_ids"] == ["connector-supplier-web"]
+
+
+def test_human_assistance_request_captures_manual_blocker() -> None:
+    request = HumanAssistanceRequest(
+        id="human-assistance-task-captcha",
+        project_id="project_supplier",
+        task_id="task_fetch_supplier",
+        agent_id="agent-ops-sourcing",
+        kind="captcha",
+        title="CAPTCHA on supplier portal",
+        description="The supplier portal requires a human verification step.",
+        urgency="high",
+        evidence={"url": "https://supplier.example/login"},
+        requested_by_id="agent-ops-sourcing",
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["status"] == "requested"
+    assert payload["kind"] == "captcha"
+    assert payload["urgency"] == "high"
+    assert payload["evidence"]["url"] == "https://supplier.example/login"
+
+
+def test_human_assistance_resolution_is_auditable() -> None:
+    resolution = HumanAssistanceResolution(
+        request_id="human-assistance-task-captcha",
+        status="answered",
+        response="Manual verification completed. Retry the supplier portal.",
+        resolved_by_type=ActorType.user,
+        resolved_by_id="local-user",
+    )
+
+    payload = resolution.model_dump(mode="json")
+
+    assert payload["status"] == "answered"
+    assert payload["response"] == "Manual verification completed. Retry the supplier portal."
 
 
 def test_credential_access_decision_is_auditable() -> None:

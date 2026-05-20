@@ -22,6 +22,8 @@ from synarch_models import (
     CredentialGrantApplication,
     CredentialGrantApplicationRequest,
     EventRecord,
+    HumanAssistanceRequest,
+    HumanAssistanceResolution,
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
@@ -210,6 +212,33 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> CredentialAccessRequest: ...
+
+    def create_human_assistance_request(
+        self,
+        assistance_request: HumanAssistanceRequest,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceRequest: ...
+
+    def list_human_assistance_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[HumanAssistanceRequest]: ...
+
+    def get_human_assistance_request(self, request_id: str) -> HumanAssistanceRequest: ...
+
+    def resolve_human_assistance_request(
+        self,
+        request_id: str,
+        resolution: HumanAssistanceResolution,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceResolution: ...
 
     def list_credential_access_requests(
         self,
@@ -572,6 +601,61 @@ class HttpStateClient:
             headers,
         )
         return CredentialAccessRequest.model_validate(response.json())
+
+    def create_human_assistance_request(
+        self,
+        assistance_request: HumanAssistanceRequest,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceRequest:
+        response = self._post(
+            "/human-assistance-requests",
+            assistance_request.model_dump(mode="json"),
+            headers,
+        )
+        return HumanAssistanceRequest.model_validate(response.json())
+
+    def list_human_assistance_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[HumanAssistanceRequest]:
+        response = self._get(
+            "/human-assistance-requests",
+            params=compact_params(
+                project_id=project_id,
+                task_id=task_id,
+                agent_id=agent_id,
+                kind=kind,
+                status=status,
+            ),
+        )
+        return [
+            HumanAssistanceRequest.model_validate(assistance_request)
+            for assistance_request in response.json()
+        ]
+
+    def get_human_assistance_request(self, request_id: str) -> HumanAssistanceRequest:
+        response = self._get(f"/human-assistance-requests/{request_id}")
+        return HumanAssistanceRequest.model_validate(response.json())
+
+    def resolve_human_assistance_request(
+        self,
+        request_id: str,
+        resolution: HumanAssistanceResolution,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceResolution:
+        response = self._post(
+            f"/human-assistance-requests/{request_id}/resolutions",
+            resolution.model_dump(mode="json"),
+            headers,
+        )
+        return HumanAssistanceResolution.model_validate(response.json())
 
     def list_credential_access_requests(
         self,

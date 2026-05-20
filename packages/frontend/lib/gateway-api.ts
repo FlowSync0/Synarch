@@ -217,7 +217,12 @@ export type ProjectTimeline = {
 };
 
 export type ProjectBriefAction = {
-  kind: "task_review" | "connector_job_review" | "task_next" | "project_planning";
+  kind:
+    | "task_review"
+    | "human_assistance"
+    | "connector_job_review"
+    | "task_next"
+    | "project_planning";
   target_id?: string | null;
   title: string;
   reason: string;
@@ -230,6 +235,7 @@ export type ProjectBrief = {
   next_tasks: TaskRecord[];
   review_tasks: TaskRecord[];
   blocked_connector_jobs: ConnectorJobRecord[];
+  human_assistance_requests: HumanAssistanceRequest[];
   latest_events: EventRecord[];
   reminders: string[];
   next_action: ProjectBriefAction;
@@ -295,6 +301,46 @@ export type CredentialGrantApplication = {
   service: unknown;
   events_emitted: unknown[];
   applied_at: string;
+};
+
+export type HumanAssistanceKind =
+  | "captcha"
+  | "pdf_review"
+  | "error_resolution"
+  | "key_decision"
+  | "manual_action"
+  | "other";
+
+export type HumanAssistanceStatus = "requested" | "answered" | "dismissed";
+
+export type HumanAssistanceRequest = {
+  id: string;
+  project_id: string;
+  task_id?: string | null;
+  agent_id: string;
+  kind: HumanAssistanceKind;
+  title: string;
+  description: string;
+  urgency: GoalPriority;
+  evidence: Record<string, unknown>;
+  requested_by_type: "user" | "agent" | "system" | "service";
+  requested_by_id: string;
+  status: HumanAssistanceStatus;
+  response?: string | null;
+  resolved_by_type?: "user" | "agent" | "system" | "service" | null;
+  resolved_by_id?: string | null;
+  created_at: string;
+  resolved_at?: string | null;
+};
+
+export type HumanAssistanceResolution = {
+  request_id: string;
+  status: "answered" | "dismissed";
+  response: string;
+  resolved_by_type: "user" | "agent" | "system" | "service";
+  resolved_by_id: string;
+  events_emitted: unknown[];
+  resolved_at: string;
 };
 
 export type TaskRunBatchResult = {
@@ -577,6 +623,44 @@ export async function listCredentialAccessRequests(): Promise<CredentialAccessRe
     cache: "no-store"
   });
   return parseJsonResponse<CredentialAccessRequest[]>(response);
+}
+
+export async function listHumanAssistanceRequests(): Promise<HumanAssistanceRequest[]> {
+  const response = await fetch("/api/gateway/human-assistance-requests", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<HumanAssistanceRequest[]>(response);
+}
+
+export async function resolveHumanAssistanceRequest({
+  requestId,
+  status,
+  response
+}: {
+  requestId: string;
+  status: "answered" | "dismissed";
+  response: string;
+}): Promise<HumanAssistanceResolution> {
+  const upstream = await fetch(
+    `/api/gateway/human-assistance-requests/${encodeURIComponent(requestId)}/resolutions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_human_assistance_${Date.now()}`
+      },
+      body: JSON.stringify({
+        request_id: requestId,
+        status,
+        response,
+        resolved_by_type: "user",
+        resolved_by_id: "local-user"
+      })
+    }
+  );
+  return parseJsonResponse<HumanAssistanceResolution>(upstream);
 }
 
 export async function decideCredentialAccessRequest({

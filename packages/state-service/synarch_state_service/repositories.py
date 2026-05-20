@@ -16,6 +16,7 @@ from synarch_models import (
     CredentialGrant,
     DivisionRecord,
     EventRecord,
+    HumanAssistanceRequest,
     ModelDefinition,
     ModelPolicy,
     ModelProviderConfig,
@@ -106,6 +107,7 @@ class StateRepositories:
     audit_logs: RecordRepository[AuditLogRecord]
     agent_lifecycle_requests: RecordRepository[AgentLifecycleRequest]
     credential_access_requests: RecordRepository[CredentialAccessRequest]
+    human_assistance_requests: RecordRepository[HumanAssistanceRequest]
     credential_grants: RecordRepository[CredentialGrant]
     connector_jobs: RecordRepository[ConnectorJobRecord]
     connector_job_runs: RecordRepository[ConnectorJobRunRecord]
@@ -132,6 +134,7 @@ class StateRepositories:
             audit_logs=InMemoryRecordRepository(),
             agent_lifecycle_requests=InMemoryRecordRepository(),
             credential_access_requests=InMemoryRecordRepository(),
+            human_assistance_requests=InMemoryRecordRepository(),
             credential_grants=InMemoryRecordRepository(),
             connector_jobs=InMemoryRecordRepository(),
             connector_job_runs=InMemoryRecordRepository(),

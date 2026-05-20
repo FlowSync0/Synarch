@@ -39,6 +39,8 @@ from synarch_models import (
     CredentialGrantApplicationRequest,
     EventRecord,
     EventType,
+    HumanAssistanceRequest,
+    HumanAssistanceResolution,
     LocalWorldView,
     MemoryCompactionPlanItem,
     MemoryCompactionPlanRequest,
@@ -91,6 +93,7 @@ class FakeStateClient:
         self.audit_logs: list[AuditLogRecord] = []
         self.agent_lifecycle_requests: list[AgentLifecycleRequest] = []
         self.credential_access_requests: list[CredentialAccessRequest] = []
+        self.human_assistance_requests: list[HumanAssistanceRequest] = []
         self.credential_grants: list[CredentialGrant] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.split_applications: list[ProjectSplitApplication] = []
@@ -549,6 +552,101 @@ class FakeStateClient:
                 if access_request.status == status
             ]
         return access_requests
+
+    def create_human_assistance_request(
+        self,
+        assistance_request: HumanAssistanceRequest,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceRequest:
+        self.headers.append(headers)
+        if any(
+            existing_request.id == assistance_request.id
+            for existing_request in self.human_assistance_requests
+        ):
+            raise StateServiceRequestError(
+                409,
+                f"Record already exists: {assistance_request.id}",
+            )
+        self.human_assistance_requests.append(assistance_request)
+        return assistance_request
+
+    def list_human_assistance_requests(
+        self,
+        *,
+        project_id: str | None = None,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        kind: str | None = None,
+        status: str | None = None,
+    ) -> list[HumanAssistanceRequest]:
+        assistance_requests = self.human_assistance_requests
+        if project_id is not None:
+            assistance_requests = [
+                request for request in assistance_requests if request.project_id == project_id
+            ]
+        if task_id is not None:
+            assistance_requests = [
+                request for request in assistance_requests if request.task_id == task_id
+            ]
+        if agent_id is not None:
+            assistance_requests = [
+                request for request in assistance_requests if request.agent_id == agent_id
+            ]
+        if kind is not None:
+            assistance_requests = [
+                request for request in assistance_requests if request.kind == kind
+            ]
+        if status is not None:
+            assistance_requests = [
+                request for request in assistance_requests if request.status == status
+            ]
+        return assistance_requests
+
+    def get_human_assistance_request(self, request_id: str) -> HumanAssistanceRequest:
+        for assistance_request in self.human_assistance_requests:
+            if assistance_request.id == request_id:
+                return assistance_request
+        raise StateServiceRequestError(404, f"Unknown human assistance request: {request_id}")
+
+    def resolve_human_assistance_request(
+        self,
+        request_id: str,
+        resolution: HumanAssistanceResolution,
+        *,
+        headers: dict[str, str],
+    ) -> HumanAssistanceResolution:
+        self.headers.append(headers)
+        assistance_request = self.get_human_assistance_request(request_id)
+        if assistance_request.status != "requested":
+            raise StateServiceRequestError(
+                409,
+                f"Human assistance request is already {assistance_request.status}",
+            )
+        updated_request = assistance_request.model_copy(
+            update={
+                "status": resolution.status,
+                "response": resolution.response,
+                "resolved_by_type": resolution.resolved_by_type,
+                "resolved_by_id": resolution.resolved_by_id,
+                "resolved_at": resolution.resolved_at,
+            }
+        )
+        self.human_assistance_requests[
+            self.human_assistance_requests.index(assistance_request)
+        ] = updated_request
+        event = EventRecord(
+            type=EventType.human_assistance_resolved,
+            target=assistance_request.project_id,
+            payload={
+                "human_assistance_request_id": assistance_request.id,
+                "status": resolution.status,
+                "response": resolution.response,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        return resolution.model_copy(update={"events_emitted": [event]})
 
     def decide_credential_access_request(
         self,
@@ -2112,6 +2210,7 @@ def test_tool_adapter_registry_exposes_executable_tools() -> None:
         "connector.job.list",
         "connector.job.stop",
         "event.emit",
+        "human.assistance.request",
         "web.extract",
         "web.fetch",
     ]
@@ -2152,6 +2251,12 @@ def test_tool_registry_endpoint_returns_adapter_manifests() -> None:
     assert manifests["event.emit"]["required_arguments"] == ["type"]
     assert manifests["event.emit"]["credential_scopes"] == []
     assert manifests["event.emit"]["audit_required"] is True
+    assert manifests["human.assistance.request"]["required_arguments"] == [
+        "kind",
+        "title",
+        "description",
+    ]
+    assert manifests["human.assistance.request"]["risk_level"] == "medium"
     assert manifests["web.fetch"]["required_arguments"] == ["url"]
     assert manifests["web.fetch"]["optional_arguments"] == ["max_bytes"]
     assert manifests["web.fetch"]["risk_level"] == "medium"
@@ -2673,6 +2778,119 @@ def test_tool_gate_executes_event_emit_adapter() -> None:
     assert state_client.events[1].source_agent_id == "agent-direction"
     assert state_client.events[1].target == "project_demo"
     assert state_client.events[1].payload == {"summary": "Supplier response is blocked."}
+
+
+def test_tool_gate_creates_human_assistance_request() -> None:
+    state_client = FakeStateClient()
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Sourcing",
+                division="ops",
+                permissions=PermissionBundle(
+                    allowed_tools=["human.assistance.request"],
+                    denied_tools=[],
+                ),
+            )
+        }
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_human_assistance_tool"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "human.assistance.request",
+                "project_id": "project_supplier",
+                "task_id": "task_supplier_login",
+                "reason": "Supplier portal is blocked by a CAPTCHA.",
+                "arguments": {
+                    "kind": "captcha",
+                    "title": "CAPTCHA on supplier portal",
+                    "description": "Human verification is required before extraction can continue.",
+                    "urgency": "high",
+                    "evidence": {"url": "https://supplier.example/login"},
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["error"] == "human_assistance_requested"
+    assert payload["output"]["requires_human_review"] is True
+    assert payload["output"]["human_assistance_request"]["kind"] == "captcha"
+    assert payload["output"]["human_assistance_request"]["urgency"] == "high"
+    assert len(state_client.human_assistance_requests) == 1
+    assistance_request = state_client.human_assistance_requests[0]
+    assert assistance_request.project_id == "project_supplier"
+    assert assistance_request.task_id == "task_supplier_login"
+    assert assistance_request.agent_id == "agent-ops-sourcing"
+    assert assistance_request.evidence["source_trace_id"] == "trace_human_assistance_tool"
+
+
+def test_gateway_lists_and_resolves_human_assistance_requests() -> None:
+    state_client = FakeStateClient()
+    state_client.human_assistance_requests.append(
+        HumanAssistanceRequest(
+            id="human-assistance-pdf-review",
+            project_id="project_demo",
+            task_id="task_pdf",
+            agent_id="agent-admin",
+            kind="pdf_review",
+            title="Review supplier PDF",
+            description="Confirm the extracted certificate date.",
+            requested_by_id="agent-admin",
+        )
+    )
+    state_client.human_assistance_requests.append(
+        HumanAssistanceRequest(
+            id="human-assistance-other-project",
+            project_id="project_other",
+            agent_id="agent-admin",
+            kind="key_decision",
+            title="Other project decision",
+            description="Excluded by project filter.",
+            requested_by_id="agent-admin",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        list_response = TestClient(app).get(
+            "/human-assistance-requests",
+            params={"project_id": "project_demo", "status": "requested"},
+        )
+        resolve_response = TestClient(app).post(
+            "/human-assistance-requests/human-assistance-pdf-review/resolutions",
+            headers={"X-Synarch-Trace-Id": "trace_human_assistance_resolution"},
+            json={
+                "request_id": "human-assistance-pdf-review",
+                "status": "answered",
+                "response": "PDF date confirmed. Continue.",
+                "resolved_by_type": "user",
+                "resolved_by_id": "local-user",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert list_response.status_code == 200
+    assert [request["id"] for request in list_response.json()] == [
+        "human-assistance-pdf-review"
+    ]
+    assert resolve_response.status_code == 200
+    assert resolve_response.json()["events_emitted"][0]["type"] == (
+        "human_assistance.resolved"
+    )
+    assert state_client.human_assistance_requests[0].status == "answered"
+    assert state_client.human_assistance_requests[0].response == "PDF date confirmed. Continue."
 
 
 def test_tool_gate_executes_web_fetch_adapter() -> None:
@@ -7980,6 +8198,20 @@ def test_project_briefs_surface_next_actions_and_reminders() -> None:
             ),
         ]
     )
+    state_client.human_assistance_requests.append(
+        HumanAssistanceRequest(
+            id="human-assistance-captcha",
+            project_id="project_demo",
+            task_id="task-blocked",
+            agent_id="agent-ops",
+            kind="captcha",
+            title="CAPTCHA on supplier portal",
+            description="Human verification is required before the job can continue.",
+            urgency="high",
+            requested_by_id="agent-ops",
+            created_at=now + timedelta(minutes=4),
+        )
+    )
     app.dependency_overrides[get_state_client] = lambda: state_client
 
     try:
@@ -8001,17 +8233,21 @@ def test_project_briefs_surface_next_actions_and_reminders() -> None:
     assert [task["id"] for task in brief["next_tasks"]] == ["task-next"]
     assert [task["id"] for task in brief["review_tasks"]] == ["task-blocked"]
     assert [job["id"] for job in brief["blocked_connector_jobs"]] == ["job-blocked"]
+    assert [request["id"] for request in brief["human_assistance_requests"]] == [
+        "human-assistance-captcha"
+    ]
     assert [event["id"] for event in brief["latest_events"]] == [
         "event-task",
         "event-project",
     ]
     assert brief["next_action"] == {
-        "kind": "task_review",
-        "target_id": "task-blocked",
-        "title": "Review supplier credential request",
-        "reason": "Task is blocked; it needs a human or manager decision.",
+        "kind": "human_assistance",
+        "target_id": "human-assistance-captcha",
+        "title": "CAPTCHA on supplier portal",
+        "reason": "captcha request from agent-ops; human input is required.",
     }
     assert brief["reminders"] == [
+        "Answer 1 human assistance request(s).",
         "Review 1 blocked or pending task(s).",
         "Review 1 blocked connector job(s).",
         "Next task: Prepare sourcing shortlist.",

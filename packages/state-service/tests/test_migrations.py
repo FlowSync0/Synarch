@@ -33,6 +33,8 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0024_web_extract_provider_registry.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0025_local_playwright_provider.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0026_browserless_provider.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0027_human_assistance_requests.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0028_human_assistance_tool_access.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

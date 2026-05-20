@@ -39,6 +39,10 @@ from synarch_models import (
     EventRecord,
     EventType,
     HealthResponse,
+    HumanAssistanceKind,
+    HumanAssistanceRequest,
+    HumanAssistanceResolution,
+    HumanAssistanceStatus,
     LifecycleAction,
     ModelDefinition,
     ModelPolicy,
@@ -447,6 +451,32 @@ def validate_credential_access_request(access_request: CredentialAccessRequest) 
         raise HTTPException(
             status_code=400,
             detail="Credential access request tool must be required by task",
+        )
+
+
+def validate_human_assistance_request(assistance_request: HumanAssistanceRequest) -> None:
+    if not REPOSITORIES.projects.exists(assistance_request.project_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown project: {assistance_request.project_id}",
+        )
+    if assistance_request.task_id is None:
+        return
+    task = REPOSITORIES.tasks.get(assistance_request.task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown task: {assistance_request.task_id}",
+        )
+    if task.project_id != assistance_request.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Human assistance request task must belong to project",
+        )
+    if task.assigned_agent_id != assistance_request.agent_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Human assistance request agent must match task assignment",
         )
 
 
@@ -3013,6 +3043,191 @@ def list_audit_logs(
 @app.get("/audit-logs/{audit_id}", response_model=AuditLogRecord)
 def read_audit_log(audit_id: str) -> AuditLogRecord:
     return read_record(REPOSITORIES.audit_logs, audit_id, "audit log")
+
+
+def human_assistance_payload(request_record: HumanAssistanceRequest) -> dict[str, object]:
+    return {
+        "human_assistance_request_id": request_record.id,
+        "project_id": request_record.project_id,
+        "task_id": request_record.task_id,
+        "agent_id": request_record.agent_id,
+        "kind": request_record.kind,
+        "title": request_record.title,
+        "urgency": request_record.urgency,
+        "status": request_record.status,
+    }
+
+
+@app.post(
+    "/human-assistance-requests",
+    response_model=HumanAssistanceRequest,
+    status_code=201,
+)
+def create_human_assistance_request(
+    assistance_request: HumanAssistanceRequest,
+    request: Request,
+) -> HumanAssistanceRequest:
+    validate_human_assistance_request(assistance_request)
+    audit_context = audit_context_from_request(request)
+    record = create_record(
+        REPOSITORIES.human_assistance_requests,
+        assistance_request.id,
+        assistance_request,
+    )
+    create_domain_event(
+        EventRecord(
+            type=EventType.human_assistance_requested,
+            source_agent_id=agent_event_source(
+                record.requested_by_type,
+                record.requested_by_id,
+            ),
+            target=record.project_id,
+            payload=human_assistance_payload(record),
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="human_assistance_request.created",
+        target_type="human_assistance_request",
+        target_id=record.id,
+        payload=human_assistance_payload(record),
+    )
+    return record
+
+
+@app.get("/human-assistance-requests", response_model=list[HumanAssistanceRequest])
+def list_human_assistance_requests(
+    project_id: str | None = None,
+    task_id: str | None = None,
+    agent_id: str | None = None,
+    kind: HumanAssistanceKind | None = None,
+    status: HumanAssistanceStatus | None = None,
+) -> list[HumanAssistanceRequest]:
+    assistance_requests = REPOSITORIES.human_assistance_requests.list_records()
+    if project_id is not None:
+        assistance_requests = [
+            assistance_request
+            for assistance_request in assistance_requests
+            if assistance_request.project_id == project_id
+        ]
+    if task_id is not None:
+        assistance_requests = [
+            assistance_request
+            for assistance_request in assistance_requests
+            if assistance_request.task_id == task_id
+        ]
+    if agent_id is not None:
+        assistance_requests = [
+            assistance_request
+            for assistance_request in assistance_requests
+            if assistance_request.agent_id == agent_id
+        ]
+    if kind is not None:
+        assistance_requests = [
+            assistance_request
+            for assistance_request in assistance_requests
+            if assistance_request.kind == kind
+        ]
+    if status is not None:
+        assistance_requests = [
+            assistance_request
+            for assistance_request in assistance_requests
+            if assistance_request.status == status
+        ]
+    return sorted(assistance_requests, key=lambda item: item.created_at)
+
+
+@app.get(
+    "/human-assistance-requests/{request_id}",
+    response_model=HumanAssistanceRequest,
+)
+def read_human_assistance_request(request_id: str) -> HumanAssistanceRequest:
+    return read_record(
+        REPOSITORIES.human_assistance_requests,
+        request_id,
+        "human assistance request",
+    )
+
+
+@app.post(
+    "/human-assistance-requests/{request_id}/resolutions",
+    response_model=HumanAssistanceResolution,
+    status_code=201,
+)
+def resolve_human_assistance_request(
+    request_id: str,
+    resolution: HumanAssistanceResolution,
+    request: Request,
+) -> HumanAssistanceResolution:
+    if resolution.request_id != request_id:
+        raise HTTPException(status_code=400, detail="Resolution request_id must match path")
+    if resolution.status not in {
+        HumanAssistanceStatus.answered,
+        HumanAssistanceStatus.dismissed,
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Human assistance resolution must be answered or dismissed",
+        )
+
+    assistance_request = read_record(
+        REPOSITORIES.human_assistance_requests,
+        request_id,
+        "human assistance request",
+    )
+    if assistance_request.status != HumanAssistanceStatus.requested:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Human assistance request is already {assistance_request.status}",
+        )
+
+    resolved_request = assistance_request.model_copy(
+        update={
+            "status": resolution.status,
+            "response": resolution.response,
+            "resolved_by_type": resolution.resolved_by_type,
+            "resolved_by_id": resolution.resolved_by_id,
+            "resolved_at": resolution.resolved_at,
+        }
+    )
+    update_record(
+        REPOSITORIES.human_assistance_requests,
+        request_id,
+        resolved_request,
+        "human assistance request",
+    )
+    event = create_domain_event(
+        EventRecord(
+            type=EventType.human_assistance_resolved,
+            source_agent_id=agent_event_source(
+                resolution.resolved_by_type,
+                resolution.resolved_by_id,
+            ),
+            target=assistance_request.project_id,
+            payload={
+                **human_assistance_payload(resolved_request),
+                "response": resolution.response,
+            },
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        )
+    )
+    write_audit_log(
+        audit_context_from_request(request)
+        or AuditContext(
+            actor_type=resolution.resolved_by_type,
+            actor_id=resolution.resolved_by_id,
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        ),
+        action=f"human_assistance_request.{resolution.status}",
+        target_type="human_assistance_request",
+        target_id=request_id,
+        payload={
+            **human_assistance_payload(resolved_request),
+            "response": resolution.response,
+        },
+    )
+    return resolution.model_copy(update={"events_emitted": [event]})
 
 
 @app.post(

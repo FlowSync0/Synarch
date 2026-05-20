@@ -291,6 +291,119 @@ def test_credential_access_request_records_event_and_audit() -> None:
     assert audits[0]["target_id"] == "credential-access-test"
 
 
+def test_human_assistance_request_records_event_audit_and_resolution() -> None:
+    client = TestClient(app)
+    trace_id = "trace_human_assistance_request"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier CAPTCHA",
+            "goal": "Escalate human-only supplier portal steps.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Inspect supplier portal",
+            assigned_agent_id="agent-ops-sourcing",
+            required_tools=["web.extract"],
+        ),
+    )
+    assert task_response.status_code == 201
+
+    assistance_response = client.post(
+        "/human-assistance-requests",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-sourcing",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "human-assistance-captcha-test",
+            "project_id": project_response.json()["id"],
+            "task_id": task_response.json()["id"],
+            "agent_id": "agent-ops-sourcing",
+            "kind": "captcha",
+            "title": "CAPTCHA on supplier portal",
+            "description": "Human verification is required before extraction can continue.",
+            "urgency": "high",
+            "evidence": {"url": "https://supplier.example/login"},
+            "requested_by_id": "agent-ops-sourcing",
+        },
+    )
+
+    assert assistance_response.status_code == 201
+    assistance_request = assistance_response.json()
+    assert assistance_request["status"] == "requested"
+    assert assistance_request["kind"] == "captcha"
+
+    list_response = client.get(
+        "/human-assistance-requests",
+        params={"project_id": project_response.json()["id"], "status": "requested"},
+    )
+    assert list_response.status_code == 200
+    assert [request["id"] for request in list_response.json()] == [
+        "human-assistance-captcha-test"
+    ]
+
+    resolution_response = client.post(
+        "/human-assistance-requests/human-assistance-captcha-test/resolutions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "request_id": "human-assistance-captcha-test",
+            "status": "answered",
+            "response": "Manual verification completed. Retry the portal extraction.",
+            "resolved_by_type": "user",
+            "resolved_by_id": "local-user",
+        },
+    )
+    assert resolution_response.status_code == 201
+    assert resolution_response.json()["events_emitted"][0]["type"] == (
+        "human_assistance.resolved"
+    )
+
+    request_response = client.get(
+        "/human-assistance-requests/human-assistance-captcha-test"
+    )
+    assert request_response.status_code == 200
+    assert request_response.json()["status"] == "answered"
+    assert request_response.json()["response"] == (
+        "Manual verification completed. Retry the portal extraction."
+    )
+
+    repeat_response = client.post(
+        "/human-assistance-requests/human-assistance-captcha-test/resolutions",
+        json={
+            "request_id": "human-assistance-captcha-test",
+            "status": "dismissed",
+            "response": "Duplicate.",
+            "resolved_by_type": "user",
+            "resolved_by_id": "local-user",
+        },
+    )
+    assert repeat_response.status_code == 409
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "human_assistance.requested",
+        "human_assistance.resolved",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert "human_assistance_request.created" in [
+        audit["action"] for audit in audits
+    ]
+    assert "human_assistance_request.answered" in [
+        audit["action"] for audit in audits
+    ]
+
+
 def test_credential_access_decision_updates_request_and_records_event() -> None:
     client = TestClient(app)
     trace_id = "trace_credential_access_decision"

@@ -88,7 +88,11 @@ GoalEnvelope
   -> Connector jobs can self-stop through run output or metadata.max_runs
   -> Failed connector jobs back off and can stop after metadata.max_failures
   -> Blocked connector job runs stop the job for human review instead of retrying forever
+  -> Human assistance requests persist CAPTCHA, PDF review, external error, key decision, and manual-action blockers
+  -> Authorized agents can create human assistance requests through `human.assistance.request`
+  -> Gateway project briefs prioritize open human assistance requests as the next project action
   -> Gateway project briefs aggregate next action, reminders, blocked connector jobs, tasks, and recent events
+  -> Frontend approval queue can answer or dismiss human assistance requests through traceable Gateway routes
   -> Frontend connector panel reads state-service connector jobs/runs through same-origin proxies
   -> Frontend connector controls run, stop, and resume jobs through Gateway with event/audit traces
   -> Frontend connector history reads audit logs and shows job runs/events/audits by trace_id
@@ -213,6 +217,13 @@ also declare `metadata.max_failures` to stop after a bounded number of failed ru
 Blocked connector runs stop the job immediately with a human-review reason, so CAPTCHA, access, or
 credential blocks do not loop indefinitely. The state-service connector job list can be filtered by
 `last_run_status=blocked` for review surfaces and monitors.
+
+Agents must use `human.assistance.request` when the next step depends on a human action or
+judgment: CAPTCHA, login/manual account action, ambiguous provider error, PDF/document verification,
+or a key business decision. The request is durable, scoped to project/task/agent, emits
+`human_assistance.requested`, and writes an audit log. A human can answer or dismiss it through
+Gateway; resolution emits `human_assistance.resolved`, writes an audit log, and keeps the project
+brief focused on the unresolved blocker until it is handled.
 
 Run one memory compaction policy tick for a known scope with:
 

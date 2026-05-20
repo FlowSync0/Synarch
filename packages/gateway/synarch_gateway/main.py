@@ -44,6 +44,10 @@ from synarch_models import (
     GoalEnvelope,
     GoalSubmissionResult,
     HealthResponse,
+    HumanAssistanceKind,
+    HumanAssistanceRequest,
+    HumanAssistanceResolution,
+    HumanAssistanceStatus,
     LocalWorldView,
     MemoryCompactionPlanRequest,
     MemoryCompactionPlanResult,
@@ -1127,6 +1131,51 @@ def list_credential_access_requests(
         raise HTTPException(status_code=502, detail="State service unavailable") from error
 
 
+@app.get("/human-assistance-requests", response_model=list[HumanAssistanceRequest])
+def list_human_assistance_requests(
+    project_id: str | None = None,
+    task_id: str | None = None,
+    agent_id: str | None = None,
+    kind: HumanAssistanceKind | None = None,
+    status: HumanAssistanceStatus | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[HumanAssistanceRequest]:
+    try:
+        return state_client.list_human_assistance_requests(
+            project_id=project_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            kind=kind.value if kind is not None else None,
+            status=status.value if status is not None else None,
+        )
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post(
+    "/human-assistance-requests/{request_id}/resolutions",
+    response_model=HumanAssistanceResolution,
+)
+def resolve_human_assistance_request(
+    request_id: str,
+    resolution: HumanAssistanceResolution,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+) -> HumanAssistanceResolution:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    headers = task_reviewer_headers(request, trace_id)
+    try:
+        return state_client.resolve_human_assistance_request(
+            request_id,
+            resolution,
+            headers=headers,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
 @app.post(
     "/credential-access-requests/{request_id}/decisions",
     response_model=CredentialAccessDecision,
@@ -1450,6 +1499,7 @@ def tool_result_log_payload(execution_output: dict[str, object]) -> dict[str, ob
         "requires_human_review",
         "block_signals",
         "recommended_action",
+        "human_assistance_request_id",
         "provider_escalation_options",
         "review_evidence",
     ):
@@ -2072,6 +2122,21 @@ def execute_connector_job_list_adapter(
     return execute_connector_job_list_tool(
         tool_call,
         state_client=state_client,
+    )
+
+
+def execute_human_assistance_request_adapter(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    return execute_human_assistance_request_tool(
+        tool_call,
+        state_client=state_client,
+        headers=headers,
+        trace_id=trace_id,
     )
 
 
@@ -2927,6 +2992,112 @@ def execute_connector_job_list_tool(
     }
 
 
+def execute_human_assistance_request_tool(
+    tool_call: ToolCallRequest,
+    *,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    project_id = tool_call.project_id or string_argument(tool_call, "project_id")
+    if project_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="human.assistance.request requires project_id",
+        )
+    assistance_request = HumanAssistanceRequest(
+        id=string_argument(tool_call, "id") or human_assistance_request_id(tool_call),
+        project_id=project_id,
+        task_id=tool_call.task_id or string_argument(tool_call, "task_id"),
+        agent_id=tool_call.agent_id,
+        kind=human_assistance_kind_argument(tool_call),
+        title=required_string_argument(tool_call, "title", "human.assistance.request"),
+        description=required_string_argument(
+            tool_call,
+            "description",
+            "human.assistance.request",
+        ),
+        urgency=human_assistance_urgency_argument(tool_call),
+        evidence=human_assistance_evidence_argument(tool_call, trace_id),
+        requested_by_type=ActorType.agent,
+        requested_by_id=tool_call.agent_id,
+    )
+    try:
+        record = state_client.create_human_assistance_request(
+            assistance_request,
+            headers=headers,
+        )
+    except StateServiceRequestError as error:
+        if error.status_code != 409:
+            raise
+        record = state_client.get_human_assistance_request(assistance_request.id)
+    return {
+        "executed": True,
+        "adapter": "human.assistance.request",
+        "tool_status": TaskStatus.blocked,
+        "blocked_reason": "human_assistance_requested",
+        "requires_human_review": True,
+        "recommended_action": "Answer the human assistance request, then retry or update the task.",
+        "human_assistance_request": record.model_dump(mode="json"),
+        "human_assistance_request_id": record.id,
+        "kind": record.kind,
+        "status": record.status,
+    }
+
+
+def human_assistance_request_id(tool_call: ToolCallRequest) -> str:
+    task_or_project = tool_call.task_id or tool_call.project_id or "project"
+    kind = string_argument(tool_call, "kind") or HumanAssistanceKind.other.value
+    title = string_argument(tool_call, "title") or "request"
+    raw = f"{task_or_project}-{kind}-{title}"
+    safe = "".join(character if character.isalnum() else "_" for character in raw).strip("_")
+    return f"human_assistance_{safe[:96].strip('_') or uuid4().hex[:12]}"
+
+
+def human_assistance_kind_argument(tool_call: ToolCallRequest) -> HumanAssistanceKind:
+    raw_kind = string_argument(tool_call, "kind") or HumanAssistanceKind.other.value
+    try:
+        return HumanAssistanceKind(raw_kind)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "human.assistance.request kind must be one of: "
+                f"{', '.join(HumanAssistanceKind)}"
+            ),
+        ) from error
+
+
+def human_assistance_urgency_argument(tool_call: ToolCallRequest) -> str:
+    raw_urgency = string_argument(tool_call, "urgency")
+    if raw_urgency is None:
+        return "medium"
+    if raw_urgency not in {"low", "medium", "high", "critical"}:
+        raise HTTPException(
+            status_code=400,
+            detail="human.assistance.request urgency must be low, medium, high, or critical",
+        )
+    return raw_urgency
+
+
+def human_assistance_evidence_argument(
+    tool_call: ToolCallRequest,
+    trace_id: str,
+) -> dict[str, object]:
+    raw_evidence = tool_call.arguments.get("evidence", {})
+    if not isinstance(raw_evidence, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="human.assistance.request evidence must be an object",
+        )
+    return {
+        **raw_evidence,
+        "source_trace_id": trace_id,
+        "tool_reason": tool_call.reason,
+        "service_id": tool_call.service_id,
+    }
+
+
 def connector_job_kind_argument(tool_call: ToolCallRequest) -> ConnectorJobKind:
     raw_kind = required_string_argument(tool_call, "kind", "connector.job.create")
     try:
@@ -3025,6 +3196,7 @@ TOOL_ADAPTERS: dict[str, ToolAdapter] = {
     "connector.job.list": execute_connector_job_list_adapter,
     "connector.job.stop": execute_connector_job_stop_adapter,
     "event.emit": execute_event_emit_adapter,
+    "human.assistance.request": execute_human_assistance_request_adapter,
     "web.extract": execute_web_extract_adapter,
     "web.fetch": execute_web_fetch_adapter,
 }
@@ -3198,6 +3370,14 @@ TOOL_ADAPTER_MANIFESTS: dict[str, ToolAdapterManifest] = {
         required_arguments=("type",),
         optional_arguments=("target", "payload"),
         risk_level="low",
+    ),
+    "human.assistance.request": ToolAdapterManifest(
+        tool_name="human.assistance.request",
+        adapter="human.assistance.request",
+        required_arguments=("kind", "title", "description"),
+        optional_arguments=("id", "project_id", "task_id", "urgency", "evidence"),
+        risk_level="medium",
+        audit_required=True,
     ),
     "web.fetch": ToolAdapterManifest(
         tool_name="web.fetch",
@@ -3549,11 +3729,18 @@ def list_project_briefs(
                     last_run_status=ConnectorJobRunStatus.blocked,
                 )
             )
+            human_assistance_requests = sorted_human_assistance_requests(
+                state_client.list_human_assistance_requests(
+                    project_id=project.id,
+                    status=HumanAssistanceStatus.requested,
+                )
+            )
             briefs.append(
                 build_project_brief(
                     project=project,
                     tasks=tasks,
                     blocked_connector_jobs=blocked_connector_jobs,
+                    human_assistance_requests=human_assistance_requests,
                     events=project_events,
                 )
             )
@@ -3617,6 +3804,7 @@ def build_project_brief(
     project: ProjectRecord,
     tasks: list[TaskRecord],
     blocked_connector_jobs: list[ConnectorJobRecord],
+    human_assistance_requests: list[HumanAssistanceRequest],
     events: list[EventRecord],
 ) -> ProjectBrief:
     review_tasks = sorted_review_tasks(tasks)
@@ -3628,14 +3816,17 @@ def build_project_brief(
         next_tasks=next_tasks[:3],
         review_tasks=review_tasks[:3],
         blocked_connector_jobs=blocked_connector_jobs[:3],
+        human_assistance_requests=human_assistance_requests[:3],
         latest_events=events[:5],
         reminders=project_brief_reminders(
             next_tasks=next_tasks,
             review_task_count=len(review_tasks),
             blocked_connector_job_count=len(blocked_connector_jobs),
+            human_assistance_request_count=len(human_assistance_requests),
         ),
         next_action=project_brief_next_action(
             review_tasks=review_tasks,
+            human_assistance_requests=human_assistance_requests,
             blocked_connector_jobs=blocked_connector_jobs,
             next_tasks=next_tasks,
             project=project,
@@ -3690,6 +3881,20 @@ def sorted_connector_jobs(jobs: list[ConnectorJobRecord]) -> list[ConnectorJobRe
     )
 
 
+def sorted_human_assistance_requests(
+    assistance_requests: list[HumanAssistanceRequest],
+) -> list[HumanAssistanceRequest]:
+    return sorted(
+        assistance_requests,
+        key=lambda assistance_request: (
+            assistance_request.urgency != "critical",
+            assistance_request.urgency != "high",
+            assistance_request.created_at,
+            assistance_request.id,
+        ),
+    )
+
+
 def project_latest_events(
     events: list[EventRecord],
     project_id: str,
@@ -3711,15 +3916,22 @@ def project_brief_reminders(
     next_tasks: list[TaskRecord],
     review_task_count: int,
     blocked_connector_job_count: int,
+    human_assistance_request_count: int,
 ) -> list[str]:
     reminders: list[str] = []
+    if human_assistance_request_count > 0:
+        reminders.append(f"Answer {human_assistance_request_count} human assistance request(s).")
     if review_task_count > 0:
         reminders.append(f"Review {review_task_count} blocked or pending task(s).")
     if blocked_connector_job_count > 0:
         reminders.append(f"Review {blocked_connector_job_count} blocked connector job(s).")
     if next_tasks:
         reminders.append(f"Next task: {next_tasks[0].title}.")
-    elif review_task_count == 0 and blocked_connector_job_count == 0:
+    elif (
+        review_task_count == 0
+        and blocked_connector_job_count == 0
+        and human_assistance_request_count == 0
+    ):
         reminders.append("No queued next task; split the project into concrete work.")
     return reminders
 
@@ -3727,10 +3939,22 @@ def project_brief_reminders(
 def project_brief_next_action(
     *,
     review_tasks: list[TaskRecord],
+    human_assistance_requests: list[HumanAssistanceRequest],
     blocked_connector_jobs: list[ConnectorJobRecord],
     next_tasks: list[TaskRecord],
     project: ProjectRecord,
 ) -> ProjectBriefAction:
+    if human_assistance_requests:
+        assistance_request = human_assistance_requests[0]
+        return ProjectBriefAction(
+            kind="human_assistance",
+            target_id=assistance_request.id,
+            title=assistance_request.title,
+            reason=(
+                f"{assistance_request.kind} request from "
+                f"{assistance_request.agent_id}; human input is required."
+            ),
+        )
     if review_tasks:
         task = review_tasks[0]
         return ProjectBriefAction(
