@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -893,3 +893,27 @@ class ProjectTimeline(SynarchModel):
     memory_items: list[MemoryItem] = Field(default_factory=list)
     total_cost: float = 0.0
     currency: str = "USD"
+
+
+class ProjectBriefAction(SynarchModel):
+    kind: Literal[
+        "task_review",
+        "connector_job_review",
+        "task_next",
+        "project_planning",
+    ]
+    target_id: str | None = None
+    title: str
+    reason: str
+
+
+class ProjectBrief(SynarchModel):
+    project_id: str
+    project: ProjectRecord
+    task_counts: dict[str, int] = Field(default_factory=dict)
+    next_tasks: list[TaskRecord] = Field(default_factory=list)
+    review_tasks: list[TaskRecord] = Field(default_factory=list)
+    blocked_connector_jobs: list[ConnectorJobRecord] = Field(default_factory=list)
+    latest_events: list[EventRecord] = Field(default_factory=list)
+    reminders: list[str] = Field(default_factory=list)
+    next_action: ProjectBriefAction

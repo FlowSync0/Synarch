@@ -59,6 +59,8 @@ from synarch_models import (
     MemoryRelationProposalResult,
     MemoryStatus,
     MemoryStatusUpdate,
+    ProjectBrief,
+    ProjectBriefAction,
     ProjectIntent,
     ProjectRecord,
     ProjectSplitApplication,
@@ -3523,6 +3525,48 @@ def list_audit_logs(
         raise HTTPException(status_code=502, detail="State service unavailable") from error
 
 
+@app.get("/projects/briefs", response_model=list[ProjectBrief])
+def list_project_briefs(
+    project_id: str | None = None,
+    limit: int = Query(default=20, ge=1, le=100),
+    state_client: StateClient = Depends(get_state_client),
+) -> list[ProjectBrief]:
+    try:
+        projects = (
+            [state_client.get_project(project_id)]
+            if project_id is not None
+            else state_client.list_projects()
+        )
+        events = state_client.list_events()
+        briefs: list[ProjectBrief] = []
+        for project in projects[:limit]:
+            tasks = state_client.list_tasks(project_id=project.id)
+            task_ids = {task.id for task in tasks}
+            project_events = project_latest_events(events, project.id, task_ids)
+            blocked_connector_jobs = sorted_connector_jobs(
+                state_client.list_connector_jobs(
+                    project_id=project.id,
+                    last_run_status=ConnectorJobRunStatus.blocked,
+                )
+            )
+            briefs.append(
+                build_project_brief(
+                    project=project,
+                    tasks=tasks,
+                    blocked_connector_jobs=blocked_connector_jobs,
+                    events=project_events,
+                )
+            )
+        return briefs
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(
+            status_code=502,
+            detail="Project brief dependency unavailable",
+        ) from error
+
+
 @app.get("/projects/{project_id}/timeline", response_model=ProjectTimeline)
 def get_project_timeline(
     project_id: str,
@@ -3566,6 +3610,157 @@ def get_project_timeline(
             status_code=502,
             detail="Project timeline dependency unavailable",
         ) from error
+
+
+def build_project_brief(
+    *,
+    project: ProjectRecord,
+    tasks: list[TaskRecord],
+    blocked_connector_jobs: list[ConnectorJobRecord],
+    events: list[EventRecord],
+) -> ProjectBrief:
+    review_tasks = sorted_review_tasks(tasks)
+    next_tasks = sorted_next_tasks(tasks)
+    return ProjectBrief(
+        project_id=project.id,
+        project=project,
+        task_counts=task_counts_by_status(tasks),
+        next_tasks=next_tasks[:3],
+        review_tasks=review_tasks[:3],
+        blocked_connector_jobs=blocked_connector_jobs[:3],
+        latest_events=events[:5],
+        reminders=project_brief_reminders(
+            next_tasks=next_tasks,
+            review_task_count=len(review_tasks),
+            blocked_connector_job_count=len(blocked_connector_jobs),
+        ),
+        next_action=project_brief_next_action(
+            review_tasks=review_tasks,
+            blocked_connector_jobs=blocked_connector_jobs,
+            next_tasks=next_tasks,
+            project=project,
+        ),
+    )
+
+
+def task_counts_by_status(tasks: list[TaskRecord]) -> dict[str, int]:
+    counts = {status.value: 0 for status in TaskStatus}
+    for task in tasks:
+        counts[str(task.status)] = counts.get(str(task.status), 0) + 1
+    return counts
+
+
+def sorted_next_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:
+    return sorted(
+        [
+            task
+            for task in tasks
+            if task.status in {TaskStatus.running, TaskStatus.queued}
+        ],
+        key=lambda task: (
+            0 if task.status == TaskStatus.running else 1,
+            task.sequence,
+            task.created_at,
+            task.id,
+        ),
+    )
+
+
+def sorted_review_tasks(tasks: list[TaskRecord]) -> list[TaskRecord]:
+    return sorted(
+        [
+            task
+            for task in tasks
+            if task.status in {TaskStatus.blocked, TaskStatus.needs_review}
+        ],
+        key=lambda task: (
+            0 if task.status == TaskStatus.blocked else 1,
+            task.sequence,
+            task.created_at,
+            task.id,
+        ),
+    )
+
+
+def sorted_connector_jobs(jobs: list[ConnectorJobRecord]) -> list[ConnectorJobRecord]:
+    return sorted(
+        jobs,
+        key=lambda job: (job.stopped_at or job.updated_at or job.created_at, job.id),
+        reverse=True,
+    )
+
+
+def project_latest_events(
+    events: list[EventRecord],
+    project_id: str,
+    task_ids: set[str],
+) -> list[EventRecord]:
+    return sorted(
+        [
+            event
+            for event in events
+            if event_belongs_to_project(event, project_id, task_ids)
+        ],
+        key=lambda event: (event.timestamp, event.id),
+        reverse=True,
+    )
+
+
+def project_brief_reminders(
+    *,
+    next_tasks: list[TaskRecord],
+    review_task_count: int,
+    blocked_connector_job_count: int,
+) -> list[str]:
+    reminders: list[str] = []
+    if review_task_count > 0:
+        reminders.append(f"Review {review_task_count} blocked or pending task(s).")
+    if blocked_connector_job_count > 0:
+        reminders.append(f"Review {blocked_connector_job_count} blocked connector job(s).")
+    if next_tasks:
+        reminders.append(f"Next task: {next_tasks[0].title}.")
+    elif review_task_count == 0 and blocked_connector_job_count == 0:
+        reminders.append("No queued next task; split the project into concrete work.")
+    return reminders
+
+
+def project_brief_next_action(
+    *,
+    review_tasks: list[TaskRecord],
+    blocked_connector_jobs: list[ConnectorJobRecord],
+    next_tasks: list[TaskRecord],
+    project: ProjectRecord,
+) -> ProjectBriefAction:
+    if review_tasks:
+        task = review_tasks[0]
+        return ProjectBriefAction(
+            kind="task_review",
+            target_id=task.id,
+            title=task.title,
+            reason=f"Task is {task.status}; it needs a human or manager decision.",
+        )
+    if blocked_connector_jobs:
+        job = blocked_connector_jobs[0]
+        return ProjectBriefAction(
+            kind="connector_job_review",
+            target_id=job.id,
+            title=job.purpose,
+            reason="Latest connector job run is blocked and needs review.",
+        )
+    if next_tasks:
+        task = next_tasks[0]
+        return ProjectBriefAction(
+            kind="task_next",
+            target_id=task.id,
+            title=task.title,
+            reason=f"Task is {task.status} and is the next executable work item.",
+        )
+    return ProjectBriefAction(
+        kind="project_planning",
+        target_id=project.id,
+        title=project.title,
+        reason="Project has no queued work; define or split the next concrete task.",
+    )
 
 
 def event_belongs_to_project(

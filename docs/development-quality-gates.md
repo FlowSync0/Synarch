@@ -88,9 +88,11 @@ GoalEnvelope
   -> Connector jobs can self-stop through run output or metadata.max_runs
   -> Failed connector jobs back off and can stop after metadata.max_failures
   -> Blocked connector job runs stop the job for human review instead of retrying forever
+  -> Gateway project briefs aggregate next action, reminders, blocked connector jobs, tasks, and recent events
   -> Frontend connector panel reads state-service connector jobs/runs through same-origin proxies
   -> Frontend connector controls run, stop, and resume jobs through Gateway with event/audit traces
   -> Frontend connector history reads audit logs and shows job runs/events/audits by trace_id
+  -> Frontend project detail surfaces the Gateway project brief as the operational project guide
   -> Event Service timeline
 ```
 

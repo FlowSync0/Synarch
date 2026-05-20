@@ -216,6 +216,25 @@ export type ProjectTimeline = {
   currency: string;
 };
 
+export type ProjectBriefAction = {
+  kind: "task_review" | "connector_job_review" | "task_next" | "project_planning";
+  target_id?: string | null;
+  title: string;
+  reason: string;
+};
+
+export type ProjectBrief = {
+  project_id: string;
+  project: ProjectRecord;
+  task_counts: Record<string, number>;
+  next_tasks: TaskRecord[];
+  review_tasks: TaskRecord[];
+  blocked_connector_jobs: ConnectorJobRecord[];
+  latest_events: EventRecord[];
+  reminders: string[];
+  next_action: ProjectBriefAction;
+};
+
 export type RunReadyRequest = {
   projectId: string;
   maxTasks: number;
@@ -404,6 +423,18 @@ export async function getProjectTimeline(projectId: string): Promise<ProjectTime
     }
   );
   return parseJsonResponse<ProjectTimeline>(response);
+}
+
+export async function listProjectBriefs(projectId?: string): Promise<ProjectBrief[]> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set("project_id", projectId);
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/gateway/projects/briefs${query ? `?${query}` : ""}`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ProjectBrief[]>(response);
 }
 
 export async function runTask(taskId: string): Promise<TaskRunResult> {

@@ -56,6 +56,7 @@ import {
   decideTaskReview,
   getProjectTimeline,
   listCredentialAccessRequests,
+  listProjectBriefs,
   listTaskReviewQueue,
   resumeConnectorJob,
   runReadyTasks,
@@ -72,6 +73,7 @@ import {
   type CredentialAccessRequest,
   type MemoryItem,
   type MemoryStatus,
+  type ProjectBrief,
   type ProjectTimeline,
   type TaskSkipRecord,
   type TaskRunBatchResult,
@@ -766,6 +768,16 @@ function projectProgressTone(status: string): Tone {
     return "info";
   }
   return "accent";
+}
+
+function projectBriefActionTone(kind: ProjectBrief["next_action"]["kind"]): Tone {
+  if (kind === "task_review" || kind === "connector_job_review") {
+    return "warn";
+  }
+  if (kind === "task_next") {
+    return "accent";
+  }
+  return "info";
 }
 
 function projectRow(project: ProjectRecord): ProjectViewModel {
@@ -1825,6 +1837,13 @@ export default function DashboardPage() {
   const selectedProjectRow = projectRows.find(
     (project) => project.id === effectiveSelectedProjectId
   );
+  const projectBriefsQuery = useQuery({
+    queryKey: ["project-briefs", effectiveSelectedProjectId],
+    queryFn: () => listProjectBriefs(effectiveSelectedProjectId),
+    enabled: effectiveSelectedProjectId.length > 0,
+    refetchInterval: 10_000
+  });
+  const selectedProjectBrief = projectBriefsQuery.data?.[0] ?? null;
   const projectTimelineQuery = useQuery({
     queryKey: ["project-timeline", effectiveSelectedProjectId],
     queryFn: () => getProjectTimeline(effectiveSelectedProjectId),
@@ -2903,6 +2922,81 @@ export default function DashboardPage() {
                     </div>
                   ))}
                 </div>
+                {projectBriefsQuery.isSuccess && selectedProjectBrief ? (
+                  <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.8fr)]">
+                    <div className="min-w-0 rounded-md bg-slate-50 p-3 ring-1 ring-border">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${
+                            toneSurface[
+                              projectBriefActionTone(selectedProjectBrief.next_action.kind)
+                            ]
+                          }`}
+                        >
+                          {selectedProjectBrief.next_action.kind}
+                        </span>
+                        <p className="min-w-0 truncate text-xs text-muted">
+                          {selectedProjectBrief.next_action.target_id ?? selectedProjectBrief.project_id}
+                        </p>
+                      </div>
+                      <h3 className="mt-2 text-sm font-semibold text-ink">
+                        {selectedProjectBrief.next_action.title}
+                      </h3>
+                      <p className="mt-1 break-words text-xs text-muted">
+                        {selectedProjectBrief.next_action.reason}
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {Object.entries(selectedProjectBrief.task_counts)
+                          .filter(([, count]) => count > 0)
+                          .map(([status, count]) => (
+                            <span
+                              key={status}
+                              className="rounded-md bg-white px-2 py-0.5 text-[11px] font-medium text-muted ring-1 ring-border"
+                            >
+                              {status}: {count}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                    <div className="grid min-w-0 gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase text-muted">Rappels</p>
+                        <div className="mt-2 grid gap-1.5">
+                          {selectedProjectBrief.reminders.map((reminder) => (
+                            <p
+                              key={reminder}
+                              className="rounded-md bg-white px-2 py-1.5 text-xs text-ink ring-1 ring-border"
+                            >
+                              {reminder}
+                            </p>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold uppercase text-muted">Next</p>
+                          <p className="mt-1 truncate text-xs text-ink">
+                            {selectedProjectBrief.next_tasks[0]?.title ?? "No queued task"}
+                          </p>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-semibold uppercase text-muted">Review</p>
+                          <p className="mt-1 truncate text-xs text-ink">
+                            {selectedProjectBrief.review_tasks[0]?.title ??
+                              selectedProjectBrief.blocked_connector_jobs[0]?.purpose ??
+                              "No review item"}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : projectBriefsQuery.isLoading ? (
+                  <div className="px-4 py-3 text-xs text-muted">Brief projet en chargement...</div>
+                ) : projectBriefsQuery.isError ? (
+                  <div className="px-4 py-3 text-xs text-muted">
+                    Brief projet indisponible depuis le gateway.
+                  </div>
+                ) : null}
                 {projectTimelineTraceRows.length > 0 ? (
                   <div className="grid gap-2 px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">

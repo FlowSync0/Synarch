@@ -296,6 +296,9 @@ class FakeStateClient:
             owner_agent_id="agent-direction",
         )
 
+    def list_projects(self) -> list[ProjectRecord]:
+        return self.projects
+
     def get_task(self, task_id: str) -> TaskRecord:
         for task in self.tasks:
             if task.id == task_id:
@@ -7836,6 +7839,183 @@ def test_project_timeline_aggregates_project_records() -> None:
     assert [audit["id"] for audit in payload["audit_logs"]] == ["audit-project"]
     assert [item["id"] for item in payload["memory_items"]] == ["memory-demo"]
     assert payload["total_cost"] == 0.25
+
+
+def test_project_briefs_surface_next_actions_and_reminders() -> None:
+    state_client = FakeStateClient()
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+    state_client.projects.extend(
+        [
+            ProjectRecord(
+                id="project_demo",
+                title="Demo project",
+                goal="Keep execution visible.",
+                owner_agent_id="agent-direction",
+                created_at=now,
+            ),
+            ProjectRecord(
+                id="project_other",
+                title="Other project",
+                goal="Should be excluded.",
+                owner_agent_id="agent-direction",
+                created_at=now,
+            ),
+        ]
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task-next",
+                project_id="project_demo",
+                title="Prepare sourcing shortlist",
+                status=TaskStatus.queued,
+                assigned_agent_id="agent-ops",
+                sequence=1,
+                created_at=now,
+            ),
+            TaskRecord(
+                id="task-blocked",
+                project_id="project_demo",
+                title="Review supplier credential request",
+                status=TaskStatus.blocked,
+                assigned_agent_id="agent-ops",
+                sequence=2,
+                created_at=now + timedelta(minutes=1),
+            ),
+            TaskRecord(
+                id="task-completed",
+                project_id="project_demo",
+                title="Define acceptance criteria",
+                status=TaskStatus.completed,
+                assigned_agent_id="agent-direction",
+                sequence=0,
+                created_at=now - timedelta(minutes=1),
+            ),
+            TaskRecord(
+                id="task-other",
+                project_id="project_other",
+                title="Other task",
+                status=TaskStatus.blocked,
+                assigned_agent_id="agent-direction",
+                created_at=now,
+            ),
+        ]
+    )
+    state_client.events.extend(
+        [
+            EventRecord(
+                id="event-project",
+                type=EventType.project_created,
+                target="project_demo",
+                timestamp=now,
+            ),
+            EventRecord(
+                id="event-task",
+                type=EventType.task_blocked,
+                target="task-blocked",
+                timestamp=now + timedelta(minutes=2),
+            ),
+            EventRecord(
+                id="event-other",
+                type=EventType.task_blocked,
+                target="task-other",
+                timestamp=now + timedelta(minutes=3),
+            ),
+        ]
+    )
+    state_client.connector_jobs.extend(
+        [
+            ConnectorJobRecord(
+                id="job-blocked",
+                service_id="service-mail",
+                project_id="project_demo",
+                task_id="task-blocked",
+                owner_agent_id="agent-ops",
+                kind="cron",
+                purpose="Follow up supplier answer.",
+                created_by_type="agent",
+                created_by_id="agent-ops",
+                created_at=now,
+                updated_at=now + timedelta(minutes=2),
+            ),
+            ConnectorJobRecord(
+                id="job-other",
+                service_id="service-mail",
+                project_id="project_other",
+                owner_agent_id="agent-direction",
+                kind="cron",
+                purpose="Other follow up.",
+                created_by_type="agent",
+                created_by_id="agent-direction",
+                created_at=now,
+                updated_at=now,
+            ),
+        ]
+    )
+    state_client.connector_job_runs.extend(
+        [
+            ConnectorJobRunRecord(
+                id="run-blocked",
+                job_id="job-blocked",
+                service_id="service-mail",
+                project_id="project_demo",
+                task_id="task-blocked",
+                owner_agent_id="agent-ops",
+                status="blocked",
+                triggered_by_type="service",
+                triggered_by_id="gateway-scheduler",
+                error="Credential approval required.",
+                completed_at=now + timedelta(minutes=3),
+            ),
+            ConnectorJobRunRecord(
+                id="run-other",
+                job_id="job-other",
+                service_id="service-mail",
+                project_id="project_other",
+                owner_agent_id="agent-direction",
+                status="completed",
+                triggered_by_type="service",
+                triggered_by_id="gateway-scheduler",
+                completed_at=now + timedelta(minutes=1),
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/projects/briefs",
+            params={"project_id": "project_demo"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    brief = payload[0]
+    assert brief["project_id"] == "project_demo"
+    assert brief["task_counts"]["queued"] == 1
+    assert brief["task_counts"]["blocked"] == 1
+    assert brief["task_counts"]["completed"] == 1
+    assert [task["id"] for task in brief["next_tasks"]] == ["task-next"]
+    assert [task["id"] for task in brief["review_tasks"]] == ["task-blocked"]
+    assert [job["id"] for job in brief["blocked_connector_jobs"]] == ["job-blocked"]
+    assert [event["id"] for event in brief["latest_events"]] == [
+        "event-task",
+        "event-project",
+    ]
+    assert brief["next_action"] == {
+        "kind": "task_review",
+        "target_id": "task-blocked",
+        "title": "Review supplier credential request",
+        "reason": "Task is blocked; it needs a human or manager decision.",
+    }
+    assert brief["reminders"] == [
+        "Review 1 blocked or pending task(s).",
+        "Review 1 blocked connector job(s).",
+        "Next task: Prepare sourcing shortlist.",
+    ]
 
 
 def test_update_memory_item_status_records_gateway_event() -> None:
