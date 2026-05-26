@@ -275,6 +275,38 @@ def test_agent_messages_describe_connector_job_list_filter_values() -> None:
     assert "use status for active, stopped, or paused" in system_content
 
 
+def test_agent_messages_include_human_assistance_retry_context() -> None:
+    request = AgentTaskRequest.model_validate(
+        {
+            "task": {
+                "id": "task_supplier_retry",
+                "project_id": "project_supplier",
+                "title": "Retry supplier portal",
+                "assigned_agent_id": "agent-ops-sourcing",
+                "result": {
+                    "last_human_assistance_resolution": {
+                        "human_assistance_request_id": "human-assistance-captcha",
+                        "status": "answered",
+                        "response": "CAPTCHA completed. Continue extraction.",
+                        "next_status": "queued",
+                    }
+                },
+            },
+            "world_view": {
+                "agent_id": "agent-ops-sourcing",
+                "role": "Ops sourcing manager",
+                "division": "ops",
+            },
+        }
+    )
+
+    messages = runtime_main.agent_messages(request)
+
+    assert "task.result.last_human_assistance_resolution" in messages[0].content
+    assert "do not request the same human assistance again" in messages[0].content
+    assert "CAPTCHA completed. Continue extraction." in messages[1].content
+
+
 def test_runtime_parses_structured_memory_candidate_content() -> None:
     request = AgentTaskRequest.model_validate(
         {

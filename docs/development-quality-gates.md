@@ -223,7 +223,11 @@ judgment: CAPTCHA, login/manual account action, ambiguous provider error, PDF/do
 or a key business decision. The request is durable, scoped to project/task/agent, emits
 `human_assistance.requested`, and writes an audit log. A human can answer or dismiss it through
 Gateway; resolution emits `human_assistance.resolved`, writes an audit log, and keeps the project
-brief focused on the unresolved blocker until it is handled.
+brief focused on the unresolved blocker until it is handled. If the request is linked to a blocked
+or reviewable task, an answered request requeues the task with enough remaining attempts to retry;
+a dismissed request keeps the task in `needs_review` with `dead_letter_reason=human_assistance_dismissed`.
+The retry context includes `task.result.last_human_assistance_resolution`, and the agent prompt
+explicitly treats that field as fresh human input.
 
 Run one memory compaction policy tick for a known scope with:
 

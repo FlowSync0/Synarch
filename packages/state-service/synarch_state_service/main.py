@@ -3058,6 +3058,146 @@ def human_assistance_payload(request_record: HumanAssistanceRequest) -> dict[str
     }
 
 
+def task_human_assistance_resolution_payload(
+    task: TaskRecord,
+    request_record: HumanAssistanceRequest,
+    resolution: HumanAssistanceResolution,
+    next_status: TaskStatus,
+) -> dict[str, object]:
+    return {
+        "human_assistance_request_id": request_record.id,
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "kind": request_record.kind,
+        "status": resolution.status,
+        "response": resolution.response,
+        "resolved_by_type": resolution.resolved_by_type,
+        "resolved_by_id": resolution.resolved_by_id,
+        "resolved_at": resolution.resolved_at.isoformat(),
+        "next_status": next_status,
+    }
+
+
+def task_result_with_human_assistance_resolution(
+    task: TaskRecord,
+    request_record: HumanAssistanceRequest,
+    resolution: HumanAssistanceResolution,
+    next_status: TaskStatus,
+) -> dict[str, Any]:
+    result = task.result if isinstance(task.result, dict) else {}
+    resolution_payload = task_human_assistance_resolution_payload(
+        task,
+        request_record,
+        resolution,
+        next_status,
+    )
+    previous_resolutions = result.get("human_assistance_resolutions")
+    if not isinstance(previous_resolutions, list):
+        previous_resolutions = []
+    return {
+        **result,
+        "last_human_assistance_resolution": resolution_payload,
+        "human_assistance_resolutions": [*previous_resolutions, resolution_payload],
+    }
+
+
+def resolve_linked_human_assistance_task(
+    request_record: HumanAssistanceRequest,
+    resolution: HumanAssistanceResolution,
+    audit_context: AuditContext | None,
+    trace_id: str | None,
+) -> EventRecord | None:
+    if request_record.task_id is None:
+        return None
+    task = REPOSITORIES.tasks.get(request_record.task_id)
+    if task is None or task.status not in {TaskStatus.blocked, TaskStatus.needs_review}:
+        return None
+
+    if resolution.status == HumanAssistanceStatus.answered:
+        next_status = TaskStatus.queued
+        max_attempts = task.max_attempts
+        if max_attempts <= task.attempt_count:
+            max_attempts = task.attempt_count + 1
+        update = {
+            "status": next_status,
+            "max_attempts": max_attempts,
+            "lease_owner_id": None,
+            "lease_expires_at": None,
+            "last_heartbeat_at": None,
+            "retry_after_at": None,
+            "dead_letter_reason": None,
+            "dead_lettered_at": None,
+        }
+    else:
+        next_status = TaskStatus.needs_review
+        update = {
+            "status": next_status,
+            "lease_owner_id": None,
+            "lease_expires_at": None,
+            "last_heartbeat_at": None,
+            "retry_after_at": None,
+            "dead_letter_reason": task.dead_letter_reason
+            or "human_assistance_dismissed",
+            "dead_lettered_at": task.dead_lettered_at or resolution.resolved_at,
+        }
+
+    updated_task = task.model_copy(
+        update={
+            **update,
+            "result": task_result_with_human_assistance_resolution(
+                task,
+                request_record,
+                resolution,
+                next_status,
+            ),
+        }
+    )
+    record = update_record_if(
+        REPOSITORIES.tasks,
+        task.id,
+        updated_task,
+        {"status": task.status},
+    )
+    if record is None:
+        return None
+
+    event = create_domain_event(
+        EventRecord(
+            type=EventType.task_reviewed,
+            source_agent_id=agent_event_source(
+                audit_context.actor_type,
+                audit_context.actor_id,
+            )
+            if audit_context is not None
+            else None,
+            target=record.project_id,
+            payload={
+                "task_id": record.id,
+                "action": "human_assistance_resolved",
+                "previous_status": task.status,
+                "next_status": record.status,
+                "human_assistance_request_id": request_record.id,
+                "human_assistance_status": resolution.status,
+            },
+            trace_id=trace_id,
+        )
+    )
+    write_audit_log(
+        audit_context,
+        action="task.human_assistance_applied",
+        target_type="task",
+        target_id=record.id,
+        payload={
+            "project_id": record.project_id,
+            "previous_status": task.status,
+            "next_status": record.status,
+            "human_assistance_request_id": request_record.id,
+            "human_assistance_status": resolution.status,
+        },
+    )
+    return event
+
+
 @app.post(
     "/human-assistance-requests",
     response_model=HumanAssistanceRequest,
@@ -3197,6 +3337,12 @@ def resolve_human_assistance_request(
         resolved_request,
         "human assistance request",
     )
+    trace_id = request.headers.get("x-synarch-trace-id")
+    audit_context = audit_context_from_request(request) or AuditContext(
+        actor_type=resolution.resolved_by_type,
+        actor_id=resolution.resolved_by_id,
+        trace_id=trace_id,
+    )
     event = create_domain_event(
         EventRecord(
             type=EventType.human_assistance_resolved,
@@ -3209,16 +3355,17 @@ def resolve_human_assistance_request(
                 **human_assistance_payload(resolved_request),
                 "response": resolution.response,
             },
-            trace_id=request.headers.get("x-synarch-trace-id"),
+            trace_id=trace_id,
         )
     )
+    task_event = resolve_linked_human_assistance_task(
+        resolved_request,
+        resolution,
+        audit_context,
+        trace_id,
+    )
     write_audit_log(
-        audit_context_from_request(request)
-        or AuditContext(
-            actor_type=resolution.resolved_by_type,
-            actor_id=resolution.resolved_by_id,
-            trace_id=request.headers.get("x-synarch-trace-id"),
-        ),
+        audit_context,
         action=f"human_assistance_request.{resolution.status}",
         target_type="human_assistance_request",
         target_id=request_id,
@@ -3227,7 +3374,10 @@ def resolve_human_assistance_request(
             "response": resolution.response,
         },
     )
-    return resolution.model_copy(update={"events_emitted": [event]})
+    events_emitted = [event]
+    if task_event is not None:
+        events_emitted.append(task_event)
+    return resolution.model_copy(update={"events_emitted": events_emitted})
 
 
 @app.post(

@@ -404,6 +404,180 @@ def test_human_assistance_request_records_event_audit_and_resolution() -> None:
     ]
 
 
+def test_human_assistance_answer_requeues_blocked_task() -> None:
+    client = TestClient(app)
+    trace_id = "trace_human_assistance_requeue_task"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier CAPTCHA",
+            "goal": "Resume work after a human completes a CAPTCHA.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Resume supplier portal extraction",
+            assigned_agent_id="agent-ops-sourcing",
+            status="blocked",
+            attempt_count=3,
+            max_attempts=3,
+            result={
+                "summary": "Blocked by CAPTCHA.",
+                "blocked_reason": "human_assistance_requested",
+            },
+        ),
+    )
+    assert task_response.status_code == 201
+    task_id = task_response.json()["id"]
+
+    assistance_response = client.post(
+        "/human-assistance-requests",
+        headers={
+            "X-Synarch-Actor-Type": "agent",
+            "X-Synarch-Actor-Id": "agent-ops-sourcing",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "id": "human-assistance-requeue-test",
+            "project_id": project_response.json()["id"],
+            "task_id": task_id,
+            "agent_id": "agent-ops-sourcing",
+            "kind": "captcha",
+            "title": "CAPTCHA on supplier portal",
+            "description": "Human verification is required before extraction can continue.",
+            "urgency": "high",
+            "evidence": {"url": "https://supplier.example/login"},
+            "requested_by_id": "agent-ops-sourcing",
+        },
+    )
+    assert assistance_response.status_code == 201
+
+    resolution_response = client.post(
+        "/human-assistance-requests/human-assistance-requeue-test/resolutions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "request_id": "human-assistance-requeue-test",
+            "status": "answered",
+            "response": "CAPTCHA completed. Retry extraction.",
+            "resolved_by_type": "user",
+            "resolved_by_id": "local-user",
+        },
+    )
+    assert resolution_response.status_code == 201
+    assert [event["type"] for event in resolution_response.json()["events_emitted"]] == [
+        "human_assistance.resolved",
+        "task.reviewed",
+    ]
+
+    task = client.get(f"/tasks/{task_id}").json()
+    assert task["status"] == "queued"
+    assert task["max_attempts"] == 4
+    assert task["dead_letter_reason"] is None
+    task_resolution = task["result"]["last_human_assistance_resolution"]
+    assert parse_timestamp(task_resolution.pop("resolved_at")) == parse_timestamp(
+        resolution_response.json()["resolved_at"]
+    )
+    assert task_resolution == {
+        "human_assistance_request_id": "human-assistance-requeue-test",
+        "task_id": task_id,
+        "project_id": project_response.json()["id"],
+        "kind": "captcha",
+        "status": "answered",
+        "response": "CAPTCHA completed. Retry extraction.",
+        "resolved_by_type": "user",
+        "resolved_by_id": "local-user",
+        "next_status": "queued",
+    }
+
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "human_assistance.requested",
+        "human_assistance.resolved",
+        "task.reviewed",
+    ]
+    assert events[-1]["payload"]["previous_status"] == "blocked"
+    assert events[-1]["payload"]["next_status"] == "queued"
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert "task.human_assistance_applied" in [
+        audit["action"] for audit in audits
+    ]
+
+
+def test_human_assistance_dismiss_keeps_blocked_task_in_review() -> None:
+    client = TestClient(app)
+    trace_id = "trace_human_assistance_dismiss_task"
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Supplier CAPTCHA",
+            "goal": "Keep unresolved human blockers reviewable.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    task_response = client.post(
+        "/tasks",
+        json=task_payload(
+            project_response.json()["id"],
+            "Inspect supplier portal",
+            assigned_agent_id="agent-ops-sourcing",
+            status="blocked",
+            result={"blocked_reason": "human_assistance_requested"},
+        ),
+    )
+    assert task_response.status_code == 201
+    task_id = task_response.json()["id"]
+
+    assert (
+        client.post(
+            "/human-assistance-requests",
+            json={
+                "id": "human-assistance-dismiss-test",
+                "project_id": project_response.json()["id"],
+                "task_id": task_id,
+                "agent_id": "agent-ops-sourcing",
+                "kind": "manual_action",
+                "title": "Manual login required",
+                "description": "The user needs to decide whether to log in.",
+                "requested_by_id": "agent-ops-sourcing",
+            },
+        ).status_code
+        == 201
+    )
+
+    resolution_response = client.post(
+        "/human-assistance-requests/human-assistance-dismiss-test/resolutions",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "request_id": "human-assistance-dismiss-test",
+            "status": "dismissed",
+            "response": "Do not continue this supplier portal.",
+            "resolved_by_type": "user",
+            "resolved_by_id": "local-user",
+        },
+    )
+    assert resolution_response.status_code == 201
+
+    task = client.get(f"/tasks/{task_id}").json()
+    assert task["status"] == "needs_review"
+    assert task["dead_letter_reason"] == "human_assistance_dismissed"
+    assert task["result"]["last_human_assistance_resolution"]["status"] == "dismissed"
+    assert task["result"]["last_human_assistance_resolution"]["next_status"] == (
+        "needs_review"
+    )
+
+
 def test_credential_access_decision_updates_request_and_records_event() -> None:
     client = TestClient(app)
     trace_id = "trace_credential_access_decision"
