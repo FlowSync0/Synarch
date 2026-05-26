@@ -181,6 +181,8 @@ Progress:
   trace focus, answer, and dismiss actions.
 - Done: frontend project detail can launch the next ready task for the selected project through
   the same traceable ready-batch runner.
+- Done: frontend project brief exposes a concrete next-action button that routes to run, review,
+  connector review, assistance answer, or planning.
 - Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
   execution task.
 - Done: goal submission creates a project workspace and active project assignments for routed

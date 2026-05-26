@@ -8,6 +8,7 @@
       "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history",
       "Project detail shows project-scoped human assistance requests with evidence, trace focus, answer, and dismiss actions",
       "Project detail can launch the next ready task for the selected project through the ready-batch runner",
+      "Project brief next-action control routes the user into run, review, connector, assistance, or planning flows",
       "Sample metrics still present"
     ],
     "main_gap": "No live cost/health dashboard.",

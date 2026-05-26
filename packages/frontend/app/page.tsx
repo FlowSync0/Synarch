@@ -889,6 +889,22 @@ function projectBriefActionTone(kind: ProjectBrief["next_action"]["kind"]): Tone
   return "info";
 }
 
+function projectBriefActionButtonLabel(kind: ProjectBrief["next_action"]["kind"]): string {
+  if (kind === "human_assistance") {
+    return "Answer";
+  }
+  if (kind === "task_review") {
+    return "Review task";
+  }
+  if (kind === "connector_job_review") {
+    return "Review job";
+  }
+  if (kind === "task_next") {
+    return "Run task";
+  }
+  return "Plan next";
+}
+
 function projectRow(project: ProjectRecord): ProjectViewModel {
   return {
     id: project.id,
@@ -1513,6 +1529,7 @@ function eventRow(event: EventRecord): TimelineViewModel {
 
 export default function DashboardPage() {
   const queryClient = useQueryClient();
+  const projectHumanAssistanceRef = useRef<HTMLDivElement>(null);
   const [isGoalFormOpen, setIsGoalFormOpen] = useState(false);
   const [goalDraft, setGoalDraft] = useState<GoalDraft>(initialGoalDraft);
   const [lastGoalSubmission, setLastGoalSubmission] =
@@ -2648,6 +2665,48 @@ export default function DashboardPage() {
       maxTasks: 1
     });
   };
+  const canUseProjectBriefAction =
+    selectedProjectBrief !== null &&
+    (selectedProjectBrief.next_action.kind !== "task_next" || canRunSelectedProject);
+  const handleProjectBriefAction = () => {
+    if (!selectedProjectBrief) {
+      return;
+    }
+
+    const targetId = selectedProjectBrief.next_action.target_id ?? "";
+    if (selectedProjectBrief.next_action.kind === "task_next") {
+      runSelectedProjectNextTask();
+      return;
+    }
+    if (selectedProjectBrief.next_action.kind === "human_assistance") {
+      const request =
+        selectedProjectHumanAssistanceRequests.find((item) => item.id === targetId) ??
+        selectedProjectHumanAssistanceRequests[0] ??
+        null;
+      if (request) {
+        setFocusedTimelineTaskId(request.task_id ?? "");
+        setSelectedTimelineTraceId(humanAssistanceTraceId(request) ?? "");
+        setSelectedTimelineEventId("");
+      }
+      projectHumanAssistanceRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start"
+      });
+      return;
+    }
+    if (selectedProjectBrief.next_action.kind === "task_review") {
+      setFocusedTimelineTaskId(targetId);
+      setSelectedTimelineTraceId("");
+      setSelectedTimelineEventId("");
+      return;
+    }
+    if (selectedProjectBrief.next_action.kind === "connector_job_review") {
+      setSelectedConnectorJobId(targetId);
+      setSelectedConnectorTraceId("");
+      return;
+    }
+    setIsGoalFormOpen(true);
+  };
   const effectiveToolName = availableToolOptions.includes(toolCallDraft.toolName)
     ? toolCallDraft.toolName
     : (availableToolOptions[0] ?? toolCallDraft.toolName);
@@ -3190,6 +3249,24 @@ export default function DashboardPage() {
                       <p className="mt-1 break-words text-xs text-muted">
                         {selectedProjectBrief.next_action.reason}
                       </p>
+                      <button
+                        className="mt-3 flex h-8 items-center justify-center gap-1.5 rounded-md bg-ink px-2.5 text-xs font-medium text-white transition enabled:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                        disabled={!canUseProjectBriefAction}
+                        type="button"
+                        onClick={handleProjectBriefAction}
+                      >
+                        {selectedProjectBrief.next_action.kind === "task_next" ? (
+                          <Play size={13} />
+                        ) : (
+                          <ChevronRight size={13} />
+                        )}
+                        <span>
+                          {runReadyMutation.isPending &&
+                          selectedProjectBrief.next_action.kind === "task_next"
+                            ? "Running"
+                            : projectBriefActionButtonLabel(selectedProjectBrief.next_action.kind)}
+                        </span>
+                      </button>
                       <div className="mt-3 flex flex-wrap gap-1.5">
                         {Object.entries(selectedProjectBrief.task_counts)
                           .filter(([, count]) => count > 0)
@@ -3244,7 +3321,7 @@ export default function DashboardPage() {
                   </div>
                 ) : null}
                 {selectedProjectHumanAssistanceRequests.length > 0 ? (
-                  <div className="grid gap-3 px-4 py-3">
+                  <div ref={projectHumanAssistanceRef} className="grid gap-3 px-4 py-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="min-w-0">
                         <p className="text-[11px] font-semibold uppercase text-muted">

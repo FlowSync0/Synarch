@@ -99,6 +99,7 @@ GoalEnvelope
   -> Frontend project detail surfaces the Gateway project brief as the operational project guide
   -> Frontend project detail surfaces project-scoped human assistance evidence and can answer/dismiss requests
   -> Frontend project detail can launch the selected project's next ready task through `/tasks/run-ready`
+  -> Frontend project brief next-action control routes to run, review, connector, assistance, or planning flows
   -> Event Service timeline
 ```
 
