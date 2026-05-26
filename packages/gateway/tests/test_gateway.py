@@ -3229,8 +3229,13 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     assert payload["output"]["tool_status"] == "blocked"
     assert payload["output"]["blocked_reason"] == "captcha_or_human_verification"
     assert payload["output"]["requires_human_review"] is True
-    assert payload["output"]["recommended_action"] == "review_provider_escalation"
+    assert payload["output"]["recommended_action"] == (
+        "Answer the human assistance request, then retry or update the task."
+    )
     assert payload["output"]["metadata"]["requires_human_review"] is True
+    assert payload["output"]["human_assistance_request_id"].startswith(
+        "human_assistance_auto_project_sourcing_"
+    )
     assert "verify you are human" in payload["output"]["block_signals"]
     provider_options = {
         option["provider_id"]: option
@@ -3255,6 +3260,18 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     assert evidence["status_code"] == 200
     assert "Verify you are human" in evidence["markdown_excerpt"]
     assert "Verify you are human" in evidence["html_excerpt"]
+    assert len(state_client.human_assistance_requests) == 1
+    assistance_request = state_client.human_assistance_requests[0]
+    assert assistance_request.id == payload["output"]["human_assistance_request_id"]
+    assert assistance_request.project_id == "project_sourcing"
+    assert assistance_request.task_id is None
+    assert assistance_request.agent_id == "agent-ops-sourcing"
+    assert assistance_request.kind == "captcha"
+    assert assistance_request.title == "CAPTCHA or human verification required"
+    assert assistance_request.urgency == "high"
+    assert assistance_request.evidence["source_trace_id"] == "trace_web_extract_blocked"
+    assert assistance_request.evidence["tool_name"] == "web.extract"
+    assert assistance_request.evidence["review_evidence"] == evidence
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
         EventType.tool_failed,
@@ -3262,7 +3279,10 @@ def test_tool_gate_marks_web_extract_playwright_challenge_as_blocked(
     blocked_payload = state_client.events[1].payload
     assert blocked_payload["blocked_reason"] == "captcha_or_human_verification"
     assert blocked_payload["requires_human_review"] is True
-    assert blocked_payload["recommended_action"] == "review_provider_escalation"
+    assert blocked_payload["recommended_action"] == (
+        "Answer the human assistance request, then retry or update the task."
+    )
+    assert blocked_payload["human_assistance_request_id"] == assistance_request.id
     assert blocked_payload["provider_escalation_options"] == payload["output"][
         "provider_escalation_options"
     ]
@@ -3680,8 +3700,13 @@ def test_tool_gate_marks_web_extract_browserless_challenge_as_blocked(
     assert payload["status"] == "blocked"
     assert payload["error"] == "captcha_or_human_verification"
     assert payload["output"]["provider"] == "browserless"
-    assert payload["output"]["recommended_action"] == "review_provider_escalation"
+    assert payload["output"]["recommended_action"] == (
+        "Answer the human assistance request, then retry or update the task."
+    )
     assert payload["output"]["metadata"]["requires_human_review"] is True
+    assert payload["output"]["human_assistance_request_id"].startswith(
+        "human_assistance_auto_project_sourcing_"
+    )
     provider_options = {
         option["provider_id"]: option
         for option in payload["output"]["provider_escalation_options"]
@@ -3694,6 +3719,12 @@ def test_tool_gate_marks_web_extract_browserless_challenge_as_blocked(
     evidence = payload["output"]["review_evidence"]
     assert evidence["provider"] == "browserless"
     assert "Verify you are human" in evidence["html_excerpt"]
+    assert len(state_client.human_assistance_requests) == 1
+    assistance_request = state_client.human_assistance_requests[0]
+    assert assistance_request.id == payload["output"]["human_assistance_request_id"]
+    assert assistance_request.project_id == "project_sourcing"
+    assert assistance_request.kind == "captcha"
+    assert assistance_request.evidence["review_evidence"] == evidence
     assert [event.type for event in state_client.events] == [
         EventType.tool_called,
         EventType.tool_failed,
@@ -4644,6 +4675,17 @@ def test_connector_job_run_ready_records_blocked_tool_result(
     assert tool_result["status"] == "blocked"
     assert tool_result["error"] == "http_access_denied"
     assert tool_result["output"]["requires_human_review"] is True
+    assert tool_result["output"]["human_assistance_request_id"].startswith(
+        "human_assistance_auto_task_supplier_followup_"
+    )
+    assert len(state_client.human_assistance_requests) == 1
+    assistance_request = state_client.human_assistance_requests[0]
+    assert assistance_request.id == tool_result["output"]["human_assistance_request_id"]
+    assert assistance_request.project_id == "project_sourcing"
+    assert assistance_request.task_id == "task_supplier_followup"
+    assert assistance_request.kind == "error_resolution"
+    assert assistance_request.evidence["tool_name"] == "web.extract"
+    assert assistance_request.evidence["blocked_reason"] == "http_access_denied"
     assert payload["tick_event"]["payload"]["run_statuses"] == ["blocked"]
     assert payload["tick_event"]["payload"]["completed_run_count"] == 0
     assert payload["tick_event"]["payload"]["failed_run_count"] == 0

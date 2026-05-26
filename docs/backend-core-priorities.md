@@ -159,6 +159,11 @@ Implemented baseline:
   are project-scoped, evented, audited, shown in project briefs, and resolvable from the dashboard.
   Answering a linked blocked/reviewable task requeues it; dismissing the request keeps the task in
   `needs_review`.
+- Gateway automatically creates the same durable human assistance request when an authorized tool
+  returns `requires_human_review=true`.
+- `make test-live-web-extract-blocked-openrouter` verifies a real DeepSeek task run that hits a
+  blocked `web.extract`, creates the human assistance request automatically, resolves it, and
+  requeues the linked task with traceable events/audits/costs.
 - Allowed tool calls emit `tool.called` and write `tool.allowed` audit logs.
 - Denied tool calls emit `tool.failed`, write `tool.denied` audit logs, and return HTTP 403.
 - `event.emit` is the first real adapter behind the tool gate and creates a durable domain event.

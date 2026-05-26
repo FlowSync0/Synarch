@@ -1,6 +1,8 @@
+import hashlib
 import importlib
 import importlib.util
 import ipaddress
+import json
 import os
 import socket
 import time
@@ -1452,6 +1454,14 @@ def execute_tool_call_through_gate(
         )
 
     tool_status = tool_result_status_from_execution_output(execution_output)
+    if tool_status != TaskStatus.completed:
+        execution_output = attach_human_assistance_request_if_needed(
+            execution_output,
+            tool_call=tool_call,
+            state_client=state_client,
+            headers=headers,
+            trace_id=trace_id,
+        )
     tool_error = tool_result_error_from_execution_output(execution_output, tool_status)
     if tool_status != TaskStatus.completed:
         log_payload = tool_result_log_payload(execution_output)
@@ -1507,6 +1517,183 @@ def tool_result_log_payload(execution_output: dict[str, object]) -> dict[str, ob
         if value is not None:
             payload[key] = value
     return payload
+
+
+def attach_human_assistance_request_if_needed(
+    execution_output: dict[str, object],
+    *,
+    tool_call: ToolCallRequest,
+    state_client: StateClient,
+    headers: dict[str, str],
+    trace_id: str,
+) -> dict[str, object]:
+    if tool_call.tool_name == "human.assistance.request":
+        return execution_output
+    if execution_output.get("requires_human_review") is not True:
+        return execution_output
+    if execution_output.get("human_assistance_request_id") is not None:
+        return execution_output
+
+    project_id = tool_call.project_id or string_payload_value(
+        execution_output.get("project_id")
+    )
+    if project_id is None:
+        return {
+            **execution_output,
+            "human_assistance_request_error": "missing_project_id",
+        }
+
+    blocked_reason = (
+        string_payload_value(execution_output.get("blocked_reason"))
+        or string_payload_value(execution_output.get("error"))
+        or "requires_human_review"
+    )
+    assistance_request = HumanAssistanceRequest(
+        id=automatic_human_assistance_request_id(
+            tool_call,
+            blocked_reason=blocked_reason,
+        ),
+        project_id=project_id,
+        task_id=tool_call.task_id,
+        agent_id=tool_call.agent_id,
+        kind=automatic_human_assistance_kind(blocked_reason),
+        title=automatic_human_assistance_title(tool_call, blocked_reason),
+        description=automatic_human_assistance_description(tool_call, blocked_reason),
+        urgency=automatic_human_assistance_urgency(blocked_reason),
+        evidence=automatic_human_assistance_evidence(
+            tool_call,
+            execution_output,
+            trace_id,
+            blocked_reason,
+        ),
+        requested_by_type=ActorType.agent,
+        requested_by_id=tool_call.agent_id,
+    )
+    try:
+        record = state_client.create_human_assistance_request(
+            assistance_request,
+            headers=headers,
+        )
+    except StateServiceRequestError as error:
+        if error.status_code != 409:
+            return {
+                **execution_output,
+                "human_assistance_request_error": str(error.detail),
+            }
+        record = state_client.get_human_assistance_request(assistance_request.id)
+    except StateServiceUnavailable:
+        return {
+            **execution_output,
+            "human_assistance_request_error": "state_service_unavailable",
+        }
+
+    return {
+        **execution_output,
+        "human_assistance_request": record.model_dump(mode="json"),
+        "human_assistance_request_id": record.id,
+        "recommended_action": (
+            "Answer the human assistance request, then retry or update the task."
+        ),
+    }
+
+
+def automatic_human_assistance_request_id(
+    tool_call: ToolCallRequest,
+    *,
+    blocked_reason: str,
+) -> str:
+    url = string_payload_value(tool_call.arguments.get("url"))
+    raw = json.dumps(
+        {
+            "agent_id": tool_call.agent_id,
+            "project_id": tool_call.project_id,
+            "task_id": tool_call.task_id,
+            "tool_name": tool_call.tool_name,
+            "service_id": tool_call.service_id,
+            "blocked_reason": blocked_reason,
+            "url": url,
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    scope = safe_identifier_fragment(
+        tool_call.task_id or tool_call.project_id or tool_call.tool_name,
+        max_length=48,
+    )
+    return f"human_assistance_auto_{scope}_{digest}"
+
+
+def automatic_human_assistance_kind(blocked_reason: str) -> HumanAssistanceKind:
+    if "captcha" in blocked_reason or "human_verification" in blocked_reason:
+        return HumanAssistanceKind.captcha
+    if "authentication" in blocked_reason or "login" in blocked_reason:
+        return HumanAssistanceKind.manual_action
+    return HumanAssistanceKind.error_resolution
+
+
+def automatic_human_assistance_title(
+    tool_call: ToolCallRequest,
+    blocked_reason: str,
+) -> str:
+    if automatic_human_assistance_kind(blocked_reason) == HumanAssistanceKind.captcha:
+        return "CAPTCHA or human verification required"
+    if automatic_human_assistance_kind(blocked_reason) == HumanAssistanceKind.manual_action:
+        return "Manual account action required"
+    return f"Human review required for {tool_call.tool_name}"
+
+
+def automatic_human_assistance_description(
+    tool_call: ToolCallRequest,
+    blocked_reason: str,
+) -> str:
+    return (
+        f"{tool_call.tool_name} returned {blocked_reason} and needs human review "
+        f"before the task can continue. Tool reason: {tool_call.reason}"
+    )
+
+
+def automatic_human_assistance_urgency(blocked_reason: str) -> str:
+    if automatic_human_assistance_kind(blocked_reason) in {
+        HumanAssistanceKind.captcha,
+        HumanAssistanceKind.manual_action,
+    }:
+        return "high"
+    return "medium"
+
+
+def automatic_human_assistance_evidence(
+    tool_call: ToolCallRequest,
+    execution_output: dict[str, object],
+    trace_id: str,
+    blocked_reason: str,
+) -> dict[str, object]:
+    evidence: dict[str, object] = {
+        "source_trace_id": trace_id,
+        "tool_name": tool_call.tool_name,
+        "tool_reason": tool_call.reason,
+        "service_id": tool_call.service_id,
+        "blocked_reason": blocked_reason,
+        "argument_keys": sorted(tool_call.arguments.keys()),
+    }
+    for key in ("url", "provider", "final_url", "status_code", "title", "block_signals"):
+        value = execution_output.get(key)
+        if value is None and key == "url":
+            value = string_payload_value(tool_call.arguments.get("url"))
+        if value is not None:
+            evidence[key] = value
+    review_evidence = execution_output.get("review_evidence")
+    if isinstance(review_evidence, dict):
+        evidence["review_evidence"] = review_evidence
+    provider_options = execution_output.get("provider_escalation_options")
+    if isinstance(provider_options, list):
+        evidence["provider_escalation_options"] = provider_options
+    return evidence
+
+
+def safe_identifier_fragment(value: str, *, max_length: int) -> str:
+    safe = "".join(character if character.isalnum() else "_" for character in value)
+    safe = safe.strip("_")
+    return (safe[:max_length].strip("_") or uuid4().hex[:12])
 
 
 def connector_job_execution_run_request(
@@ -3050,8 +3237,7 @@ def human_assistance_request_id(tool_call: ToolCallRequest) -> str:
     kind = string_argument(tool_call, "kind") or HumanAssistanceKind.other.value
     title = string_argument(tool_call, "title") or "request"
     raw = f"{task_or_project}-{kind}-{title}"
-    safe = "".join(character if character.isalnum() else "_" for character in raw).strip("_")
-    return f"human_assistance_{safe[:96].strip('_') or uuid4().hex[:12]}"
+    return f"human_assistance_{safe_identifier_fragment(raw, max_length=96)}"
 
 
 def human_assistance_kind_argument(tool_call: ToolCallRequest) -> HumanAssistanceKind:

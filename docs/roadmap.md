@@ -313,6 +313,11 @@ Progress:
   request/resolution events and audit logs, gateway project briefs prioritize unresolved requests,
   and the dashboard approval queue can answer or dismiss them. Answered requests linked to blocked
   tasks requeue the task for retry; dismissed requests move the task to `needs_review`.
+- Done: Gateway automatically creates a human assistance request when an authorized tool result
+  includes `requires_human_review=true`, including blocked web extraction and connector-job runs.
+- Done: `scripts/live_web_extract_blocked_openrouter_e2e.sh` verifies the live DeepSeek path for a
+  blocked browser extraction, automatic human assistance request, human answer, task requeue,
+  timeline events, audits, and cost record.
 - Done: frontend reads connector jobs and connector job runs through state-service proxy routes,
   showing status, next run, policies, latest run/error, and stop detail in the dashboard.
 - Done: connector jobs can be resumed with a durable `connector_job.resumed` event/audit, and

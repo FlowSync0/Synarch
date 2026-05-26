@@ -228,6 +228,13 @@ or reviewable task, an answered request requeues the task with enough remaining 
 a dismissed request keeps the task in `needs_review` with `dead_letter_reason=human_assistance_dismissed`.
 The retry context includes `task.result.last_human_assistance_resolution`, and the agent prompt
 explicitly treats that field as fresh human input.
+Gateway also creates this durable request automatically when an authorized tool returns
+`requires_human_review=true`, so CAPTCHA or access blocks are not lost if the model fails to ask
+explicitly.
+`make test-live-web-extract-blocked-openrouter` verifies this end-to-end with a real DeepSeek run:
+the blocked `web.extract` output includes the durable request ID, the request appears through
+Gateway, answering it requeues the linked task, and the timeline contains the tool, human-assistance,
+task-review, audit, and cost records under the same trace.
 
 Run one memory compaction policy tick for a known scope with:
 

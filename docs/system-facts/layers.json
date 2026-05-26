@@ -125,6 +125,8 @@
       "Task-scoped credential gates",
       "Service health checks",
       "web.extract supports local_fetch, local_playwright, Firecrawl, and Browserless provider selection",
+      "Gateway automatically creates durable human assistance requests for authorized tool results that require human review",
+      "scripts/live_web_extract_blocked_openrouter_e2e.sh verifies blocked browser extraction, automatic human assistance, human answer, task requeue, timeline events, audits, and costs",
       "Connector job runs distinguish blocked from failed and stop blocked jobs for human review",
       "Durable connector job lifecycle and bounded runner"
     ],
