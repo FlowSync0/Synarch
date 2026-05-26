@@ -40,7 +40,7 @@ through the dashboard.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost/health dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
+| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, project-scoped human assistance handling, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost/health dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, and exposes an opt-in scheduler worker. | Routing is keyword-based only and there is no durable worker queue yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode, interim OpenRouter execution, and model-gateway-backed execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, and no sandboxed tool execution inside the runtime. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
@@ -177,6 +177,8 @@ Progress:
 - Done: frontend agent organization panel reads control-plane through the same live/fallback path.
 - Done: frontend project panel reads state-service through the same live/fallback path.
 - Done: frontend timeline panel reads state-service events through the same live/fallback path.
+- Done: frontend project detail shows project-scoped human assistance requests with evidence,
+  trace focus, answer, and dismiss actions.
 - Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
   execution task.
 - Done: goal submission creates a project workspace and active project assignments for routed

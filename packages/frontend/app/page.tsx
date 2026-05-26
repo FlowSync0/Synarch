@@ -750,6 +750,59 @@ function humanAssistanceDraft(request: ApprovalViewModel): HumanAssistanceResolu
   };
 }
 
+function sortHumanAssistanceRequests(
+  requests: HumanAssistanceRequest[]
+): HumanAssistanceRequest[] {
+  return [...requests].sort((left, right) => {
+    if (left.status !== right.status) {
+      return left.status === "requested" ? -1 : 1;
+    }
+    return timestampMs(right.created_at) - timestampMs(left.created_at);
+  });
+}
+
+function humanAssistanceEvidenceValue(
+  request: HumanAssistanceRequest,
+  key: string
+): string | null {
+  const value = request.evidence[key];
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
+function humanAssistanceTraceId(request: HumanAssistanceRequest): string | null {
+  return humanAssistanceEvidenceValue(request, "source_trace_id");
+}
+
+function humanAssistanceEvidenceSummary(request: HumanAssistanceRequest): string {
+  const summaryParts = [
+    humanAssistanceEvidenceValue(request, "blocked_reason"),
+    humanAssistanceEvidenceValue(request, "tool_name"),
+    humanAssistanceEvidenceValue(request, "provider"),
+    humanAssistanceEvidenceValue(request, "status_code"),
+    humanAssistanceEvidenceValue(request, "url") ??
+      humanAssistanceEvidenceValue(request, "final_url")
+  ].filter((part): part is string => Boolean(part));
+
+  return summaryParts.length > 0
+    ? summaryParts.join(" / ")
+    : request.description || request.title;
+}
+
+function humanAssistanceEvidenceLabels(request: HumanAssistanceRequest): string[] {
+  return [
+    request.kind,
+    request.urgency,
+    request.task_id ? `task ${request.task_id}` : null,
+    humanAssistanceTraceId(request) ? traceLabel(humanAssistanceTraceId(request) ?? "") : null
+  ].filter((label): label is string => Boolean(label));
+}
+
 function agentIcon(agent: AgentDefinition): typeof GitBranch {
   const division = agent.division.toLowerCase();
   if (division.includes("finance")) {
@@ -1723,7 +1776,9 @@ export default function DashboardPage() {
     mutationFn: resolveHumanAssistanceRequest,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["human-assistance-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       void queryClient.invalidateQueries({ queryKey: ["events"] });
+      void queryClient.invalidateQueries({ queryKey: ["task-review-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["project-timeline"] });
       setHumanAssistanceDrafts({});
@@ -1955,6 +2010,23 @@ export default function DashboardPage() {
     refetchInterval: 10_000
   });
   const selectedProjectBrief = projectBriefsQuery.data?.[0] ?? null;
+  const selectedProjectHumanAssistanceRequestById = new Map<string, HumanAssistanceRequest>();
+  if (effectiveSelectedProjectId) {
+    for (const request of selectedProjectBrief?.human_assistance_requests ?? []) {
+      selectedProjectHumanAssistanceRequestById.set(request.id, request);
+    }
+    for (const request of humanAssistanceQuery.data ?? []) {
+      if (request.project_id === effectiveSelectedProjectId) {
+        selectedProjectHumanAssistanceRequestById.set(request.id, request);
+      }
+    }
+  }
+  const selectedProjectHumanAssistanceRequests = sortHumanAssistanceRequests([
+    ...selectedProjectHumanAssistanceRequestById.values()
+  ]).slice(0, 6);
+  const selectedProjectOpenHumanAssistanceCount =
+    selectedProjectHumanAssistanceRequests.filter((request) => request.status === "requested")
+      .length;
   const projectTimelineQuery = useQuery({
     queryKey: ["project-timeline", effectiveSelectedProjectId],
     queryFn: () => getProjectTimeline(effectiveSelectedProjectId),
@@ -3144,6 +3216,151 @@ export default function DashboardPage() {
                 ) : projectBriefsQuery.isError ? (
                   <div className="px-4 py-3 text-xs text-muted">
                     Brief projet indisponible depuis le gateway.
+                  </div>
+                ) : null}
+                {selectedProjectHumanAssistanceRequests.length > 0 ? (
+                  <div className="grid gap-3 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase text-muted">
+                          Human assistance
+                        </p>
+                        <p className="mt-1 truncate text-xs text-muted">
+                          {selectedProjectOpenHumanAssistanceCount} open /{" "}
+                          {selectedProjectHumanAssistanceRequests.length} visible
+                        </p>
+                      </div>
+                      <span className="rounded-md bg-warn-soft px-2 py-0.5 text-[11px] font-semibold text-warn ring-1 ring-warn/15">
+                        {selectedProjectOpenHumanAssistanceCount} action
+                      </span>
+                    </div>
+                    <div className="grid gap-2 xl:grid-cols-2">
+                      {selectedProjectHumanAssistanceRequests.map((request) => {
+                        const approval = humanAssistanceApprovalRow(request);
+                        const humanDraft =
+                          humanAssistanceDrafts[request.id] ?? humanAssistanceDraft(approval);
+                        const isPending = request.status === "requested";
+                        const isMutatingRequest =
+                          humanAssistanceResolutionMutation.isPending &&
+                          humanAssistanceResolutionMutation.variables?.requestId === request.id;
+                        const traceId = humanAssistanceTraceId(request);
+                        const labels = humanAssistanceEvidenceLabels(request);
+                        return (
+                          <article
+                            key={request.id}
+                            className="grid min-w-0 gap-3 rounded-md border border-border bg-white p-3"
+                          >
+                            <div className="flex items-start gap-3">
+                              <div
+                                className={`grid h-9 w-9 shrink-0 place-items-center rounded-md ring-1 ${toneSurface[humanAssistanceTone(request)]}`}
+                              >
+                                <AlertTriangle size={16} />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <h3 className="truncate text-sm font-semibold text-ink">
+                                      {request.title}
+                                    </h3>
+                                    <p className="mt-0.5 truncate text-xs text-muted">
+                                      {request.agent_id} / {formatLifecycleAge(request.created_at)}
+                                    </p>
+                                  </div>
+                                  <span
+                                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${approvalStatusClass[request.status]}`}
+                                  >
+                                    {request.status}
+                                  </span>
+                                </div>
+                                <BalancedText className="mt-2 text-xs text-muted" font="400 12px Inter Variable" lineHeight={16}>
+                                  {humanAssistanceEvidenceSummary(request)}
+                                </BalancedText>
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {labels.map((label) => (
+                                <span
+                                  key={label}
+                                  className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                            {isPending ? (
+                              <textarea
+                                className="min-h-20 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-xs text-ink outline-none transition focus:border-accent disabled:bg-slate-100 disabled:text-muted"
+                                aria-label={`Project human response for ${request.title}`}
+                                disabled={humanAssistanceResolutionMutation.isPending}
+                                value={humanDraft.response}
+                                onChange={(event) =>
+                                  updateHumanAssistanceDraft(request.id, event.target.value)
+                                }
+                              />
+                            ) : request.response ? (
+                              <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-muted ring-1 ring-border">
+                                {request.response}
+                              </p>
+                            ) : null}
+                            <details className="rounded-md bg-slate-50 px-3 py-2 text-xs text-muted ring-1 ring-border">
+                              <summary className="cursor-pointer text-[11px] font-semibold uppercase text-muted">
+                                Evidence
+                              </summary>
+                              <pre className="mt-2 max-h-44 overflow-auto rounded-md bg-slate-950 p-3 text-[11px] leading-5 text-slate-100">
+                                {formatPayload(request.evidence)}
+                              </pre>
+                            </details>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <button
+                                className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition enabled:hover:border-info/40 enabled:hover:text-info disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={!request.task_id && !traceId}
+                                type="button"
+                                onClick={() => {
+                                  setFocusedTimelineTaskId(request.task_id ?? "");
+                                  setSelectedTimelineTraceId(traceId ?? "");
+                                  setSelectedTimelineEventId("");
+                                }}
+                              >
+                                <ChevronRight size={13} />
+                                <span>Trace</span>
+                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-ok transition enabled:hover:border-ok/40 enabled:hover:bg-ok-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                  aria-label={`Answer project request ${request.title}`}
+                                  title={`Answer project request ${request.title}`}
+                                  disabled={!isPending || humanAssistanceResolutionMutation.isPending}
+                                  type="button"
+                                  onClick={() => resolveHumanAssistance(approval, "answered")}
+                                >
+                                  <Check size={15} />
+                                </button>
+                                <button
+                                  className="grid h-8 w-8 place-items-center rounded-md border border-border bg-white text-risk transition enabled:hover:border-risk/40 enabled:hover:bg-risk-soft disabled:cursor-not-allowed disabled:opacity-40"
+                                  aria-label={`Dismiss project request ${request.title}`}
+                                  title={`Dismiss project request ${request.title}`}
+                                  disabled={!isPending || humanAssistanceResolutionMutation.isPending}
+                                  type="button"
+                                  onClick={() => resolveHumanAssistance(approval, "dismissed")}
+                                >
+                                  <X size={15} />
+                                </button>
+                              </div>
+                            </div>
+                            {isMutatingRequest ? (
+                              <p className="text-xs font-medium text-accent">Resolution pending...</p>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {humanAssistanceResolutionMutation.isError ? (
+                      <p className="text-xs font-medium text-risk">
+                        {humanAssistanceResolutionMutation.error instanceof Error
+                          ? humanAssistanceResolutionMutation.error.message
+                          : "Human assistance resolution failed."}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
                 {projectTimelineTraceRows.length > 0 ? (
