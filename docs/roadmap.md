@@ -179,6 +179,8 @@ Progress:
 - Done: frontend timeline panel reads state-service events through the same live/fallback path.
 - Done: frontend project detail shows project-scoped human assistance requests with evidence,
   trace focus, answer, and dismiss actions.
+- Done: frontend project detail can launch the next ready task for the selected project through
+  the same traceable ready-batch runner.
 - Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
   execution task.
 - Done: goal submission creates a project workspace and active project assignments for routed

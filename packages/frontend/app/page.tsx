@@ -2632,6 +2632,22 @@ export default function DashboardPage() {
       maxTasks: maxReadyTasks
     });
   };
+  const canRunSelectedProject =
+    effectiveSelectedProjectId.length > 0 && !runReadyMutation.isPending;
+  const runSelectedProjectNextTask = () => {
+    if (!canRunSelectedProject) {
+      return;
+    }
+    setRunReadyDraft((draft) => ({
+      ...draft,
+      projectId: effectiveSelectedProjectId,
+      maxTasks: "1"
+    }));
+    runReadyMutation.mutate({
+      projectId: effectiveSelectedProjectId,
+      maxTasks: 1
+    });
+  };
   const effectiveToolName = availableToolOptions.includes(toolCallDraft.toolName)
     ? toolCallDraft.toolName
     : (availableToolOptions[0] ?? toolCallDraft.toolName);
@@ -3092,7 +3108,7 @@ export default function DashboardPage() {
                   </p>
                 ) : null}
               </div>
-              <div className="flex min-w-0 items-center gap-2">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <select
                   className="h-9 max-w-[220px] rounded-md border border-border bg-white px-2 text-xs text-ink outline-none transition focus:border-accent"
                   aria-label="Projet inspecté"
@@ -3122,6 +3138,15 @@ export default function DashboardPage() {
                 >
                   {projectTimelineModeLabel}
                 </span>
+                <button
+                  className="flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md bg-ink px-2.5 text-xs font-medium text-white transition enabled:hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!canRunSelectedProject}
+                  type="button"
+                  onClick={runSelectedProjectNextTask}
+                >
+                  <Play size={14} />
+                  <span>{runReadyMutation.isPending ? "Running" : "Run next"}</span>
+                </button>
               </div>
             </div>
             {projectTimelineQuery.isSuccess ? (

@@ -98,6 +98,7 @@ GoalEnvelope
   -> Frontend connector history reads audit logs and shows job runs/events/audits by trace_id
   -> Frontend project detail surfaces the Gateway project brief as the operational project guide
   -> Frontend project detail surfaces project-scoped human assistance evidence and can answer/dismiss requests
+  -> Frontend project detail can launch the selected project's next ready task through `/tasks/run-ready`
   -> Event Service timeline
 ```
 
