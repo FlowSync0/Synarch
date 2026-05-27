@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   CircleDot,
+  ExternalLink,
   KeyRound,
   PlugZap,
   Play,
@@ -666,10 +667,37 @@ function ConnectionStatus({
   connection: ConnectorConnectionRecord;
   service: ServiceDefinition | null;
 }) {
+  if (connection.status === "needs_oauth") {
+    return (
+      <div className="rounded-md border border-warn/20 bg-warn-soft p-3 text-xs text-warn">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold">Autorisation requise</span>
+          <span>{connection.mode}</span>
+        </div>
+        <p className="mt-1 text-warn">
+          Le connecteur attend la validation du compte externe.
+        </p>
+        {connection.setup_url ? (
+          <a
+            href={connection.setup_url}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-warn/30 px-2 text-xs font-medium text-warn"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Ouvrir
+          </a>
+        ) : null}
+        <p className="mt-2 text-warn">Mis à jour: {formatDate(connection.updated_at)}</p>
+      </div>
+    );
+  }
   return (
     <div className="rounded-md border border-ok/20 bg-ok-soft p-3 text-xs text-ok">
       <div className="flex items-center justify-between gap-2">
-        <span className="font-semibold">Connecté</span>
+        <span className="font-semibold">
+          {connection.status === "active" ? "Connecté" : connection.status}
+        </span>
         <span>{connection.mode}</span>
       </div>
       <p className="mt-1 text-ok">

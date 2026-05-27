@@ -213,6 +213,17 @@ the lease and stores the result. `/work-queue/items/{id}/fail` requeues or dead-
 attempt count. `/work-queue/recover-expired-leases` requeues expired running items or dead-letters
 exhausted ones. Every queue mutation writes an audit log.
 
+A safe generic worker is available for queues that only need durable claim/complete/fail behavior:
+
+```bash
+make work-queue-tick SYNARCH_WORK_QUEUE_NAME=reminders
+```
+
+`python -m synarch_state_service.work_queue_worker --loop` can run continuously, or through
+`docker compose --profile worker up -d work-queue-worker`. The first supported payload actions are
+`noop` and `log`; unknown actions are failed through the durable queue path and dead-lettered instead
+of being executed speculatively.
+
 Run one connector-job batch with:
 
 ```bash

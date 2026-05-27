@@ -18,6 +18,7 @@ from synarch_models import (
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorConnectionCallbackRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -4002,6 +4003,30 @@ def connector_connection_event(
             "credential_scopes": connection.credential_scopes,
             "secret_ref_configured": connection.secret_ref is not None,
             "secret_fingerprint": connection.secret_fingerprint,
+            "setup_url_configured": connection.setup_url is not None,
+            "callback_url_configured": connection.callback_url is not None,
+            "project_id": connection.project_id,
+            "agent_id": connection.agent_id,
+        },
+        trace_id=trace_id,
+    )
+
+
+def connector_connection_completed_event(
+    connection: ConnectorConnectionRecord,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_connection_completed,
+        target=connection.service_id,
+        payload={
+            "connector_connection_id": connection.id,
+            "service_id": connection.service_id,
+            "mode": connection.mode,
+            "status": connection.status,
+            "credential_scopes": connection.credential_scopes,
+            "secret_ref_configured": connection.secret_ref is not None,
+            "secret_fingerprint": connection.secret_fingerprint,
             "project_id": connection.project_id,
             "agent_id": connection.agent_id,
         },
@@ -4020,6 +4045,16 @@ def validate_connector_connection_request(
         raise HTTPException(
             status_code=400,
             detail="API key connector connections require secret_ref",
+        )
+    if connection_request.mode == "oauth" and connection_request.setup_url is None:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth connector connections require setup_url",
+        )
+    if connection_request.mode == "oauth" and connection_request.external_state is None:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth connector connections require external_state",
         )
     if connection_request.mode == "no_key" and requires_api_key:
         raise HTTPException(
@@ -4044,6 +4079,9 @@ def create_connector_connection(
         credential_scopes=list(connection_request.credential_scopes),
         secret_ref=connection_request.secret_ref,
         secret_fingerprint=connection_request.secret_fingerprint,
+        setup_url=connection_request.setup_url,
+        callback_url=connection_request.callback_url,
+        external_state=connection_request.external_state,
         connected_by_type=connection_request.connected_by_type,
         connected_by_id=connection_request.connected_by_id,
         project_id=connection_request.project_id,
@@ -4064,6 +4102,8 @@ def create_connector_connection(
         "connection_mode": created_connection.mode,
         "secret_ref": created_connection.secret_ref,
         "secret_fingerprint": created_connection.secret_fingerprint,
+        "setup_url": created_connection.setup_url,
+        "callback_url": created_connection.callback_url,
         "connected_at": created_connection.created_at.isoformat(),
     }
     updated_service = update_record(
@@ -4095,6 +4135,8 @@ def create_connector_connection(
             "credential_scopes": created_connection.credential_scopes,
             "secret_ref_configured": created_connection.secret_ref is not None,
             "secret_fingerprint": created_connection.secret_fingerprint,
+            "setup_url_configured": created_connection.setup_url is not None,
+            "callback_url_configured": created_connection.callback_url is not None,
             "project_id": created_connection.project_id,
             "agent_id": created_connection.agent_id,
             "rationale": created_connection.rationale,
@@ -4133,6 +4175,103 @@ def list_connector_connections(
             connection for connection in connections if connection.agent_id == agent_id
         ]
     return sorted(connections, key=lambda connection: connection.created_at)
+
+
+@app.post(
+    "/connector-connections/{connection_id}/oauth-callback",
+    response_model=ConnectorConnectionResult,
+)
+def complete_connector_connection_oauth(
+    connection_id: str,
+    callback: ConnectorConnectionCallbackRequest,
+    request: Request,
+) -> ConnectorConnectionResult:
+    connection = read_record(
+        REPOSITORIES.connector_connections,
+        connection_id,
+        "connector connection",
+    )
+    if connection.mode != "oauth":
+        raise HTTPException(status_code=409, detail="Connector connection is not OAuth-based")
+    if connection.status != "needs_oauth":
+        raise HTTPException(status_code=409, detail=f"Connector connection is {connection.status}")
+    if connection.external_state != callback.oauth_state:
+        raise HTTPException(status_code=400, detail="OAuth state does not match connection")
+
+    now = datetime.now(UTC)
+    service = read_record(REPOSITORIES.services, connection.service_id, "service")
+    credential_scopes = callback.credential_scopes or connection.credential_scopes
+    updated_connection = update_record(
+        REPOSITORIES.connector_connections,
+        connection.id,
+        connection.model_copy(
+            update={
+                "status": "active",
+                "credential_scopes": credential_scopes,
+                "secret_ref": callback.secret_ref,
+                "secret_fingerprint": callback.secret_fingerprint,
+                "updated_at": now,
+                "rationale": callback.rationale,
+            }
+        ),
+        "connector connection",
+    )
+    updated_service = update_record(
+        REPOSITORIES.services,
+        service.id,
+        service.model_copy(
+            update={
+                "credential_scopes": merged_scopes(
+                    service.credential_scopes,
+                    credential_scopes,
+                ),
+                "metadata": {
+                    **service.metadata,
+                    "configured": True,
+                    "connector_connection_id": updated_connection.id,
+                    "connection_mode": updated_connection.mode,
+                    "secret_ref": updated_connection.secret_ref,
+                    "secret_fingerprint": updated_connection.secret_fingerprint,
+                    "setup_url": updated_connection.setup_url,
+                    "callback_url": updated_connection.callback_url,
+                    "connected_at": updated_connection.updated_at.isoformat(),
+                },
+            }
+        ),
+        "service",
+    )
+    context = AuditContext(
+        actor_type=callback.completed_by_type,
+        actor_id=callback.completed_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+    event = create_domain_event(
+        connector_connection_completed_event(updated_connection, context.trace_id)
+    )
+    audit = write_audit_log(
+        context,
+        action="connector_connection.completed",
+        target_type="service",
+        target_id=service.id,
+        payload={
+            "connector_connection_id": updated_connection.id,
+            "service_id": service.id,
+            "mode": updated_connection.mode,
+            "status": updated_connection.status,
+            "credential_scopes": updated_connection.credential_scopes,
+            "secret_ref_configured": updated_connection.secret_ref is not None,
+            "secret_fingerprint": updated_connection.secret_fingerprint,
+            "project_id": updated_connection.project_id,
+            "agent_id": updated_connection.agent_id,
+            "rationale": callback.rationale,
+        },
+    )
+    return ConnectorConnectionResult(
+        connection=updated_connection,
+        service=updated_service,
+        event=event,
+        audit_log=audit,
+    )
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)

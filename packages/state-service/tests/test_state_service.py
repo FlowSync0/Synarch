@@ -988,6 +988,84 @@ def test_connector_connection_records_secret_ref_without_secret_value() -> None:
     assert audits[0]["action"] == "connector_connection.created"
 
 
+def test_connector_oauth_connection_can_complete_from_callback() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_oauth_callback"
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-oauth-state-test",
+            "name": "OAuth state test",
+            "kind": "tool_provider",
+            "capabilities": ["mail.read"],
+            "credential_scopes": [],
+            "metadata": {
+                "connector_type": "oauth_demo",
+                "requires_oauth": True,
+            },
+        },
+    )
+    assert service_response.status_code == 201
+
+    connection_response = client.post(
+        "/connector-connections",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "service_id": "connector-oauth-state-test",
+            "mode": "oauth",
+            "credential_scopes": ["mail:read"],
+            "setup_url": "https://auth.example.com/authorize?state=oauth_state_test",
+            "callback_url": "http://localhost:8000/connectors/connector-oauth-state-test/oauth/callback",
+            "external_state": "oauth_state_test",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Start OAuth connector setup.",
+        },
+    )
+    assert connection_response.status_code == 201
+    created_payload = connection_response.json()
+    connection_id = created_payload["connection"]["id"]
+    assert created_payload["connection"]["status"] == "needs_oauth"
+    assert created_payload["connection"]["setup_url"] is not None
+    assert created_payload["service"]["metadata"]["configured"] is False
+
+    callback_response = client.post(
+        f"/connector-connections/{connection_id}/oauth-callback",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "oauth_state": "oauth_state_test",
+            "secret_ref": "local://connector/oauth/fp_oauth",
+            "secret_fingerprint": "fp_oauth",
+            "credential_scopes": ["mail:read"],
+            "completed_by_type": "user",
+            "completed_by_id": "local-user",
+            "rationale": "Complete OAuth callback.",
+        },
+    )
+
+    assert callback_response.status_code == 200
+    payload = callback_response.json()
+    assert payload["connection"]["status"] == "active"
+    assert payload["connection"]["secret_ref"] == "local://connector/oauth/fp_oauth"
+    assert payload["service"]["metadata"]["configured"] is True
+    assert "oauth_state_test" in payload["connection"]["external_state"]
+    assert "oauth_code" not in str(payload)
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "connector_connection.created",
+        "connector_connection.completed",
+    ]
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert [audit["action"] for audit in audits] == [
+        "connector_connection.created",
+        "connector_connection.completed",
+    ]
+
+
 def test_connector_job_lifecycle_records_events_and_audits() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_job_lifecycle"

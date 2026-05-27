@@ -60,6 +60,7 @@ services:
       WEB_EXTRACT_PLAYWRIGHT_WAIT_UNTIL: ${WEB_EXTRACT_PLAYWRIGHT_WAIT_UNTIL:-domcontentloaded}
       WEB_EXTRACT_REVIEW_EVIDENCE_MAX_BYTES: ${WEB_EXTRACT_REVIEW_EVIDENCE_MAX_BYTES:-4096}
       SECRET_VAULT_DIR: /app/.synarch/secrets
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-}
       BROWSERBASE_API_KEY: ${BROWSERBASE_API_KEY:-}
       BROWSERLESS_API_KEY: ${BROWSERLESS_API_KEY:-}
       BRIGHTDATA_API_KEY: ${BRIGHTDATA_API_KEY:-}
@@ -155,6 +156,26 @@ services:
       SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS: ${SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS:-60}
     depends_on:
       - gateway
+
+  work-queue-worker:
+    profiles: ["worker"]
+    build:
+      context: .
+      dockerfile: packages/Dockerfile.service
+      args:
+        SERVICE_PATH: packages/state-service
+    command: python -m synarch_state_service.work_queue_worker --loop
+    environment:
+      STATE_SERVICE_URL: http://state-service:8020
+      SYNARCH_WORK_QUEUE_WORKER_ID: ${SYNARCH_WORK_QUEUE_WORKER_ID:-work-queue-worker-1}
+      SYNARCH_WORK_QUEUE_NAME: ${SYNARCH_WORK_QUEUE_NAME:-default}
+      SYNARCH_WORK_QUEUE_MAX_ITEMS: ${SYNARCH_WORK_QUEUE_MAX_ITEMS:-5}
+      SYNARCH_WORK_QUEUE_LEASE_SECONDS: ${SYNARCH_WORK_QUEUE_LEASE_SECONDS:-300}
+      SYNARCH_WORK_QUEUE_INTERVAL_SECONDS: ${SYNARCH_WORK_QUEUE_INTERVAL_SECONDS:-30}
+      SYNARCH_WORK_QUEUE_TIMEOUT_SECONDS: ${SYNARCH_WORK_QUEUE_TIMEOUT_SECONDS:-30}
+    depends_on:
+      state-service:
+        condition: service_healthy
 
   control-plane:
     build:

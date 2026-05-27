@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
@@ -30,6 +31,7 @@ from synarch_models import (
     AgentTaskRequest,
     AiProviderType,
     AuditLogRecord,
+    ConnectorConnectionCallbackRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -823,6 +825,9 @@ class FakeStateClient:
             credential_scopes=list(connection.credential_scopes),
             secret_ref=connection.secret_ref,
             secret_fingerprint=connection.secret_fingerprint,
+            setup_url=connection.setup_url,
+            callback_url=connection.callback_url,
+            external_state=connection.external_state,
             connected_by_type=connection.connected_by_type,
             connected_by_id=connection.connected_by_id,
             project_id=connection.project_id,
@@ -841,6 +846,8 @@ class FakeStateClient:
                     "connector_connection_id": record.id,
                     "secret_ref": record.secret_ref,
                     "secret_fingerprint": record.secret_fingerprint,
+                    "setup_url": record.setup_url,
+                    "callback_url": record.callback_url,
                 },
             }
         )
@@ -852,6 +859,8 @@ class FakeStateClient:
                 "connector_connection_id": record.id,
                 "service_id": connection.service_id,
                 "secret_ref_configured": record.secret_ref is not None,
+                "setup_url_configured": record.setup_url is not None,
+                "callback_url_configured": record.callback_url is not None,
             },
             trace_id=headers.get("x-synarch-trace-id"),
         )
@@ -863,11 +872,85 @@ class FakeStateClient:
             target_type="service",
             target_id=connection.service_id,
             trace_id=headers.get("x-synarch-trace-id"),
-            payload={"secret_ref_configured": record.secret_ref is not None},
+            payload={
+                "secret_ref_configured": record.secret_ref is not None,
+                "setup_url_configured": record.setup_url is not None,
+                "callback_url_configured": record.callback_url is not None,
+            },
         )
         self.audit_logs.append(audit)
         return ConnectorConnectionResult(
             connection=record,
+            service=updated_service,
+            event=event,
+            audit_log=audit,
+        )
+
+    def complete_connector_connection_oauth(
+        self,
+        connection_id: str,
+        callback: ConnectorConnectionCallbackRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        self.headers.append(headers)
+        connection = next(
+            connection
+            for connection in self.connector_connections
+            if connection.id == connection_id
+        )
+        if connection.external_state != callback.oauth_state:
+            raise StateServiceRequestError(400, "OAuth state does not match connection")
+        updated_connection = connection.model_copy(
+            update={
+                "status": "active",
+                "secret_ref": callback.secret_ref,
+                "secret_fingerprint": callback.secret_fingerprint,
+                "credential_scopes": callback.credential_scopes or connection.credential_scopes,
+                "rationale": callback.rationale,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        connection_index = self.connector_connections.index(connection)
+        self.connector_connections[connection_index] = updated_connection
+        service = next(service for service in self.services if service.id == connection.service_id)
+        updated_service = service.model_copy(
+            update={
+                "metadata": {
+                    **service.metadata,
+                    "configured": True,
+                    "connector_connection_id": updated_connection.id,
+                    "secret_ref": updated_connection.secret_ref,
+                    "secret_fingerprint": updated_connection.secret_fingerprint,
+                    "setup_url": updated_connection.setup_url,
+                    "callback_url": updated_connection.callback_url,
+                }
+            }
+        )
+        self.services[self.services.index(service)] = updated_service
+        event = EventRecord(
+            type=EventType.connector_connection_completed,
+            target=connection.service_id,
+            payload={
+                "connector_connection_id": updated_connection.id,
+                "service_id": connection.service_id,
+                "secret_ref_configured": updated_connection.secret_ref is not None,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        audit = AuditLogRecord(
+            actor_type=callback.completed_by_type,
+            actor_id=callback.completed_by_id,
+            action="connector_connection.completed",
+            target_type="service",
+            target_id=connection.service_id,
+            trace_id=headers.get("x-synarch-trace-id"),
+            payload={"secret_ref_configured": updated_connection.secret_ref is not None},
+        )
+        self.audit_logs.append(audit)
+        return ConnectorConnectionResult(
+            connection=updated_connection,
             service=updated_service,
             event=event,
             audit_log=audit,
@@ -7142,6 +7225,106 @@ def test_connect_service_stores_secret_in_vault_and_sends_only_secret_ref() -> N
         "fake://connectors/connector-firecrawl/fp_test"
     )
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_connect"
+
+
+def test_connect_service_oauth_returns_setup_link_without_secret() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-oauth-demo",
+            name="OAuth Demo",
+            kind="tool_provider",
+            capabilities=["mail.read"],
+            credential_scopes=["mail:read"],
+            metadata={
+                "requires_oauth": True,
+                "oauth_authorization_url": "https://auth.example.com/authorize?prompt=consent",
+            },
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-oauth-demo/connections",
+            headers={"X-Synarch-Trace-Id": "trace_oauth_setup"},
+            json={
+                "mode": "oauth",
+                "rationale": "Connect demo account.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    connection = payload["connection"]
+    assert connection["status"] == "needs_oauth"
+    assert connection["setup_url"].startswith("https://auth.example.com/authorize?")
+    setup_query = parse_qs(urlparse(connection["setup_url"]).query)
+    assert setup_query["prompt"] == ["consent"]
+    assert setup_query["state"][0].startswith("oauth_")
+    assert setup_query["redirect_uri"] == [
+        "http://testserver/connectors/connector-oauth-demo/oauth/callback"
+    ]
+    assert connection["callback_url"] == (
+        "http://testserver/connectors/connector-oauth-demo/oauth/callback"
+    )
+    assert secret_vault.stored == []
+    assert "oauth-code" not in str(payload)
+
+
+def test_connector_oauth_callback_stores_code_in_vault_and_completes_connection() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-oauth-demo",
+            name="OAuth Demo",
+            kind="tool_provider",
+            capabilities=["mail.read"],
+            credential_scopes=["mail:read"],
+            metadata={
+                "requires_oauth": True,
+                "oauth_authorization_url": "https://auth.example.com/authorize",
+            },
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+    client = TestClient(app)
+
+    try:
+        setup_response = client.post(
+            "/connectors/connector-oauth-demo/connections",
+            headers={"X-Synarch-Trace-Id": "trace_oauth_setup"},
+            json={"mode": "oauth"},
+        )
+        assert setup_response.status_code == 200
+        pending_connection = state_client.connector_connections[0]
+        callback_response = client.get(
+            "/connectors/connector-oauth-demo/oauth/callback",
+            params={
+                "state": pending_connection.external_state,
+                "code": "oauth-code-demo",
+            },
+            headers={"X-Synarch-Trace-Id": "trace_oauth_callback"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert callback_response.status_code == 200
+    assert "oauth-code-demo" not in callback_response.text
+    assert secret_vault.stored[0]["service_id"] == "connector-oauth-demo"
+    assert "oauth-code-demo" in secret_vault.stored[0]["secret_value"]
+    active_connection = state_client.connector_connections[0]
+    assert active_connection.status == "active"
+    assert active_connection.secret_ref == "fake://connectors/connector-oauth-demo/fp_test"
+    assert state_client.services[0].metadata["configured"] is True
+    assert state_client.events[-1].type == EventType.connector_connection_completed
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_oauth_callback"
 
 
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:

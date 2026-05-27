@@ -329,6 +329,9 @@ class ConnectorConnectionRecord(SynarchModel):
     credential_scopes: list[str] = Field(default_factory=list)
     secret_ref: str | None = None
     secret_fingerprint: str | None = None
+    setup_url: str | None = None
+    callback_url: str | None = None
+    external_state: str | None = None
     connected_by_type: ActorType
     connected_by_id: str
     project_id: str | None = None
@@ -717,11 +720,24 @@ class ConnectorConnectionRequest(SynarchModel):
     credential_scopes: list[str] = Field(default_factory=list)
     secret_ref: str | None = None
     secret_fingerprint: str | None = None
+    setup_url: str | None = None
+    callback_url: str | None = None
+    external_state: str | None = None
     connected_by_type: ActorType = ActorType.user
     connected_by_id: str = "local-user"
     project_id: str | None = None
     agent_id: str | None = None
     rationale: str = ""
+
+
+class ConnectorConnectionCallbackRequest(SynarchModel):
+    oauth_state: str
+    secret_ref: str | None = None
+    secret_fingerprint: str | None = None
+    credential_scopes: list[str] = Field(default_factory=list)
+    completed_by_type: ActorType = ActorType.user
+    completed_by_id: str = "local-user"
+    rationale: str = "OAuth callback completed."
 
 
 class ConnectorConnectionResult(SynarchModel):

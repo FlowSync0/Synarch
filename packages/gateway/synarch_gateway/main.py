@@ -12,11 +12,12 @@ from datetime import UTC, datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal, Protocol
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
@@ -25,6 +26,7 @@ from synarch_models import (
     AgentProjectAssignment,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorConnectionCallbackRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -319,6 +321,7 @@ class Settings(BaseSettings):
     web_extract_review_evidence_max_bytes: int = 4_096
     service_health_timeout_seconds: float = 3.0
     secret_vault_dir: str = ".synarch/secrets"
+    gateway_public_url: str | None = None
 
 
 settings = Settings()
@@ -351,6 +354,64 @@ def get_state_client() -> StateClient:
 
 def get_secret_vault() -> SecretVault:
     return LocalFileSecretVault(settings.secret_vault_dir)
+
+
+def metadata_string(service: ServiceDefinition, key: str) -> str | None:
+    value = service.metadata.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+def gateway_base_url(request: Request) -> str:
+    if settings.gateway_public_url:
+        return settings.gateway_public_url.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def connector_oauth_callback_url(request: Request, service_id: str) -> str:
+    return f"{gateway_base_url(request)}/connectors/{service_id}/oauth/callback"
+
+
+def url_with_query_params(url: str, params: Mapping[str, str]) -> str:
+    parsed = urlsplit(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query.update(params)
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
+
+def connector_oauth_setup_url(
+    service: ServiceDefinition,
+    *,
+    callback_url: str,
+    external_state: str,
+) -> str:
+    setup_url = (
+        metadata_string(service, "oauth_authorization_url")
+        or metadata_string(service, "connect_url")
+        or metadata_string(service, "manual_connection_url")
+    )
+    if setup_url is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "OAuth connector requires service metadata oauth_authorization_url, "
+                "connect_url, or manual_connection_url"
+            ),
+        )
+    return url_with_query_params(
+        setup_url,
+        {
+            "state": external_state,
+            "redirect_uri": callback_url,
+        },
+    )
 
 
 def get_task_runner() -> TaskRunner:
@@ -1342,6 +1403,9 @@ def connect_service(
     try:
         service = service_definition_by_id(state_client, service_id)
         secret_ref: SecretReference | None = None
+        setup_url: str | None = None
+        callback_url: str | None = None
+        external_state: str | None = None
         if connection.mode == "api_key":
             if not connection.api_key:
                 raise HTTPException(
@@ -1353,12 +1417,23 @@ def connect_service(
                 secret_value=connection.api_key,
                 actor_id=actor_id,
             )
+        if connection.mode == "oauth":
+            external_state = f"oauth_{uuid4().hex}"
+            callback_url = connector_oauth_callback_url(request, service_id)
+            setup_url = connector_oauth_setup_url(
+                service,
+                callback_url=callback_url,
+                external_state=external_state,
+            )
         request_payload = ConnectorConnectionRequest(
             service_id=service_id,
             mode=connection.mode,
             credential_scopes=connection.credential_scopes or service.credential_scopes,
             secret_ref=secret_ref.ref if secret_ref else None,
             secret_fingerprint=secret_ref.fingerprint if secret_ref else None,
+            setup_url=setup_url,
+            callback_url=callback_url,
+            external_state=external_state,
             connected_by_type=ActorType(actor_type),
             connected_by_id=actor_id,
             project_id=connection.project_id,
@@ -1375,6 +1450,83 @@ def connect_service(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/connectors/{service_id}/oauth/callback", response_class=HTMLResponse)
+def complete_service_oauth_callback(
+    service_id: str,
+    request: Request,
+    state: str = Query(min_length=1),
+    code: str | None = Query(default=None),
+    provider_error: str | None = Query(default=None, alias="error"),
+    state_client: StateClient = Depends(get_state_client),
+    secret_vault: SecretVault = Depends(get_secret_vault),
+) -> HTMLResponse:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    if provider_error:
+        return HTMLResponse(
+            "<h1>Connector authorization failed</h1><p>The provider returned an error.</p>",
+            status_code=400,
+        )
+    if not code:
+        return HTMLResponse(
+            "<h1>Connector authorization failed</h1><p>No OAuth code was provided.</p>",
+            status_code=400,
+        )
+
+    try:
+        pending_connections = state_client.list_connector_connections(
+            service_id=service_id,
+            status="needs_oauth",
+        )
+        connection = next(
+            (
+                pending
+                for pending in pending_connections
+                if pending.external_state == state
+            ),
+            None,
+        )
+        if connection is None:
+            raise HTTPException(status_code=404, detail="Pending OAuth connection not found")
+        secret_payload = json.dumps(
+            {
+                "service_id": service_id,
+                "connection_id": connection.id,
+                "oauth_code": code,
+                "received_at": datetime.now(UTC).isoformat(),
+            },
+            sort_keys=True,
+        )
+        secret_ref = secret_vault.store_connector_secret(
+            service_id=service_id,
+            secret_value=secret_payload,
+            actor_id="oauth-callback",
+        )
+        state_client.complete_connector_connection_oauth(
+            connection.id,
+            ConnectorConnectionCallbackRequest(
+                oauth_state=state,
+                secret_ref=secret_ref.ref,
+                secret_fingerprint=secret_ref.fingerprint,
+                credential_scopes=connection.credential_scopes,
+                completed_by_type=ActorType.user,
+                completed_by_id="oauth-callback",
+                rationale="OAuth callback received by Gateway.",
+            ),
+            headers=service_headers(trace_id),
+        )
+    except HTTPException:
+        raise
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+    return HTMLResponse(
+        "<h1>Connector authorization recorded</h1><p>You can return to Synarch.</p>",
+        status_code=200,
+    )
 
 
 @app.get("/connector-connections", response_model=list[ConnectorConnectionRecord])

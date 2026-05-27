@@ -372,6 +372,9 @@ export type ConnectorConnectionRecord = {
   credential_scopes: string[];
   secret_ref?: string | null;
   secret_fingerprint?: string | null;
+  setup_url?: string | null;
+  callback_url?: string | null;
+  external_state?: string | null;
   connected_by_type: "user" | "agent" | "system" | "service";
   connected_by_id: string;
   project_id?: string | null;

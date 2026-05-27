@@ -9,6 +9,7 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AuditLogRecord,
+    ConnectorConnectionCallbackRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -281,6 +282,14 @@ class StateClient(Protocol):
     def create_connector_connection(
         self,
         connection: ConnectorConnectionRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult: ...
+
+    def complete_connector_connection_oauth(
+        self,
+        connection_id: str,
+        callback: ConnectorConnectionCallbackRequest,
         *,
         headers: dict[str, str],
     ) -> ConnectorConnectionResult: ...
@@ -758,6 +767,20 @@ class HttpStateClient:
         response = self._post(
             "/connector-connections",
             connection.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorConnectionResult.model_validate(response.json())
+
+    def complete_connector_connection_oauth(
+        self,
+        connection_id: str,
+        callback: ConnectorConnectionCallbackRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        response = self._post(
+            f"/connector-connections/{connection_id}/oauth-callback",
+            callback.model_dump(mode="json"),
             headers,
         )
         return ConnectorConnectionResult.model_validate(response.json())

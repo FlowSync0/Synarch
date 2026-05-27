@@ -1,4 +1,4 @@
-.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter test-live-model-gateway-openrouter test-live-connector-jobs-openrouter test-live-lifecycle-openrouter test-live-web-extract-blocked-openrouter test-live-memory-embedding test-live-memory-bridge test-live-memory-graph scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker memory-embedding-backfill-tick memory-embedding-backfill-loop memory-embedding-backfill-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
+.PHONY: install-backend test test-unit test-integration test-eval test-live-openrouter test-live-model-gateway-openrouter test-live-connector-jobs-openrouter test-live-lifecycle-openrouter test-live-web-extract-blocked-openrouter test-live-memory-embedding test-live-memory-bridge test-live-memory-graph scheduler-tick scheduler-loop scheduler-worker connector-job-tick connector-job-loop connector-job-worker memory-compaction-tick memory-compaction-loop memory-compaction-worker memory-embedding-backfill-tick memory-embedding-backfill-loop memory-embedding-backfill-worker work-queue-tick work-queue-loop work-queue-worker lint typecheck verify migrate-state seed-state seed-system-memory dev-infra dev-backend
 
 PYTHON ?= python3
 DATABASE_URL ?= postgresql+psycopg://synarch:synarch@localhost:5432/synarch
@@ -18,6 +18,11 @@ SYNARCH_MEMORY_EMBEDDING_AGENT_ID ?=
 SYNARCH_MEMORY_EMBEDDING_SCOPE ?=
 SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS ?= 10
 SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS ?= 300
+STATE_SERVICE_URL ?= http://localhost:8020
+SYNARCH_WORK_QUEUE_NAME ?= default
+SYNARCH_WORK_QUEUE_MAX_ITEMS ?= 5
+SYNARCH_WORK_QUEUE_LEASE_SECONDS ?= 300
+SYNARCH_WORK_QUEUE_INTERVAL_SECONDS ?= 30
 
 install-backend:
 	$(PYTHON) -m pip install --upgrade pip
@@ -102,6 +107,15 @@ memory-embedding-backfill-loop:
 
 memory-embedding-backfill-worker:
 	docker compose up --build memory-embedding-worker
+
+work-queue-tick:
+	$(PYTHON) -m synarch_state_service.work_queue_worker --state-service-url "$(STATE_SERVICE_URL)" --queue-name "$(SYNARCH_WORK_QUEUE_NAME)" --limit "$(SYNARCH_WORK_QUEUE_MAX_ITEMS)" --lease-seconds "$(SYNARCH_WORK_QUEUE_LEASE_SECONDS)"
+
+work-queue-loop:
+	$(PYTHON) -m synarch_state_service.work_queue_worker --state-service-url "$(STATE_SERVICE_URL)" --queue-name "$(SYNARCH_WORK_QUEUE_NAME)" --limit "$(SYNARCH_WORK_QUEUE_MAX_ITEMS)" --lease-seconds "$(SYNARCH_WORK_QUEUE_LEASE_SECONDS)" --loop --interval-seconds "$(SYNARCH_WORK_QUEUE_INTERVAL_SECONDS)"
+
+work-queue-worker:
+	docker compose --profile worker up --build work-queue-worker
 
 lint:
 	$(PYTHON) -m ruff check .
