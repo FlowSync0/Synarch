@@ -6,6 +6,7 @@ import type {
   ServiceDefinition
 } from "./state-service-api";
 import type { AgentLifecycleRequest } from "./control-plane-api";
+import { getOperatorId, operatorHeaders, operatorJsonHeaders } from "./operator-context";
 
 export type TaskStatus =
   | "draft"
@@ -594,12 +595,7 @@ export async function runReadyTasks({
   });
   const response = await fetch(`/api/gateway/tasks/run-ready?${params.toString()}`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
-      "X-Synarch-Trace-Id": `trace_frontend_run_ready_${Date.now()}`
-    }
+    headers: operatorJsonHeaders(`trace_frontend_run_ready_${Date.now()}`)
   });
   return parseJsonResponse<TaskRunBatchResult>(response);
 }
@@ -641,12 +637,7 @@ export async function listOperatorActions(projectId?: string): Promise<OperatorA
 export async function runTask(taskId: string): Promise<TaskRunResult> {
   const response = await fetch(`/api/gateway/tasks/${encodeURIComponent(taskId)}/run`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
-      "X-Synarch-Trace-Id": `trace_frontend_task_run_${Date.now()}`
-    }
+    headers: operatorJsonHeaders(`trace_frontend_task_run_${Date.now()}`)
   });
   return parseJsonResponse<TaskRunResult>(response);
 }
@@ -660,11 +651,7 @@ export async function runConnectorJobNow({
     `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/execute`,
     {
       method: "POST",
-      headers: {
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_connector_job_run_${Date.now()}`
-      }
+      headers: operatorHeaders(`trace_frontend_connector_job_run_${Date.now()}`)
     }
   );
   return parseJsonResponse<ConnectorJobRunResult>(response);
@@ -675,19 +662,15 @@ export async function stopConnectorJob({
 }: {
   jobId: string;
 }): Promise<ConnectorJobMutationResult> {
+  const operatorId = getOperatorId();
   const response = await fetch(
     `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/stop`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_connector_job_stop_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_connector_job_stop_${Date.now()}`),
       body: JSON.stringify({
         stopped_by_type: "user",
-        stopped_by_id: "local-user",
+        stopped_by_id: operatorId,
         reason: "Stopped from Synarch dashboard."
       })
     }
@@ -700,19 +683,15 @@ export async function resumeConnectorJob({
 }: {
   jobId: string;
 }): Promise<ConnectorJobMutationResult> {
+  const operatorId = getOperatorId();
   const response = await fetch(
     `/api/gateway/connector-jobs/${encodeURIComponent(jobId)}/resume`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_connector_job_resume_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_connector_job_resume_${Date.now()}`),
       body: JSON.stringify({
         resumed_by_type: "user",
-        resumed_by_id: "local-user",
+        resumed_by_id: operatorId,
         reason: "Resumed from Synarch dashboard."
       })
     }
@@ -725,8 +704,7 @@ export async function callTool(toolCall: ToolCallRequest): Promise<ToolResult> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
+      ...operatorHeaders(),
       "X-Synarch-Trace-Id": toolCall.trace_id ?? `trace_frontend_tool_gate_${Date.now()}`
     },
     body: JSON.stringify(toolCall)
@@ -783,11 +761,7 @@ export async function getSystemReadiness(): Promise<SystemReadinessReport> {
 export async function reencryptSecretVault(): Promise<SecretVaultReencryptResult> {
   const response = await fetch("/api/gateway/secret-vault/reencrypt", {
     method: "POST",
-    headers: {
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
-      "X-Synarch-Trace-Id": `trace_frontend_secret_vault_reencrypt_${Date.now()}`
-    }
+    headers: operatorHeaders(`trace_frontend_secret_vault_reencrypt_${Date.now()}`)
   });
   return parseJsonResponse<SecretVaultReencryptResult>(response);
 }
@@ -884,12 +858,7 @@ export async function connectConnectorService({
     `/api/gateway/connectors/${encodeURIComponent(serviceId)}/connections`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_connector_connect_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_connector_connect_${Date.now()}`),
       body: JSON.stringify(request)
     }
   );
@@ -907,12 +876,7 @@ export async function disableConnectorConnection({
     `/api/gateway/connector-connections/${encodeURIComponent(connectionId)}/disable`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_connector_disable_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_connector_disable_${Date.now()}`),
       body: JSON.stringify(request)
     }
   );
@@ -942,22 +906,18 @@ export async function resolveHumanAssistanceRequest({
   status: "answered" | "dismissed";
   response: string;
 }): Promise<HumanAssistanceResolution> {
+  const operatorId = getOperatorId();
   const upstream = await fetch(
     `/api/gateway/human-assistance-requests/${encodeURIComponent(requestId)}/resolutions`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_human_assistance_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_human_assistance_${Date.now()}`),
       body: JSON.stringify({
         request_id: requestId,
         status,
         response,
         resolved_by_type: "user",
-        resolved_by_id: "local-user"
+        resolved_by_id: operatorId
       })
     }
   );
@@ -971,21 +931,17 @@ export async function decideCredentialAccessRequest({
   requestId: string;
   status: "approved" | "rejected";
 }): Promise<CredentialAccessDecision> {
+  const operatorId = getOperatorId();
   const response = await fetch(
     `/api/gateway/credential-access-requests/${encodeURIComponent(requestId)}/decisions`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_credential_access_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_credential_access_${Date.now()}`),
       body: JSON.stringify({
         request_id: requestId,
         status,
         decided_by_type: "user",
-        decided_by_id: "local-user",
+        decided_by_id: operatorId,
         rationale:
           status === "approved"
             ? "Credential access approved from Synarch dashboard."
@@ -1003,21 +959,17 @@ export async function applyCredentialAccessGrant({
   requestId: string;
   serviceId: string;
 }): Promise<CredentialGrantApplication> {
+  const operatorId = getOperatorId();
   const response = await fetch(
     `/api/gateway/credential-access-requests/${encodeURIComponent(requestId)}/grant-applications`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_credential_grant_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_credential_grant_${Date.now()}`),
       body: JSON.stringify({
         request_id: requestId,
         service_id: serviceId,
         applied_by_type: "user",
-        applied_by_id: "local-user",
+        applied_by_id: operatorId,
         rationale: "Credential grant applied from Synarch dashboard."
       })
     }
@@ -1036,12 +988,7 @@ export async function updateMemoryStatus({
     `/api/gateway/memory-items/${encodeURIComponent(itemId)}/status`,
     {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_memory_review_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_memory_review_${Date.now()}`),
       body: JSON.stringify({ status })
     }
   );
@@ -1057,11 +1004,7 @@ export async function applyMemoryRelationProposal({
     `/api/gateway/memory-items/relation-proposals/${encodeURIComponent(proposalId)}/apply`,
     {
       method: "POST",
-      headers: {
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_memory_relation_apply_${Date.now()}`
-      }
+      headers: operatorHeaders(`trace_frontend_memory_relation_apply_${Date.now()}`)
     }
   );
   return parseJsonResponse<MemoryRelationApplicationResult>(response);
@@ -1078,12 +1021,7 @@ export async function decideTaskReview({
     `/api/gateway/tasks/${encodeURIComponent(taskId)}/review-decisions`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_task_review_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_task_review_${Date.now()}`),
       body: JSON.stringify(decision)
     }
   );

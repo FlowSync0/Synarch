@@ -1,3 +1,5 @@
+import { operatorHeaders, operatorJsonHeaders } from "./operator-context";
+
 export type ProjectStatus =
   | "draft"
   | "queued"
@@ -343,10 +345,7 @@ export async function createWorkQueueItem(
 ): Promise<WorkQueueItem> {
   const response = await fetch("/api/state-service/work-queue/items", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Synarch-Trace-Id": `trace_frontend_work_queue_${Date.now()}`
-    },
+    headers: operatorJsonHeaders(`trace_frontend_work_queue_${Date.now()}`),
     body: JSON.stringify(item)
   });
   return parseJsonResponse<WorkQueueItem>(response);
@@ -375,11 +374,7 @@ export async function reviewWorkQueueItem(
 export async function recoverExpiredWorkQueueLeases(): Promise<WorkQueueRecoveryResult> {
   const response = await fetch("/api/state-service/work-queue/recover-expired-leases", {
     method: "POST",
-    headers: {
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
-      "X-Synarch-Trace-Id": `trace_frontend_work_queue_recovery_${Date.now()}`
-    }
+    headers: operatorHeaders(`trace_frontend_work_queue_recovery_${Date.now()}`)
   });
   return parseJsonResponse<WorkQueueRecoveryResult>(response);
 }

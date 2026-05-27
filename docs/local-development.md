@@ -110,6 +110,10 @@ npm run dev
 
 The production-oriented operator surface is available at `http://127.0.0.1:3000/app`. The existing
 root dashboard remains useful for detailed development traces.
+The frontend uses `NEXT_PUBLIC_SYNARCH_OPERATOR_ID` as the local/single-operator audit identity for
+state-changing actions such as connector setup, SecretVault re-encryption, work-queue reviews, and
+human approvals. It defaults to `local-user`; this value is not secret and does not replace
+production authentication/RBAC.
 
 ## Operational Readiness
 

@@ -1,3 +1,5 @@
+import { getOperatorId, operatorJsonHeaders } from "./operator-context";
+
 export type LifecycleAction = "create_agent" | "update_agent" | "deactivate_agent";
 export type ActorType = "user" | "agent" | "system" | "service";
 export type ApprovalStatus = "requested" | "approved" | "rejected" | "applied";
@@ -202,12 +204,7 @@ export async function createAgentLifecycleRequest(
 ): Promise<AgentLifecycleRequest> {
   const response = await fetch("/api/control-plane/agent-lifecycle-requests", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Synarch-Actor-Type": "user",
-      "X-Synarch-Actor-Id": "local-user",
-      "X-Synarch-Trace-Id": `trace_frontend_lifecycle_create_${Date.now()}`
-    },
+    headers: operatorJsonHeaders(`trace_frontend_lifecycle_create_${Date.now()}`),
     body: JSON.stringify(lifecycleRequest)
   });
   return parseJsonResponse<AgentLifecycleRequest>(response);
@@ -238,12 +235,7 @@ export async function updateAgentModelPolicy(
     `/api/control-plane/agents/${encodeURIComponent(agentId)}/model-policy`,
     {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_model_policy_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_model_policy_${Date.now()}`),
       body: JSON.stringify({ model_policy_id: modelPolicyId } satisfies AgentModelPolicyUpdate)
     }
   );
@@ -257,21 +249,17 @@ export async function decideAgentLifecycleRequest({
   requestId: string;
   status: "approved" | "rejected";
 }): Promise<AgentLifecycleDecision> {
+  const operatorId = getOperatorId();
   const response = await fetch(
     `/api/control-plane/agent-lifecycle-requests/${encodeURIComponent(requestId)}/decisions`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Synarch-Actor-Type": "user",
-        "X-Synarch-Actor-Id": "local-user",
-        "X-Synarch-Trace-Id": `trace_frontend_lifecycle_${Date.now()}`
-      },
+      headers: operatorJsonHeaders(`trace_frontend_lifecycle_${Date.now()}`),
       body: JSON.stringify({
         request_id: requestId,
         status,
         decided_by_type: "user",
-        decided_by_id: "local-user",
+        decided_by_id: operatorId,
         rationale:
           status === "approved"
             ? "Approved from Synarch dashboard."

@@ -90,6 +90,7 @@ import {
   type WorkQueueStatus,
   type WorkQueueSummary
 } from "../../lib/state-service-api";
+import { getOperatorId } from "../../lib/operator-context";
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
 const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
@@ -506,6 +507,7 @@ function connectorAuditLogsForSelection(
 
 export default function SynarchAppPage() {
   const queryClient = useQueryClient();
+  const operatorId = getOperatorId();
   const [projectTitle, setProjectTitle] = useState("");
   const [goal, setGoal] = useState("");
   const [successDefinition, setSuccessDefinition] = useState("");
@@ -761,7 +763,7 @@ export default function SynarchAppPage() {
         title: title || undefined,
         goal: objective,
         priority,
-        requester: "local-user",
+        requester: operatorId,
         constraints: [
           "Découper l'objectif en étapes vérifiables.",
           "Demander une action humaine pour captcha, accès, choix critique ou document ambigu."
@@ -927,7 +929,7 @@ export default function SynarchAppPage() {
       reviewWorkQueueItem(itemId, {
         action,
         reviewed_by_type: "user",
-        reviewed_by_id: "local-user",
+        reviewed_by_id: operatorId,
         reason:
           action === "retry"
             ? "Retry requested from Synarch app."
@@ -1133,6 +1135,12 @@ export default function SynarchAppPage() {
             <h1 className="truncate text-2xl font-semibold">Workspace</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="max-w-52 truncate rounded-md bg-panel px-2 py-1 text-xs font-medium text-muted ring-1 ring-border"
+              title={`Opérateur audit: ${operatorId}`}
+            >
+              opérateur {operatorId}
+            </span>
             <span
               className={`rounded-md px-2 py-1 text-xs font-semibold ring-1 ${readinessClass[readinessStatus]}`}
             >

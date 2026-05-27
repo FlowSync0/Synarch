@@ -344,6 +344,8 @@ Progress:
   the resulting secret.
 - Done: `/app` shows recent `connector_connection.*` audit evidence for the selected connector,
   including trace IDs and safe secret-reference/deletion flags without exposing secret values.
+- Done: `/app` and shared frontend API clients use `NEXT_PUBLIC_SYNARCH_OPERATOR_ID` for
+  local/single-operator audit headers and display that operator in the workspace header.
 - Done: state-service can create active cron/webhook connector jobs, record bounded job runs, and
   stop jobs through traceable `connector_job.*` events and audit logs.
 - Done: state-service can tick active connector jobs with a bounded limit, recording completed,
