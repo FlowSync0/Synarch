@@ -127,6 +127,12 @@ export type WorkQueueReviewDecision = {
   retry_after_at?: string | null;
 };
 
+export type WorkQueueRecoveryResult = {
+  recovered_item_ids: string[];
+  dead_lettered_item_ids: string[];
+  inspected_at: string;
+};
+
 export type WorkerHeartbeatStatus =
   | "starting"
   | "running"
@@ -364,4 +370,16 @@ export async function reviewWorkQueueItem(
     }
   );
   return parseJsonResponse<WorkQueueItem>(response);
+}
+
+export async function recoverExpiredWorkQueueLeases(): Promise<WorkQueueRecoveryResult> {
+  const response = await fetch("/api/state-service/work-queue/recover-expired-leases", {
+    method: "POST",
+    headers: {
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": `trace_frontend_work_queue_recovery_${Date.now()}`
+    }
+  });
+  return parseJsonResponse<WorkQueueRecoveryResult>(response);
 }

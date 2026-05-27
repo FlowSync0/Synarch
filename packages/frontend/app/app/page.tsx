@@ -10,7 +10,6 @@ import {
   ExternalLink,
   Globe2,
   KeyRound,
-  ListChecks,
   PlugZap,
   Play,
   Plus,
@@ -57,11 +56,13 @@ import {
   listWorkerHeartbeats,
   listWorkQueueItems,
   listWorkQueueSummary,
+  recoverExpiredWorkQueueLeases,
   reviewWorkQueueItem,
   type ProjectRecord,
   type ServiceDefinition,
   type WorkerHeartbeatRecord,
   type WorkQueueItem,
+  type WorkQueueRecoveryResult,
   type WorkQueueSummary
 } from "../../lib/state-service-api";
 
@@ -270,6 +271,8 @@ export default function SynarchAppPage() {
   const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
+  const [workQueueRecoveryResult, setWorkQueueRecoveryResult] =
+    useState<WorkQueueRecoveryResult | null>(null);
   const [humanResponsesById, setHumanResponsesById] = useState<Record<string, string>>({});
   const [scopeSelectionsByService, setScopeSelectionsByService] = useState<
     Record<string, string[]>
@@ -581,6 +584,17 @@ export default function SynarchAppPage() {
     }
   });
 
+  const recoverWorkQueueLeasesMutation = useMutation({
+    mutationFn: recoverExpiredWorkQueueLeases,
+    onSuccess: (result) => {
+      setWorkQueueRecoveryResult(result);
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-worker-heartbeats"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+    }
+  });
+
   const credentialDecisionMutation = useMutation({
     mutationFn: decideCredentialAccessRequest,
     onSuccess: invalidateOperatorState
@@ -658,6 +672,10 @@ export default function SynarchAppPage() {
 
   const handleWorkQueueReview = (itemId: string, action: "retry" | "dead_letter") => {
     reviewWorkQueueMutation.mutate({ itemId, action });
+  };
+
+  const handleWorkQueueRecovery = () => {
+    recoverWorkQueueLeasesMutation.mutate();
   };
 
   const handleCredentialDecision = (
@@ -1237,15 +1255,19 @@ export default function SynarchAppPage() {
               selectedProjectTitle={selectedProject?.title ?? null}
               submitting={createWorkQueueMutation.isPending}
               reviewing={reviewWorkQueueMutation.isPending}
+              recovering={recoverWorkQueueLeasesMutation.isPending}
               canSubmit={canSubmitWorkQueue}
               error={createWorkQueueMutation.error}
               reviewError={reviewWorkQueueMutation.error}
+              recoveryError={recoverWorkQueueLeasesMutation.error}
+              recoveryResult={workQueueRecoveryResult}
               onQueueNameChange={setWorkQueueName}
               onActionChange={setWorkQueueAction}
               onMessageChange={setWorkQueueMessage}
               onRunAfterChange={setWorkQueueRunAfter}
               onSubmit={handleWorkQueueSubmit}
               onReview={handleWorkQueueReview}
+              onRecoverLeases={handleWorkQueueRecovery}
             />
           </aside>
         </div>
@@ -2411,15 +2433,19 @@ function WorkQueuePanel({
   selectedProjectTitle,
   submitting,
   reviewing,
+  recovering,
   canSubmit,
   error,
   reviewError,
+  recoveryError,
+  recoveryResult,
   onQueueNameChange,
   onActionChange,
   onMessageChange,
   onRunAfterChange,
   onSubmit,
-  onReview
+  onReview,
+  onRecoverLeases
 }: {
   items: WorkQueueItem[];
   summaries: WorkQueueSummary[];
@@ -2432,15 +2458,19 @@ function WorkQueuePanel({
   selectedProjectTitle: string | null;
   submitting: boolean;
   reviewing: boolean;
+  recovering: boolean;
   canSubmit: boolean;
   error: unknown;
   reviewError: unknown;
+  recoveryError: unknown;
+  recoveryResult: WorkQueueRecoveryResult | null;
   onQueueNameChange: (value: string) => void;
   onActionChange: (value: WorkQueueAction) => void;
   onMessageChange: (value: string) => void;
   onRunAfterChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onReview: (itemId: string, action: "retry" | "dead_letter") => void;
+  onRecoverLeases: () => void;
 }) {
   const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
     counts[item.status] = (counts[item.status] ?? 0) + 1;
@@ -2456,9 +2486,23 @@ function WorkQueuePanel({
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Queue durable</h2>
-        <ListChecks className="h-4 w-4 text-accent" />
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Queue durable</h2>
+          <p className="text-xs text-muted">
+            leases, retries et dead-letter PostgreSQL
+          </p>
+        </div>
+        <button
+          type="button"
+          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-semibold text-ink hover:bg-slate-50 disabled:opacity-60"
+          disabled={recovering}
+          onClick={onRecoverLeases}
+          title="Réexaminer les items running dont le lease a expiré"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          <span>{recovering ? "Récupération" : "Récupérer"}</span>
+        </button>
       </div>
       <QueueSummaryStrip
         summaries={summaries}
@@ -2534,6 +2578,18 @@ function WorkQueuePanel({
         {reviewError ? (
           <p className="text-xs text-risk">
             {reviewError instanceof Error ? reviewError.message : "Décision impossible."}
+          </p>
+        ) : null}
+        {recoveryError ? (
+          <p className="text-xs text-risk">
+            {recoveryError instanceof Error ? recoveryError.message : "Récupération impossible."}
+          </p>
+        ) : null}
+        {recoveryResult ? (
+          <p className="text-xs text-muted">
+            Récupération: {recoveryResult.recovered_item_ids.length} récupérés /{" "}
+            {recoveryResult.dead_lettered_item_ids.length} dead-letter à{" "}
+            {formatDate(recoveryResult.inspected_at)}.
           </p>
         ) : null}
       </form>
