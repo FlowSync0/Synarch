@@ -269,6 +269,16 @@ function canReencryptSecretVault(item: SystemReadinessItem): boolean {
   );
 }
 
+function secretVaultCanStoreConnectorSecrets(item: SystemReadinessItem | null): boolean {
+  return (
+    item?.id === "secret_vault" &&
+    item.status === "ready" &&
+    evidenceBoolean(item, "writable") &&
+    evidenceBoolean(item, "encryption_enabled") &&
+    evidenceNumber(item, "plaintext_secret_count") === 0
+  );
+}
+
 function secretVaultBadges(item: SystemReadinessItem): string[] {
   if (item.id !== "secret_vault") {
     return [];
@@ -405,6 +415,11 @@ export default function SynarchAppPage() {
     () => new Map((servicesQuery.data ?? []).map((service) => [service.id, service])),
     [servicesQuery.data]
   );
+  const secretVaultReadiness =
+    readinessQuery.data?.items.find((item) => item.id === "secret_vault") ?? null;
+  const connectorSecretVaultReady = secretVaultCanStoreConnectorSecrets(secretVaultReadiness);
+  const apiKeyConnectorBlocked =
+    effectiveConnectorMode === "api_key" && !connectorSecretVaultReady;
   const workQueueWorkerReadiness = readinessQuery.data?.items.find(
     (item) => item.id === "work_queue_worker"
   );
@@ -678,6 +693,9 @@ export default function SynarchAppPage() {
   const handleConnectSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0) {
+      return;
+    }
+    if (apiKeyConnectorBlocked) {
       return;
     }
     connectMutation.mutate();
@@ -1077,6 +1095,13 @@ export default function SynarchAppPage() {
                   hasApiKey={apiKey.trim().length > 0}
                 />
 
+                {effectiveConnectorMode === "api_key" ? (
+                  <SecretVaultConnectorGate
+                    item={secretVaultReadiness}
+                    loading={readinessQuery.isLoading}
+                  />
+                ) : null}
+
                 <div
                   className={`grid gap-2 ${
                     availableConnectorModes.length === 1
@@ -1156,6 +1181,7 @@ export default function SynarchAppPage() {
                   disabled={
                     !selectedService ||
                     connectMutation.isPending ||
+                    apiKeyConnectorBlocked ||
                     (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0)
                   }
                 >
@@ -1802,6 +1828,64 @@ function CredentialRequestCard({
         ) : null}
       </div>
     </article>
+  );
+}
+
+function SecretVaultConnectorGate({
+  item,
+  loading
+}: {
+  item: SystemReadinessItem | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className="rounded-md border border-border bg-slate-50 p-3 text-xs text-muted">
+        Vérification SecretVault...
+      </div>
+    );
+  }
+  const ready = secretVaultCanStoreConnectorSecrets(item);
+  const badges = item ? secretVaultBadges(item) : [];
+  return (
+    <div
+      className={`rounded-md border p-3 text-xs ${
+        ready
+          ? "border-ok/20 bg-ok-soft text-ok"
+          : "border-risk/20 bg-risk-soft text-risk"
+      }`}
+    >
+      <div className="flex items-start gap-2">
+        {ready ? (
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+        ) : (
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        )}
+        <div className="min-w-0">
+          <p className="font-semibold">
+            {ready ? "SecretVault prêt pour les clés API" : "SecretVault requis"}
+          </p>
+          <p className="mt-1">
+            {ready
+              ? "Les nouvelles clés connecteur seront stockées chiffrées, sans valeur exposée dans state-service."
+              : item?.manual_action ??
+                "Attendre ou corriger SecretVault avant d'enregistrer une clé connecteur."}
+          </p>
+          {badges.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {badges.map((badge) => (
+                <span
+                  key={badge}
+                  className="rounded-md bg-white/70 px-2 py-1 text-[11px] ring-1 ring-current/15"
+                >
+                  {badge}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
