@@ -94,6 +94,7 @@ const workerStatusOptions: WorkerHeartbeatStatus[] = [
   "completed",
   "starting"
 ];
+const readinessStatusOptions: SystemReadinessStatus[] = ["blocked", "warning", "ready"];
 const connectorModeDetails: Record<
   ConnectorConnectionMode,
   { label: string; description: string; submitLabel: string }
@@ -117,6 +118,7 @@ const connectorModeDetails: Record<
 type WorkQueueAction = "project_reminder" | "log";
 type WorkQueueStatusFilter = WorkQueueStatus | "all";
 type WorkerHealthFilter = WorkerHeartbeatStatus | "all" | "problem" | "stale";
+type ReadinessFilter = SystemReadinessStatus | "all" | "attention";
 type TaskReviewMutationVariables = {
   taskId: string;
   decision: { action: "retry" | "cancel" | "update" };
@@ -420,6 +422,7 @@ export default function SynarchAppPage() {
   const [workQueueStatusFilter, setWorkQueueStatusFilter] =
     useState<WorkQueueStatusFilter>("all");
   const [workerHealthFilter, setWorkerHealthFilter] = useState<WorkerHealthFilter>("all");
+  const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("attention");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
   const [workQueueRecoveryResult, setWorkQueueRecoveryResult] =
@@ -1416,70 +1419,15 @@ export default function SynarchAppPage() {
               onSelectProvider={handleWebProviderSelect}
             />
 
-            <section className="rounded-md border border-border bg-panel shadow-soft">
-              <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <h2 className="text-sm font-semibold">État système</h2>
-                <ShieldCheck className="h-4 w-4 text-ok" />
-              </div>
-              <div className="divide-y divide-border">
-                {(readinessQuery.data?.items ?? []).slice(0, 8).map((item) => (
-                  <div key={item.id} className="flex items-start gap-3 px-4 py-3">
-                    {item.status === "ready" ? (
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
-                    ) : item.status === "blocked" ? (
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-risk" />
-                    ) : (
-                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{item.title}</p>
-                      <p className="line-clamp-2 text-xs text-muted">{item.detail}</p>
-                      {item.manual_action ? (
-                        <p className="mt-1 line-clamp-2 text-xs text-muted">
-                          {item.manual_action}
-                        </p>
-                      ) : null}
-                      {secretVaultBadges(item).length > 0 ? (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {secretVaultBadges(item).map((badge) => (
-                            <span
-                              key={badge}
-                              className="rounded-md bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted ring-1 ring-border"
-                            >
-                              {badge}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null}
-                      {item.id === "secret_vault" && reencryptSecretVaultMutation.isError ? (
-                        <p className="mt-1 text-xs text-risk">
-                          {reencryptSecretVaultMutation.error instanceof Error
-                            ? reencryptSecretVaultMutation.error.message
-                            : "Action impossible."}
-                        </p>
-                      ) : null}
-                    </div>
-                    {canReencryptSecretVault(item) ? (
-                      <button
-                        type="button"
-                        className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-white px-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
-                        disabled={reencryptSecretVaultMutation.isPending}
-                        onClick={() => reencryptSecretVaultMutation.mutate()}
-                        title="Chiffrer les anciens secrets locaux"
-                      >
-                        <KeyRound className="h-3.5 w-3.5" />
-                        <span>
-                          {reencryptSecretVaultMutation.isPending ? "Chiffrement" : "Chiffrer"}
-                        </span>
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-                {readinessQuery.isLoading ? (
-                  <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
-                ) : null}
-              </div>
-            </section>
+            <SystemReadinessPanel
+              items={readinessQuery.data?.items ?? []}
+              loading={readinessQuery.isLoading}
+              filter={readinessFilter}
+              reencrypting={reencryptSecretVaultMutation.isPending}
+              reencryptError={reencryptSecretVaultMutation.error}
+              onFilterChange={setReadinessFilter}
+              onReencrypt={() => reencryptSecretVaultMutation.mutate()}
+            />
 
             <WorkerPanel
               heartbeats={workerHeartbeatsQuery.data ?? []}
@@ -2861,6 +2809,194 @@ function WebProviderPanel({
                   </button>
                 </div>
               </article>
+            );
+          })
+        )}
+      </div>
+    </section>
+  );
+}
+
+function readinessRank(status: SystemReadinessStatus): number {
+  return {
+    blocked: 0,
+    warning: 1,
+    ready: 2
+  }[status];
+}
+
+function readinessMatchesFilter(item: SystemReadinessItem, filter: ReadinessFilter): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "attention") {
+    return item.status !== "ready";
+  }
+  return item.status === filter;
+}
+
+function SystemReadinessPanel({
+  items,
+  loading,
+  filter,
+  reencrypting,
+  reencryptError,
+  onFilterChange,
+  onReencrypt
+}: {
+  items: SystemReadinessItem[];
+  loading: boolean;
+  filter: ReadinessFilter;
+  reencrypting: boolean;
+  reencryptError: unknown;
+  onFilterChange: (filter: ReadinessFilter) => void;
+  onReencrypt: () => void;
+}) {
+  const counts = items.reduce<Record<SystemReadinessStatus, number>>(
+    (current, item) => {
+      current[item.status] += 1;
+      return current;
+    },
+    { blocked: 0, warning: 0, ready: 0 }
+  );
+  const attentionCount = counts.blocked + counts.warning;
+  const visibleItems = [...items]
+    .filter((item) => readinessMatchesFilter(item, filter))
+    .sort((left, right) => {
+      const statusDelta = readinessRank(left.status) - readinessRank(right.status);
+      if (statusDelta !== 0) {
+        return statusDelta;
+      }
+      return left.category.localeCompare(right.category) || left.title.localeCompare(right.title);
+    });
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">État système</h2>
+          <p className="text-xs text-muted">Readiness, actions manuelles et preuves runtime.</p>
+        </div>
+        <ShieldCheck className="h-4 w-4 shrink-0 text-ok" />
+      </div>
+      <div className="border-b border-border px-4 py-3">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(attentionCount > 0 ? "needs_review" : "healthy")}`}>
+            attention: {attentionCount}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${readinessClass.blocked}`}>
+            blocked: {counts.blocked}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${readinessClass.warning}`}>
+            warning: {counts.warning}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${readinessClass.ready}`}>
+            ready: {counts.ready}
+          </span>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(["attention", "all", ...readinessStatusOptions] as ReadinessFilter[]).map(
+            (option) => {
+              const selected = filter === option;
+              const count =
+                option === "attention"
+                  ? attentionCount
+                  : option === "all"
+                    ? items.length
+                    : counts[option];
+              return (
+                <button
+                  key={option}
+                  type="button"
+                  className={`h-8 shrink-0 rounded-md border px-2 text-xs font-semibold ${
+                    selected
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-border bg-white text-muted hover:bg-slate-50"
+                  }`}
+                  onClick={() => onFilterChange(option)}
+                >
+                  {option}: {count}
+                </button>
+              );
+            }
+          )}
+        </div>
+      </div>
+      <div className="divide-y divide-border">
+        {loading ? (
+          <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+        ) : visibleItems.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-ok">
+            {filter === "attention" ? "Aucun blocage readiness." : "Aucun item."}
+          </p>
+        ) : (
+          visibleItems.map((item) => {
+            const badges = secretVaultBadges(item);
+            return (
+              <div key={item.id} className="flex items-start gap-3 px-4 py-3">
+                {item.status === "ready" ? (
+                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
+                ) : item.status === "blocked" ? (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-risk" />
+                ) : (
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center justify-between gap-2">
+                    <p className="truncate text-sm font-medium">{item.title}</p>
+                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${readinessClass[item.status]}`}>
+                      {item.status}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-xs text-muted">{item.detail}</p>
+                  {item.manual_action ? (
+                    <p className="mt-2 rounded-md bg-warn-soft px-2 py-1 text-xs text-warn">
+                      {item.manual_action}
+                    </p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {item.category}
+                    </span>
+                    <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {item.id}
+                    </span>
+                    {badges.map((badge) => (
+                      <span
+                        key={badge}
+                        className="rounded-md bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted ring-1 ring-border"
+                      >
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+                  <details className="mt-2 rounded-md border border-border bg-slate-50 px-2 py-2 text-xs text-muted">
+                    <summary className="cursor-pointer font-semibold text-ink">
+                      Evidence
+                    </summary>
+                    <p className="mt-2 line-clamp-3">{payloadPreview(item.evidence)}</p>
+                  </details>
+                  {item.id === "secret_vault" && reencryptError ? (
+                    <p className="mt-2 text-xs text-risk">
+                      {reencryptError instanceof Error
+                        ? reencryptError.message
+                        : "Action impossible."}
+                    </p>
+                  ) : null}
+                </div>
+                {canReencryptSecretVault(item) ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-white px-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+                    disabled={reencrypting}
+                    onClick={onReencrypt}
+                    title="Chiffrer les anciens secrets locaux"
+                  >
+                    <KeyRound className="h-3.5 w-3.5" />
+                    <span>{reencrypting ? "Chiffrement" : "Chiffrer"}</span>
+                  </button>
+                ) : null}
+              </div>
             );
           })
         )}
