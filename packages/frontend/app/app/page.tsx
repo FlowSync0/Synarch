@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  Activity,
   AlertTriangle,
   CheckCircle2,
   CircleDot,
@@ -37,10 +38,12 @@ import {
   createWorkQueueItem,
   listProjects,
   listServices,
+  listWorkerHeartbeats,
   listWorkQueueItems,
   reviewWorkQueueItem,
   type ProjectRecord,
   type ServiceDefinition,
+  type WorkerHeartbeatRecord,
   type WorkQueueItem
 } from "../../lib/state-service-api";
 
@@ -132,6 +135,11 @@ export default function SynarchAppPage() {
   const workQueueQuery = useQuery({
     queryKey: ["app-work-queue", workQueueName],
     queryFn: () => listWorkQueueItems(workQueueName.trim() || undefined)
+  });
+  const workerHeartbeatsQuery = useQuery({
+    queryKey: ["app-worker-heartbeats"],
+    queryFn: listWorkerHeartbeats,
+    refetchInterval: 15_000
   });
 
   const selectedProject =
@@ -310,6 +318,8 @@ export default function SynarchAppPage() {
               disabled={readinessQuery.isFetching}
               onClick={() => {
                 void readinessQuery.refetch();
+                void workerHeartbeatsQuery.refetch();
+                void workQueueQuery.refetch();
               }}
               title="Rafraîchir l'état système"
             >
@@ -589,6 +599,11 @@ export default function SynarchAppPage() {
               </div>
             </section>
 
+            <WorkerPanel
+              heartbeats={workerHeartbeatsQuery.data ?? []}
+              loading={workerHeartbeatsQuery.isLoading}
+            />
+
             <WorkQueuePanel
               items={workQueueQuery.data ?? []}
               loading={workQueueQuery.isLoading}
@@ -718,6 +733,74 @@ function ActionPanel({ actions, loading }: { actions: OperatorAction[]; loading:
         ))}
       </div>
     </div>
+  );
+}
+
+function WorkerPanel({
+  heartbeats,
+  loading
+}: {
+  heartbeats: WorkerHeartbeatRecord[];
+  loading: boolean;
+}) {
+  const recentHeartbeats = [...heartbeats]
+    .sort((left, right) => right.last_seen_at.localeCompare(left.last_seen_at))
+    .slice(0, 4);
+  const statusCounts = heartbeats.reduce<Record<string, number>>((counts, heartbeat) => {
+    counts[heartbeat.status] = (counts[heartbeat.status] ?? 0) + 1;
+    return counts;
+  }, {});
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">Workers</h2>
+        <Activity className="h-4 w-4 text-accent" />
+      </div>
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex flex-wrap gap-2">
+          {["completed", "failed", "running", "idle", "stopped"].map((status) => (
+            <span
+              key={status}
+              className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(status)}`}
+            >
+              {status}: {statusCounts[status] ?? 0}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="divide-y divide-border">
+        {loading ? (
+          <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+        ) : recentHeartbeats.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">Aucun worker signalé.</p>
+        ) : (
+          recentHeartbeats.map((heartbeat) => (
+            <div key={heartbeat.id} className="px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-sm font-medium">{heartbeat.id}</p>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(heartbeat.status)}`}
+                >
+                  {heartbeat.status}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
+                <span className="truncate">
+                  {heartbeat.worker_kind}
+                  {heartbeat.target ? ` / ${heartbeat.target}` : ""}
+                </span>
+                <span className="shrink-0">#{heartbeat.heartbeat_count}</span>
+              </div>
+              {heartbeat.last_error ? (
+                <p className="mt-1 line-clamp-2 text-xs text-risk">{heartbeat.last_error}</p>
+              ) : null}
+              <p className="mt-1 text-[11px] text-muted">{formatDate(heartbeat.last_seen_at)}</p>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
   );
 }
 

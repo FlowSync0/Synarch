@@ -112,6 +112,33 @@ export type WorkQueueReviewDecision = {
   retry_after_at?: string | null;
 };
 
+export type WorkerHeartbeatStatus =
+  | "starting"
+  | "running"
+  | "idle"
+  | "completed"
+  | "failed"
+  | "stopped";
+
+export type WorkerHeartbeatRecord = {
+  id: string;
+  worker_kind:
+    | "scheduler"
+    | "connector_job"
+    | "memory_compaction"
+    | "memory_embedding"
+    | "work_queue"
+    | "generic";
+  status: WorkerHeartbeatStatus;
+  target?: string | null;
+  heartbeat_count: number;
+  last_tick_result: Record<string, unknown>;
+  last_error?: string | null;
+  started_at: string;
+  last_seen_at: string;
+  updated_at: string;
+};
+
 export type ServiceDefinition = {
   id: string;
   name: string;
@@ -274,6 +301,13 @@ export async function listWorkQueueItems(queueName?: string): Promise<WorkQueueI
     }
   );
   return parseJsonResponse<WorkQueueItem[]>(response);
+}
+
+export async function listWorkerHeartbeats(): Promise<WorkerHeartbeatRecord[]> {
+  const response = await fetch("/api/state-service/worker-heartbeats", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<WorkerHeartbeatRecord[]>(response);
 }
 
 export async function createWorkQueueItem(

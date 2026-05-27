@@ -75,6 +75,7 @@
       "Task review queue and retry/cancel/update decisions",
       "Generic durable work_queue_items endpoints support create, claim with lease, complete, fail, dead-letter, and expired lease recovery",
       "Safe generic work queue worker can consume noop/log payloads and dead-letter unsupported actions",
+      "Worker heartbeat records are persisted durably and shown in /app",
       "/app work-queue panel can monitor queue status counts, enqueue safe log items, retry failed/dead-lettered items, and dead-letter queued/running/failed items"
     ],
     "main_gap": "Generic work-queue worker currently supports only safe noop/log payloads and no payload editing UI yet.",

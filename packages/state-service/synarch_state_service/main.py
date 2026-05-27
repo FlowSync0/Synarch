@@ -66,6 +66,8 @@ from synarch_models import (
     TaskReviewDecision,
     TaskReviewResult,
     TaskStatus,
+    WorkerHeartbeatRecord,
+    WorkerHeartbeatUpsertRequest,
     WorkQueueClaimRequest,
     WorkQueueClaimResult,
     WorkQueueCompletionRequest,
@@ -364,6 +366,83 @@ def agent_event_source(actor_type: ActorType, actor_id: str) -> str | None:
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="state-service")
+
+
+@app.post("/worker-heartbeats/{worker_id}", response_model=WorkerHeartbeatRecord)
+def upsert_worker_heartbeat(
+    worker_id: str,
+    heartbeat: WorkerHeartbeatUpsertRequest,
+    request: Request,
+) -> WorkerHeartbeatRecord:
+    heartbeat_at = datetime.now(UTC)
+    existing = REPOSITORIES.worker_heartbeats.get(worker_id)
+    if existing is None:
+        record = create_record(
+            REPOSITORIES.worker_heartbeats,
+            worker_id,
+            WorkerHeartbeatRecord(
+                id=worker_id,
+                worker_kind=heartbeat.worker_kind,
+                status=heartbeat.status,
+                target=heartbeat.target,
+                heartbeat_count=1,
+                last_tick_result=heartbeat.last_tick_result,
+                last_error=heartbeat.last_error,
+                started_at=heartbeat_at,
+                last_seen_at=heartbeat_at,
+                updated_at=heartbeat_at,
+            ),
+        )
+    else:
+        record = update_record(
+            REPOSITORIES.worker_heartbeats,
+            worker_id,
+            existing.model_copy(
+                update={
+                    "worker_kind": heartbeat.worker_kind,
+                    "status": heartbeat.status,
+                    "target": heartbeat.target,
+                    "heartbeat_count": existing.heartbeat_count + 1,
+                    "last_tick_result": heartbeat.last_tick_result,
+                    "last_error": heartbeat.last_error,
+                    "last_seen_at": heartbeat_at,
+                    "updated_at": heartbeat_at,
+                }
+            ),
+            "worker heartbeat",
+        )
+
+    write_audit_log(
+        AuditContext(
+            actor_type=ActorType.service,
+            actor_id=worker_id,
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        ),
+        action="worker.heartbeat",
+        target_type="worker",
+        target_id=worker_id,
+        payload={
+            "worker_kind": record.worker_kind,
+            "status": record.status,
+            "target": record.target,
+            "heartbeat_count": record.heartbeat_count,
+            "last_error": record.last_error,
+        },
+    )
+    return record
+
+
+@app.get("/worker-heartbeats", response_model=list[WorkerHeartbeatRecord])
+def list_worker_heartbeats(
+    worker_kind: str | None = None,
+    target: str | None = None,
+) -> list[WorkerHeartbeatRecord]:
+    heartbeats = REPOSITORIES.worker_heartbeats.list_records()
+    if worker_kind is not None:
+        heartbeats = [heartbeat for heartbeat in heartbeats if heartbeat.worker_kind == worker_kind]
+    if target is not None:
+        heartbeats = [heartbeat for heartbeat in heartbeats if heartbeat.target == target]
+    return sorted(heartbeats, key=lambda heartbeat: heartbeat.last_seen_at, reverse=True)
 
 
 def validate_agent_model_policy(agent: AgentDefinition) -> None:

@@ -92,6 +92,8 @@ from .contracts import (
     TaskSkipRecord,
     ToolCallRequest,
     ToolResult,
+    WorkerHeartbeatRecord,
+    WorkerHeartbeatUpsertRequest,
     WorkQueueClaimRequest,
     WorkQueueClaimResult,
     WorkQueueCompletionRequest,
@@ -238,4 +240,6 @@ __all__ = [
     "WorkQueueItem",
     "WorkQueueRecoveryResult",
     "WorkQueueReviewDecision",
+    "WorkerHeartbeatRecord",
+    "WorkerHeartbeatUpsertRequest",
 ]

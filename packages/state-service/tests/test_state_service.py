@@ -246,6 +246,65 @@ def test_work_queue_review_dead_letters_queued_item() -> None:
     assert claim_response.json()["claimed_items"] == []
 
 
+def test_worker_heartbeat_upsert_tracks_durable_worker_status() -> None:
+    client = TestClient(app)
+    trace_id = "trace_worker_heartbeat"
+
+    first_response = client.post(
+        "/worker-heartbeats/work-queue-worker-1",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "worker_kind": "work_queue",
+            "status": "completed",
+            "target": "reminders",
+            "last_tick_result": {
+                "tick": 1,
+                "claimed_count": 1,
+                "completed_count": 1,
+                "failed_count": 0,
+            },
+        },
+    )
+
+    assert first_response.status_code == 200
+    first_heartbeat = first_response.json()
+    assert first_heartbeat["id"] == "work-queue-worker-1"
+    assert first_heartbeat["worker_kind"] == "work_queue"
+    assert first_heartbeat["status"] == "completed"
+    assert first_heartbeat["target"] == "reminders"
+    assert first_heartbeat["heartbeat_count"] == 1
+    assert first_heartbeat["last_error"] is None
+
+    second_response = client.post(
+        "/worker-heartbeats/work-queue-worker-1",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "worker_kind": "work_queue",
+            "status": "failed",
+            "target": "reminders",
+            "last_tick_result": {"tick": 2, "claimed_count": 0},
+            "last_error": "state timeout",
+        },
+    )
+
+    assert second_response.status_code == 200
+    second_heartbeat = second_response.json()
+    assert second_heartbeat["heartbeat_count"] == 2
+    assert second_heartbeat["status"] == "failed"
+    assert second_heartbeat["last_error"] == "state timeout"
+    assert second_heartbeat["started_at"] == first_heartbeat["started_at"]
+    assert second_heartbeat["last_seen_at"] >= first_heartbeat["last_seen_at"]
+
+    listed = client.get("/worker-heartbeats", params={"worker_kind": "work_queue"}).json()
+    assert [heartbeat["id"] for heartbeat in listed] == ["work-queue-worker-1"]
+    assert listed[0]["last_tick_result"]["tick"] == 2
+
+    audit_actions = [
+        audit["action"] for audit in client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    ]
+    assert audit_actions == ["worker.heartbeat", "worker.heartbeat"]
+
+
 def test_work_queue_recover_expired_lease_requeues_item() -> None:
     client = TestClient(app)
     expired_at = datetime.now(UTC) - timedelta(minutes=5)

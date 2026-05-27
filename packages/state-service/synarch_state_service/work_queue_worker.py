@@ -46,6 +46,34 @@ def post_json(
     return cast(dict[str, Any], payload_data)
 
 
+def record_worker_heartbeat(
+    *,
+    state_service_url: str,
+    queue_name: str,
+    worker_id: str,
+    status: str,
+    last_tick_result: dict[str, Any],
+    last_error: str | None,
+    trace_id: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    return post_json(
+        state_url(state_service_url, f"/worker-heartbeats/{worker_id}"),
+        {
+            "worker_kind": "work_queue",
+            "status": status,
+            "target": queue_name,
+            "last_tick_result": last_tick_result,
+            "last_error": last_error,
+        },
+        timeout_seconds=timeout_seconds,
+        headers={
+            "X-Synarch-Trace-Id": trace_id,
+            "X-Synarch-Work-Queue-Worker-Id": worker_id,
+        },
+    )
+
+
 def execute_work_item(item: dict[str, Any]) -> dict[str, Any]:
     payload = item.get("payload")
     if not isinstance(payload, dict):
@@ -253,27 +281,57 @@ def run_loop(args: argparse.Namespace) -> None:
             result["work_queue"]["tick"] = tick_count
             result["work_queue"]["started_at"] = started_at.isoformat()
             result["work_queue"]["status"] = "completed"
+            try:
+                result["worker_heartbeat"] = record_worker_heartbeat(
+                    state_service_url=args.state_service_url,
+                    queue_name=args.queue_name,
+                    worker_id=args.worker_id,
+                    status="completed",
+                    last_tick_result=result["work_queue"],
+                    last_error=None,
+                    trace_id=trace_id,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            except Exception as heartbeat_error:
+                result["worker_heartbeat_error"] = {
+                    "type": type(heartbeat_error).__name__,
+                    "message": str(heartbeat_error),
+                }
             print(json.dumps(result, sort_keys=True), flush=True)
         except Exception as error:
+            failure_result: dict[str, Any] = {
+                "work_queue": {
+                    "worker_id": args.worker_id,
+                    "state_service_url": args.state_service_url,
+                    "queue_name": args.queue_name,
+                    "trace_id": trace_id,
+                    "tick": tick_count,
+                    "started_at": started_at.isoformat(),
+                    "status": "failed",
+                },
+                "error": {
+                    "type": type(error).__name__,
+                    "message": str(error),
+                },
+            }
+            try:
+                failure_result["worker_heartbeat"] = record_worker_heartbeat(
+                    state_service_url=args.state_service_url,
+                    queue_name=args.queue_name,
+                    worker_id=args.worker_id,
+                    status="failed",
+                    last_tick_result=failure_result["work_queue"],
+                    last_error=str(error),
+                    trace_id=trace_id,
+                    timeout_seconds=args.timeout_seconds,
+                )
+            except Exception as heartbeat_error:
+                failure_result["worker_heartbeat_error"] = {
+                    "type": type(heartbeat_error).__name__,
+                    "message": str(heartbeat_error),
+                }
             print(
-                json.dumps(
-                    {
-                        "work_queue": {
-                            "worker_id": args.worker_id,
-                            "state_service_url": args.state_service_url,
-                            "queue_name": args.queue_name,
-                            "trace_id": trace_id,
-                            "tick": tick_count,
-                            "started_at": started_at.isoformat(),
-                            "status": "failed",
-                        },
-                        "error": {
-                            "type": type(error).__name__,
-                            "message": str(error),
-                        },
-                    },
-                    sort_keys=True,
-                ),
+                json.dumps(failure_result, sort_keys=True),
                 flush=True,
             )
         if not args.loop:

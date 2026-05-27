@@ -440,6 +440,38 @@ class WorkQueueReviewDecision(SynarchModel):
     retry_after_at: datetime | None = None
 
 
+WorkerKind = Literal[
+    "scheduler",
+    "connector_job",
+    "memory_compaction",
+    "memory_embedding",
+    "work_queue",
+    "generic",
+]
+WorkerStatus = Literal["starting", "running", "idle", "completed", "failed", "stopped"]
+
+
+class WorkerHeartbeatRecord(SynarchModel):
+    id: str
+    worker_kind: WorkerKind
+    status: WorkerStatus
+    target: str | None = None
+    heartbeat_count: int = Field(default=0, ge=0)
+    last_tick_result: dict[str, Any] = Field(default_factory=dict)
+    last_error: str | None = None
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_seen_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class WorkerHeartbeatUpsertRequest(SynarchModel):
+    worker_kind: WorkerKind
+    status: WorkerStatus
+    target: str | None = None
+    last_tick_result: dict[str, Any] = Field(default_factory=dict)
+    last_error: str | None = None
+
+
 class WorkQueueRecoveryResult(SynarchModel):
     recovered_item_ids: list[str] = Field(default_factory=list)
     dead_lettered_item_ids: list[str] = Field(default_factory=list)

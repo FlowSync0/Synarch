@@ -28,6 +28,7 @@ from synarch_models import (
     ServiceDefinition,
     SkillDefinition,
     TaskRecord,
+    WorkerHeartbeatRecord,
     WorkQueueItem,
 )
 
@@ -115,6 +116,7 @@ class StateRepositories:
     connector_jobs: RecordRepository[ConnectorJobRecord]
     connector_job_runs: RecordRepository[ConnectorJobRunRecord]
     work_queue_items: RecordRepository[WorkQueueItem]
+    worker_heartbeats: RecordRepository[WorkerHeartbeatRecord]
 
     @classmethod
     def in_memory(cls) -> StateRepositories:
@@ -144,6 +146,7 @@ class StateRepositories:
             connector_jobs=InMemoryRecordRepository(),
             connector_job_runs=InMemoryRecordRepository(),
             work_queue_items=InMemoryRecordRepository(),
+            worker_heartbeats=InMemoryRecordRepository(),
         )
 
     @classmethod

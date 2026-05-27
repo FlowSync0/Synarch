@@ -32,6 +32,7 @@ from synarch_models import (
     ServiceDefinition,
     SkillDefinition,
     TaskRecord,
+    WorkerHeartbeatRecord,
     WorkQueueItem,
 )
 from synarch_models.contracts import SynarchModel
@@ -657,5 +658,23 @@ def build_postgres_repositories(database_url: str) -> StateRepositories:
                 "completed_at",
             ),
             frozenset({"payload", "result"}),
+        ),
+        worker_heartbeats=PostgresRecordRepository(
+            database_url,
+            "worker_heartbeats",
+            WorkerHeartbeatRecord,
+            (
+                "id",
+                "worker_kind",
+                "status",
+                "target",
+                "heartbeat_count",
+                "last_tick_result",
+                "last_error",
+                "started_at",
+                "last_seen_at",
+                "updated_at",
+            ),
+            frozenset({"last_tick_result"}),
         ),
     )
