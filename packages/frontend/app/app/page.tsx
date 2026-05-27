@@ -28,6 +28,7 @@ import {
   decideCredentialAccessRequest,
   disableConnectorConnection,
   getSystemReadiness,
+  getProjectTimeline,
   listCredentialAccessRequests,
   listConnectorConnections,
   listHumanAssistanceRequests,
@@ -45,6 +46,7 @@ import {
   type HumanAssistanceRequest,
   type OperatorAction,
   type ProjectBrief,
+  type ProjectTimeline,
   type SystemReadinessItem,
   type SystemReadinessStatus,
   type WebProviderStatus
@@ -170,6 +172,18 @@ function formatDuration(seconds: number | null): string {
     return `${hours}h`;
   }
   return `${Math.floor(hours / 24)}j`;
+}
+
+function formatCurrency(value: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("fr-FR", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 4
+    }).format(value);
+  } catch {
+    return `${value.toFixed(4)} ${currency}`;
+  }
 }
 
 function connectionByService(
@@ -399,6 +413,12 @@ export default function SynarchAppPage() {
     queryFn: () => listOperatorActions(effectiveProjectId ?? undefined),
     refetchInterval: 15_000
   });
+  const timelineQuery = useQuery({
+    queryKey: ["app-project-timeline", effectiveProjectId],
+    queryFn: () => getProjectTimeline(effectiveProjectId ?? ""),
+    enabled: effectiveProjectId !== null,
+    refetchInterval: 15_000
+  });
 
   const connectorServices = useMemo(
     () => (servicesQuery.data ?? []).filter(isConnectableService),
@@ -472,6 +492,7 @@ export default function SynarchAppPage() {
     void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
     void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
     void queryClient.invalidateQueries({ queryKey: ["app-projects"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-project-timeline"] });
   };
 
   const submitGoalMutation = useMutation({
@@ -536,6 +557,7 @@ export default function SynarchAppPage() {
       void queryClient.invalidateQueries({ queryKey: ["app-projects"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["app-operator-actions"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-timeline"] });
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
     }
@@ -551,6 +573,7 @@ export default function SynarchAppPage() {
       void queryClient.invalidateQueries({ queryKey: ["app-projects"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs", effectiveProjectId] });
       void queryClient.invalidateQueries({ queryKey: ["app-operator-actions", effectiveProjectId] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-timeline", effectiveProjectId] });
     }
   });
 
@@ -832,6 +855,7 @@ export default function SynarchAppPage() {
                 void workQueueQuery.refetch();
                 void actionsQuery.refetch();
                 void globalActionsQuery.refetch();
+                void timelineQuery.refetch();
               }}
               title="Rafraîchir l'état système"
             >
@@ -1012,6 +1036,11 @@ export default function SynarchAppPage() {
                 onTaskReviewDecision={handleTaskReviewDecision}
               />
             </div>
+            <ProjectTimelinePanel
+              timeline={timelineQuery.data ?? null}
+              loading={timelineQuery.isLoading}
+              error={timelineQuery.error}
+            />
             <OperatorQueuePanel
               credentialRequests={visibleCredentialRequests}
               humanRequests={visibleHumanRequests}
@@ -1806,6 +1835,231 @@ function ActionPanel({
       ) : null}
     </div>
   );
+}
+
+function ProjectTimelinePanel({
+  timeline,
+  loading,
+  error
+}: {
+  timeline: ProjectTimeline | null;
+  loading: boolean;
+  error: unknown;
+}) {
+  if (loading) {
+    return (
+      <section className="border-t border-border px-4 py-4">
+        <PanelEmpty icon={<Workflow className="h-4 w-4" />} text="Chargement timeline..." />
+      </section>
+    );
+  }
+  if (error) {
+    return (
+      <section className="border-t border-border px-4 py-4">
+        <p className="rounded-md bg-risk-soft px-3 py-3 text-sm text-risk">
+          {error instanceof Error ? error.message : "Timeline projet indisponible."}
+        </p>
+      </section>
+    );
+  }
+  if (!timeline) {
+    return (
+      <section className="border-t border-border px-4 py-4">
+        <PanelEmpty icon={<Workflow className="h-4 w-4" />} text="Aucun projet suivi." />
+      </section>
+    );
+  }
+
+  const orderedTasks = [...timeline.tasks].sort((left, right) => left.sequence - right.sequence);
+  const latestEvents = [...timeline.events]
+    .sort((left, right) => right.timestamp.localeCompare(left.timestamp))
+    .slice(0, 6);
+  const latestMemoryItems = [...timeline.memory_items]
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .slice(0, 4);
+  const latestCosts = [...timeline.cost_records]
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .slice(0, 3);
+  const currency = timeline.currency || "USD";
+
+  return (
+    <section className="border-t border-border px-4 py-4">
+      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">Exécution projet</h3>
+          <p className="truncate text-xs text-muted">{timeline.project_id}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-md bg-accent-soft px-2 py-1 text-accent ring-1 ring-accent/15">
+            tâches: {timeline.tasks.length}
+          </span>
+          <span className="rounded-md bg-info-soft px-2 py-1 text-info ring-1 ring-info/15">
+            événements: {timeline.events.length}
+          </span>
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-muted ring-1 ring-border">
+            mémoire: {timeline.memory_items.length}
+          </span>
+          <span className="rounded-md bg-ok-soft px-2 py-1 text-ok ring-1 ring-ok/15">
+            coût: {formatCurrency(timeline.total_cost, currency)}
+          </span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <div className="min-w-0 rounded-md border border-border">
+          <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+            <h4 className="text-xs font-semibold uppercase text-muted">Tâches</h4>
+            <span className="text-xs text-muted">{orderedTasks.length}</span>
+          </div>
+          <div className="max-h-[420px] divide-y divide-border overflow-auto">
+            {orderedTasks.length === 0 ? (
+              <p className="px-3 py-3 text-sm text-muted">Aucune tâche.</p>
+            ) : (
+              orderedTasks.map((task) => (
+                <article key={task.id} className="px-3 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">
+                        {task.sequence}. {task.title}
+                      </p>
+                      <p className="truncate text-xs text-muted">
+                        {task.assigned_agent_id}
+                        {task.depends_on.length > 0 ? ` / dépend de ${task.depends_on.length}` : ""}
+                      </p>
+                    </div>
+                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(task.status)}`}>
+                      {task.status}
+                    </span>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-xs text-muted">{task.description}</p>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      essais {task.attempt_count}/{task.max_attempts}
+                    </span>
+                    {task.required_tools.slice(0, 3).map((tool) => (
+                      <span
+                        key={tool}
+                        className="rounded-md bg-warn-soft px-2 py-1 text-[11px] text-warn ring-1 ring-warn/15"
+                      >
+                        {tool}
+                      </span>
+                    ))}
+                    {task.acceptance_criteria[0] ? (
+                      <span className="truncate rounded-md bg-white px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                        {task.acceptance_criteria[0]}
+                      </span>
+                    ) : null}
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="grid min-w-0 gap-4">
+          <div className="min-w-0 rounded-md border border-border">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <h4 className="text-xs font-semibold uppercase text-muted">Journal</h4>
+              <span className="text-xs text-muted">audit {timeline.audit_logs.length}</span>
+            </div>
+            <div className="max-h-56 divide-y divide-border overflow-auto">
+              {latestEvents.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-muted">Aucun événement.</p>
+              ) : (
+                latestEvents.map((event) => (
+                  <article key={event.id} className="px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium">{event.type}</p>
+                      <span className="shrink-0 text-[11px] text-muted">
+                        {formatDate(event.timestamp)}
+                      </span>
+                    </div>
+                    <p className="truncate text-xs text-muted">
+                      {event.target ?? "sans cible"}
+                      {event.trace_id ? ` / ${event.trace_id}` : ""}
+                    </p>
+                    <p className="mt-1 line-clamp-1 text-[11px] text-muted">
+                      {payloadPreview(event.payload)}
+                    </p>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="min-w-0 rounded-md border border-border">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <h4 className="text-xs font-semibold uppercase text-muted">Mémoire</h4>
+              <span className="text-xs text-muted">{timeline.memory_items.length}</span>
+            </div>
+            <div className="divide-y divide-border">
+              {latestMemoryItems.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-muted">Aucune mémoire projet.</p>
+              ) : (
+                latestMemoryItems.map((item) => (
+                  <article key={item.id} className="px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium">{item.scope}</p>
+                      <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(item.status)}`}>
+                        {item.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted">{item.content}</p>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="min-w-0 rounded-md border border-border">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+              <h4 className="text-xs font-semibold uppercase text-muted">Coûts IA</h4>
+              <span className="text-xs text-muted">
+                {formatCurrency(timeline.total_cost, currency)}
+              </span>
+            </div>
+            <div className="divide-y divide-border">
+              {latestCosts.length === 0 ? (
+                <p className="px-3 py-3 text-sm text-muted">Aucun coût enregistré.</p>
+              ) : (
+                latestCosts.map((cost) => (
+                  <article key={cost.id} className="px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-sm font-medium">{cost.model_id}</p>
+                      <span className="shrink-0 text-xs font-semibold">
+                        {formatCurrency(cost.total_cost, cost.currency)}
+                      </span>
+                    </div>
+                    <p className="truncate text-xs text-muted">
+                      {cost.provider_id} / in {cost.input_tokens} / out {cost.output_tokens}
+                    </p>
+                  </article>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function payloadPreview(payload: Record<string, unknown>): string {
+  const entries = Object.entries(payload).slice(0, 3);
+  if (entries.length === 0) {
+    return "payload vide";
+  }
+  return entries
+    .map(([key, value]) => {
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        return `${key}: ${String(value)}`;
+      }
+      if (Array.isArray(value)) {
+        return `${key}: ${value.length} items`;
+      }
+      return `${key}: object`;
+    })
+    .join(" / ");
 }
 
 function CredentialRequestCard({
