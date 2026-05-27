@@ -27,6 +27,7 @@ import {
   decideTaskReview,
   decideCredentialAccessRequest,
   disableConnectorConnection,
+  resumeConnectorJob,
   getSystemReadiness,
   getProjectTimeline,
   listCredentialAccessRequests,
@@ -37,8 +38,12 @@ import {
   listWebProviders,
   reencryptSecretVault,
   resolveHumanAssistanceRequest,
+  runConnectorJobNow,
   runReadyTasks,
+  stopConnectorJob,
   submitGoal,
+  type ConnectorJobAction,
+  type ConnectorJobActionResult,
   type ConnectorConnectionMode,
   type ConnectorConnectionRecord,
   type CredentialAccessRequest,
@@ -53,6 +58,8 @@ import {
 } from "../../lib/gateway-api";
 import {
   createWorkQueueItem,
+  listConnectorJobRuns,
+  listConnectorJobs,
   listProjects,
   listServices,
   listWorkerHeartbeats,
@@ -60,6 +67,9 @@ import {
   listWorkQueueSummary,
   recoverExpiredWorkQueueLeases,
   reviewWorkQueueItem,
+  type ConnectorJobRecord,
+  type ConnectorJobRunRecord,
+  type ConnectorJobRunStatus,
   type ProjectRecord,
   type ServiceDefinition,
   type WorkerHeartbeatRecord,
@@ -79,6 +89,14 @@ const workQueueStatusOptions: WorkQueueStatus[] = [
   "dead_lettered",
   "completed"
 ];
+const connectorJobFilters = [
+  "attention",
+  "all",
+  "active",
+  "stopped",
+  "failed",
+  "blocked"
+] as const;
 const workQueueStatusRank: Record<WorkQueueStatus, number> = {
   failed: 0,
   dead_lettered: 1,
@@ -117,9 +135,14 @@ const connectorModeDetails: Record<
 };
 type WorkQueueAction = "project_reminder" | "log";
 type WorkQueueStatusFilter = WorkQueueStatus | "all";
+type ConnectorJobFilter = (typeof connectorJobFilters)[number];
 type WorkerHealthFilter = WorkerHeartbeatStatus | "all" | "problem" | "stale";
 type ReadinessFilter = SystemReadinessStatus | "all" | "attention";
 type GlobalActionFilter = OperatorAction["kind"] | "all";
+type ConnectorJobActionVariables = {
+  jobId: string;
+  action: ConnectorJobAction;
+};
 type TaskReviewMutationVariables = {
   taskId: string;
   decision: { action: "retry" | "cancel" | "update" };
@@ -422,6 +445,8 @@ export default function SynarchAppPage() {
   const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
   const [workQueueStatusFilter, setWorkQueueStatusFilter] =
     useState<WorkQueueStatusFilter>("all");
+  const [connectorJobFilter, setConnectorJobFilter] =
+    useState<ConnectorJobFilter>("attention");
   const [workerHealthFilter, setWorkerHealthFilter] = useState<WorkerHealthFilter>("all");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("attention");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
@@ -442,6 +467,16 @@ export default function SynarchAppPage() {
   const webProvidersQuery = useQuery({
     queryKey: ["app-web-providers"],
     queryFn: listWebProviders
+  });
+  const connectorJobsQuery = useQuery({
+    queryKey: ["app-connector-jobs"],
+    queryFn: listConnectorJobs,
+    refetchInterval: 15_000
+  });
+  const connectorJobRunsQuery = useQuery({
+    queryKey: ["app-connector-job-runs"],
+    queryFn: listConnectorJobRuns,
+    refetchInterval: 15_000
   });
   const readinessQuery = useQuery({
     queryKey: ["app-readiness"],
@@ -506,6 +541,10 @@ export default function SynarchAppPage() {
     visibleProjects[0] ??
     orderedProjects[0] ??
     null;
+  const projectsById = useMemo(
+    () => new Map(orderedProjects.map((project) => [project.id, project])),
+    [orderedProjects]
+  );
   const effectiveProjectId = selectedProject?.id ?? null;
   const briefsQuery = useQuery({
     queryKey: ["app-project-briefs", effectiveProjectId],
@@ -803,6 +842,30 @@ export default function SynarchAppPage() {
     }
   });
 
+  const connectorJobActionMutation = useMutation<
+    ConnectorJobActionResult,
+    Error,
+    ConnectorJobActionVariables
+  >({
+    mutationFn: ({ jobId, action }: ConnectorJobActionVariables) => {
+      if (action === "run") {
+        return runConnectorJobNow({ jobId });
+      }
+      if (action === "stop") {
+        return stopConnectorJob({ jobId });
+      }
+      return resumeConnectorJob({ jobId });
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["app-connector-jobs"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-connector-job-runs"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-operator-actions"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-timeline"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+    }
+  });
+
   const credentialDecisionMutation = useMutation({
     mutationFn: decideCredentialAccessRequest,
     onSuccess: invalidateOperatorState
@@ -887,6 +950,10 @@ export default function SynarchAppPage() {
 
   const handleWorkQueueRecovery = () => {
     recoverWorkQueueLeasesMutation.mutate();
+  };
+
+  const handleConnectorJobAction = (jobId: string, action: ConnectorJobAction) => {
+    connectorJobActionMutation.mutate({ jobId, action });
   };
 
   const handleCredentialDecision = (
@@ -1418,6 +1485,20 @@ export default function SynarchAppPage() {
               loading={webProvidersQuery.isLoading || servicesQuery.isLoading}
               selectedServiceId={selectedService?.id ?? null}
               onSelectProvider={handleWebProviderSelect}
+            />
+
+            <ConnectorJobsPanel
+              jobs={connectorJobsQuery.data ?? []}
+              runs={connectorJobRunsQuery.data ?? []}
+              servicesById={servicesById}
+              projectsById={projectsById}
+              loading={connectorJobsQuery.isLoading || connectorJobRunsQuery.isLoading}
+              filter={connectorJobFilter}
+              actionPending={connectorJobActionMutation.isPending}
+              actionVariables={connectorJobActionMutation.variables}
+              actionError={connectorJobActionMutation.error}
+              onFilterChange={setConnectorJobFilter}
+              onAction={handleConnectorJobAction}
             />
 
             <SystemReadinessPanel
@@ -2866,6 +2947,305 @@ function WebProviderPanel({
           })
         )}
       </div>
+    </section>
+  );
+}
+
+function connectorRunTimestamp(run: ConnectorJobRunRecord): string {
+  return run.completed_at || run.started_at;
+}
+
+function latestConnectorRunsByJobId(
+  runs: ConnectorJobRunRecord[]
+): Map<string, ConnectorJobRunRecord> {
+  const latest = new Map<string, ConnectorJobRunRecord>();
+  [...runs]
+    .sort((left, right) => connectorRunTimestamp(right).localeCompare(connectorRunTimestamp(left)))
+    .forEach((run) => {
+      if (!latest.has(run.job_id)) {
+        latest.set(run.job_id, run);
+      }
+    });
+  return latest;
+}
+
+function connectorJobHasProblem(run: ConnectorJobRunRecord | null): boolean {
+  return run?.status === "failed" || run?.status === "blocked";
+}
+
+function connectorJobMatchesFilter(
+  job: ConnectorJobRecord,
+  latestRun: ConnectorJobRunRecord | null,
+  filter: ConnectorJobFilter
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  if (filter === "attention") {
+    return connectorJobHasProblem(latestRun);
+  }
+  if (filter === "failed" || filter === "blocked") {
+    return latestRun?.status === filter;
+  }
+  return job.status === filter;
+}
+
+function compareConnectorJobs(
+  latestByJobId: Map<string, ConnectorJobRunRecord>,
+  left: ConnectorJobRecord,
+  right: ConnectorJobRecord
+): number {
+  const leftRun = latestByJobId.get(left.id) ?? null;
+  const rightRun = latestByJobId.get(right.id) ?? null;
+  const leftProblem = connectorJobHasProblem(leftRun);
+  const rightProblem = connectorJobHasProblem(rightRun);
+  if (leftProblem !== rightProblem) {
+    return leftProblem ? -1 : 1;
+  }
+  if (left.status !== right.status) {
+    return left.status === "active" ? -1 : 1;
+  }
+  const leftTimestamp = leftRun ? connectorRunTimestamp(leftRun) : left.updated_at;
+  const rightTimestamp = rightRun ? connectorRunTimestamp(rightRun) : right.updated_at;
+  return rightTimestamp.localeCompare(leftTimestamp);
+}
+
+function connectorJobRunTone(status: ConnectorJobRunStatus | null): string {
+  if (status === "failed" || status === "blocked") {
+    return statusClass("failed");
+  }
+  if (status === "completed") {
+    return statusClass("completed");
+  }
+  if (status === "skipped") {
+    return statusClass("queued");
+  }
+  return statusClass("draft");
+}
+
+function ConnectorJobsPanel({
+  jobs,
+  runs,
+  servicesById,
+  projectsById,
+  loading,
+  filter,
+  actionPending,
+  actionVariables,
+  actionError,
+  onFilterChange,
+  onAction
+}: {
+  jobs: ConnectorJobRecord[];
+  runs: ConnectorJobRunRecord[];
+  servicesById: Map<string, ServiceDefinition>;
+  projectsById: Map<string, ProjectRecord>;
+  loading: boolean;
+  filter: ConnectorJobFilter;
+  actionPending: boolean;
+  actionVariables?: ConnectorJobActionVariables;
+  actionError: unknown;
+  onFilterChange: (filter: ConnectorJobFilter) => void;
+  onAction: (jobId: string, action: ConnectorJobAction) => void;
+}) {
+  const latestByJobId = latestConnectorRunsByJobId(runs);
+  const counts = jobs.reduce<Record<ConnectorJobFilter, number>>(
+    (current, job) => {
+      const latestRun = latestByJobId.get(job.id) ?? null;
+      current[job.status] += 1;
+      if (latestRun?.status === "failed" || latestRun?.status === "blocked") {
+        current[latestRun.status] += 1;
+        current.attention += 1;
+      }
+      return current;
+    },
+    {
+      attention: 0,
+      all: jobs.length,
+      active: 0,
+      stopped: 0,
+      failed: 0,
+      blocked: 0
+    }
+  );
+  const visibleJobs = [...jobs]
+    .filter((job) => connectorJobMatchesFilter(job, latestByJobId.get(job.id) ?? null, filter))
+    .sort((left, right) => compareConnectorJobs(latestByJobId, left, right))
+    .slice(0, 8);
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Jobs connecteurs</h2>
+          <p className="text-xs text-muted">cron, webhooks, dernier run et contrôles explicites</p>
+        </div>
+        <PlugZap className="h-4 w-4 shrink-0 text-accent" />
+      </div>
+      <div className="border-b border-border px-4 py-3">
+        <div className="mb-3 flex flex-wrap gap-2">
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(counts.attention > 0 ? "failed" : "healthy")}`}>
+            incidents: {counts.attention}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(counts.active > 0 ? "active" : "healthy")}`}>
+            actifs: {counts.active}
+          </span>
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-muted ring-1 ring-border">
+            stoppés: {counts.stopped}
+          </span>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {connectorJobFilters.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`h-8 shrink-0 rounded-md border px-2 text-xs font-semibold ${
+                filter === item
+                  ? "border-accent bg-accent-soft text-accent"
+                  : "border-border bg-white text-muted hover:bg-slate-50"
+              }`}
+              onClick={() => onFilterChange(item)}
+            >
+              {item}: {counts[item]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="divide-y divide-border">
+        {loading ? (
+          <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+        ) : visibleJobs.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">
+            {filter === "attention" ? "Aucun job connecteur en incident." : "Aucun job pour ce filtre."}
+          </p>
+        ) : (
+          visibleJobs.map((job) => {
+            const service = servicesById.get(job.service_id) ?? null;
+            const project = job.project_id ? projectsById.get(job.project_id) ?? null : null;
+            const latestRun = latestByJobId.get(job.id) ?? null;
+            const runPending =
+              actionPending &&
+              actionVariables?.jobId === job.id &&
+              actionVariables.action === "run";
+            const stopPending =
+              actionPending &&
+              actionVariables?.jobId === job.id &&
+              actionVariables.action === "stop";
+            const resumePending =
+              actionPending &&
+              actionVariables?.jobId === job.id &&
+              actionVariables.action === "resume";
+            return (
+              <article key={job.id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{job.purpose}</p>
+                    <p className="truncate text-xs text-muted">
+                      {service?.name ?? job.service_id}
+                      {project ? ` / ${project.title}` : ""}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(job.status)}`}
+                  >
+                    {job.status}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    {job.kind}
+                  </span>
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    {job.schedule ?? job.webhook_path ?? "déclenchement manuel"}
+                  </span>
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    owner {job.owner_agent_id}
+                  </span>
+                  {latestRun ? (
+                    <span
+                      className={`rounded-md px-2 py-1 text-[11px] ring-1 ${connectorJobRunTone(latestRun.status)}`}
+                    >
+                      dernier run {latestRun.status}
+                    </span>
+                  ) : null}
+                </div>
+                {latestRun ? (
+                  <div className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-muted">
+                    <div className="flex items-center justify-between gap-2">
+                      <span>{formatDate(connectorRunTimestamp(latestRun))}</span>
+                      {latestRun.trace_id ? (
+                        <span className="truncate text-[11px]">{latestRun.trace_id}</span>
+                      ) : null}
+                    </div>
+                    {latestRun.error ? (
+                      <p className="mt-1 line-clamp-2 text-risk">{latestRun.error}</p>
+                    ) : (
+                      <p className="mt-1 line-clamp-2">{payloadPreview(latestRun.output)}</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-muted">
+                    Aucun run enregistré.
+                  </p>
+                )}
+                <details className="mt-2 rounded-md border border-border bg-white px-2 py-2 text-xs text-muted">
+                  <summary className="cursor-pointer font-semibold text-ink">
+                    Détails job
+                  </summary>
+                  <div className="mt-2 space-y-1">
+                    <p>id: {job.id}</p>
+                    <p>task: {job.task_id ?? "n/a"}</p>
+                    <p>créé: {formatDate(job.created_at)}</p>
+                    <p>mis à jour: {formatDate(job.updated_at)}</p>
+                    <p>prochain run: {formatDate(job.next_run_at)}</p>
+                    <p>stoppé: {formatDate(job.stopped_at)}</p>
+                    <p>metadata: {payloadPreview(job.metadata)}</p>
+                  </div>
+                </details>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  {job.status === "active" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-semibold text-ink hover:bg-slate-50 disabled:opacity-60"
+                        disabled={actionPending}
+                        onClick={() => onAction(job.id, "run")}
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        <span>{runPending ? "Exécution" : "Exécuter"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-risk/30 bg-white px-2 text-xs font-semibold text-risk hover:bg-risk-soft disabled:opacity-60"
+                        disabled={actionPending}
+                        onClick={() => onAction(job.id, "stop")}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>{stopPending ? "Stop" : "Arrêter"}</span>
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-semibold text-ink hover:bg-slate-50 disabled:opacity-60"
+                      disabled={actionPending}
+                      onClick={() => onAction(job.id, "resume")}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>{resumePending ? "Reprise" : "Reprendre"}</span>
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })
+        )}
+      </div>
+      {actionError ? (
+        <p className="border-t border-border px-4 py-3 text-xs text-risk">
+          {actionError instanceof Error ? actionError.message : "Action connecteur impossible."}
+        </p>
+      ) : null}
     </section>
   );
 }
