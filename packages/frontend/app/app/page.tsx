@@ -1229,6 +1229,14 @@ export default function SynarchAppPage() {
                 value={(connectionsQuery.data ?? []).filter((item) => item.status === "active").length}
               />
             </div>
+            <ProjectCockpitPanel
+              brief={selectedBrief}
+              timeline={timelineQuery.data ?? null}
+              actions={activeActions}
+              credentialRequests={visibleCredentialRequests}
+              humanRequests={visibleHumanRequests}
+              loading={briefsQuery.isLoading || timelineQuery.isLoading}
+            />
             <RunReadyResultPanel
               batch={
                 runProjectMutation.data?.project_id === effectiveProjectId
@@ -1942,6 +1950,167 @@ function GlobalActionCenterPanel({
           {humanError instanceof Error ? humanError.message : "Réponse humaine impossible."}
         </p>
       ) : null}
+    </section>
+  );
+}
+
+function latestProjectEvent(timeline: ProjectTimeline | null): ProjectTimeline["events"][number] | null {
+  if (!timeline || timeline.events.length === 0) {
+    return null;
+  }
+  return [...timeline.events].sort((left, right) => right.timestamp.localeCompare(left.timestamp))[0];
+}
+
+function latestProjectCost(
+  timeline: ProjectTimeline | null
+): ProjectTimeline["cost_records"][number] | null {
+  if (!timeline || timeline.cost_records.length === 0) {
+    return null;
+  }
+  return [...timeline.cost_records].sort((left, right) =>
+    costRecordedAt(right).localeCompare(costRecordedAt(left))
+  )[0];
+}
+
+function nextActionTone(kind?: string): string {
+  if (kind === "task_next" || kind === "project_planning") {
+    return "bg-accent-soft text-accent ring-accent/15";
+  }
+  if (kind === "human_assistance" || kind === "connector_job_review") {
+    return "bg-warn-soft text-warn ring-warn/15";
+  }
+  if (kind === "task_review") {
+    return "bg-risk-soft text-risk ring-risk/15";
+  }
+  return "bg-slate-100 text-muted ring-border";
+}
+
+function ProjectCockpitPanel({
+  brief,
+  timeline,
+  actions,
+  credentialRequests,
+  humanRequests,
+  loading
+}: {
+  brief: ProjectBrief | null;
+  timeline: ProjectTimeline | null;
+  actions: OperatorAction[];
+  credentialRequests: CredentialAccessRequest[];
+  humanRequests: HumanAssistanceRequest[];
+  loading: boolean;
+}) {
+  const latestEvent = latestProjectEvent(timeline);
+  const latestCost = latestProjectCost(timeline);
+  const openCredentialCount = credentialRequests.filter((request) =>
+    ["requested", "approved"].includes(request.status)
+  ).length;
+  const openHumanCount = humanRequests.filter((request) =>
+    ["requested", "answered"].includes(request.status)
+  ).length;
+  const blockerCount = actions.length + openCredentialCount + openHumanCount;
+  const readyTaskCount = brief?.next_tasks.length ?? 0;
+  const reminderCount = brief?.reminders.length ?? 0;
+  const nextAction = brief?.next_action ?? null;
+
+  return (
+    <section className="border-t border-border px-4 py-4">
+      <div className="rounded-md border border-border bg-white">
+        <div className="flex flex-col gap-2 border-b border-border px-3 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">Cockpit projet</h3>
+            <p className="truncate text-xs text-muted">
+              {loading
+                ? "Synchronisation..."
+                : nextAction
+                  ? nextAction.reason
+                  : "Aucune action priorisée."}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span
+              className={`rounded-md px-2 py-1 ring-1 ${
+                blockerCount > 0
+                  ? "bg-warn-soft text-warn ring-warn/15"
+                  : "bg-ok-soft text-ok ring-ok/15"
+              }`}
+            >
+              blocages: {blockerCount}
+            </span>
+            <span className="rounded-md bg-accent-soft px-2 py-1 text-accent ring-1 ring-accent/15">
+              prêt: {readyTaskCount}
+            </span>
+            <span className="rounded-md bg-slate-100 px-2 py-1 text-muted ring-1 ring-border">
+              rappels: {reminderCount}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid gap-0 lg:grid-cols-4">
+          <div className="border-b border-border px-3 py-3 lg:border-b-0 lg:border-r">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase text-muted">Prochaine action</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${nextActionTone(
+                  nextAction?.kind
+                )}`}
+              >
+                {nextAction?.kind ?? "n/a"}
+              </span>
+            </div>
+            <p className="mt-2 line-clamp-2 text-sm font-medium">
+              {nextAction?.title ?? "Aucune action"}
+            </p>
+            <p className="mt-1 truncate text-xs text-muted">{nextAction?.target_id ?? "sans cible"}</p>
+          </div>
+
+          <div className="border-b border-border px-3 py-3 lg:border-b-0 lg:border-r">
+            <p className="text-xs font-semibold uppercase text-muted">Blocages ouverts</p>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <span className="rounded-md bg-warn-soft px-2 py-1 text-[11px] text-warn ring-1 ring-warn/15">
+                actions {actions.length}
+              </span>
+              <span className="rounded-md bg-info-soft px-2 py-1 text-[11px] text-info ring-1 ring-info/15">
+                credentials {openCredentialCount}
+              </span>
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                humain {openHumanCount}
+              </span>
+            </div>
+            <p className="mt-2 line-clamp-2 text-xs text-muted">
+              {blockerCount > 0 ? "Action opérateur requise avant autonomie." : "Aucun blocage actif."}
+            </p>
+          </div>
+
+          <div className="border-b border-border px-3 py-3 lg:border-b-0 lg:border-r">
+            <p className="text-xs font-semibold uppercase text-muted">Dernière activité</p>
+            <p className="mt-2 truncate text-sm font-medium">{latestEvent?.type ?? "Aucun événement"}</p>
+            <p className="mt-1 truncate text-xs text-muted">
+              {latestEvent ? formatDate(latestEvent.timestamp) : "n/a"}
+            </p>
+            <p className="mt-1 line-clamp-1 text-[11px] text-muted">
+              {latestEvent ? payloadPreview(latestEvent.payload) : "timeline vide"}
+            </p>
+          </div>
+
+          <div className="px-3 py-3">
+            <p className="text-xs font-semibold uppercase text-muted">Dernier coût IA</p>
+            <p className="mt-2 truncate text-sm font-medium">
+              {latestCost
+                ? formatCurrency(latestCost.total_cost, latestCost.currency)
+                : formatCurrency(0, timeline?.currency ?? "USD")}
+            </p>
+            <p className="mt-1 truncate text-xs text-muted">
+              {latestCost ? latestCost.model_id : "aucun coût"}
+            </p>
+            <p className="mt-1 line-clamp-1 text-[11px] text-muted">
+              {latestCost
+                ? `in ${latestCost.input_tokens} / out ${latestCost.output_tokens}`
+                : "pas encore de run IA"}
+            </p>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -3108,6 +3277,27 @@ function WebProviderPanel({
                       sans clé
                     </span>
                   )}
+                  <span
+                    className={`rounded-md px-2 py-1 text-[11px] ring-1 ${
+                      provider.risk_level === "high"
+                        ? "bg-risk-soft text-risk ring-risk/15"
+                        : provider.risk_level === "medium"
+                          ? "bg-warn-soft text-warn ring-warn/15"
+                          : "bg-slate-100 text-muted ring-border"
+                    }`}
+                  >
+                    risque {provider.risk_level}
+                  </span>
+                  {provider.requires_human_approval ? (
+                    <span className="rounded-md bg-info-soft px-2 py-1 text-[11px] text-info ring-1 ring-info/15">
+                      validation humaine
+                    </span>
+                  ) : null}
+                  {provider.api_key_env_var ? (
+                    <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {provider.api_key_env_var}
+                    </span>
+                  ) : null}
                   {provider.configured_by.map((source) => (
                     <span
                       key={source}
