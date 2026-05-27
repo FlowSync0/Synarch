@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 
 from synarch_models import (
     ActorType,
@@ -3522,6 +3522,8 @@ def list_audit_logs(
     target_type: str | None = None,
     target_id: str | None = None,
     trace_id: str | None = None,
+    action_prefix: str | None = Query(default=None, max_length=120),
+    limit: int | None = Query(default=None, ge=1, le=500),
 ) -> list[AuditLogRecord]:
     audits = REPOSITORIES.audit_logs.list_records()
     if actor_id is not None:
@@ -3532,6 +3534,10 @@ def list_audit_logs(
         audits = [audit for audit in audits if audit.target_id == target_id]
     if trace_id is not None:
         audits = [audit for audit in audits if audit.trace_id == trace_id]
+    if action_prefix is not None:
+        audits = [audit for audit in audits if audit.action.startswith(action_prefix)]
+    if limit is not None:
+        audits = sorted(audits, key=lambda audit: audit.created_at, reverse=True)[:limit]
     return audits
 
 

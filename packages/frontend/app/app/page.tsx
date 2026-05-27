@@ -575,9 +575,14 @@ export default function SynarchAppPage() {
     queryKey: ["app-connector-connections"],
     queryFn: listConnectorConnections
   });
-  const auditLogsQuery = useQuery({
-    queryKey: ["app-audit-logs"],
-    queryFn: listAuditLogs,
+  const connectorAuditLogsQuery = useQuery({
+    queryKey: ["app-audit-logs", "connector"],
+    queryFn: () => listAuditLogs({ actionPrefix: "connector_connection.", limit: 150 }),
+    refetchInterval: 15_000
+  });
+  const workQueueAuditLogsQuery = useQuery({
+    queryKey: ["app-audit-logs", "work-queue"],
+    queryFn: () => listAuditLogs({ actionPrefix: "work_queue.", limit: 150 }),
     refetchInterval: 15_000
   });
   const webProvidersQuery = useQuery({
@@ -724,12 +729,12 @@ export default function SynarchAppPage() {
       ? lastConnectorConnection
       : selectedConnection;
   const selectedConnectorAuditLogs = connectorAuditLogsForSelection(
-    auditLogsQuery.data ?? [],
+    connectorAuditLogsQuery.data ?? [],
     selectedService,
     activeConnection
   );
   const selectedWorkQueueAuditLogs = workQueueAuditLogsForSelection(
-    auditLogsQuery.data ?? [],
+    workQueueAuditLogsQuery.data ?? [],
     workQueueName.trim() || "default",
     workQueueQuery.data ?? []
   );
@@ -1636,8 +1641,8 @@ export default function SynarchAppPage() {
                 ) : null}
                 <ConnectorAuditPanel
                   auditLogs={selectedConnectorAuditLogs}
-                  loading={auditLogsQuery.isLoading}
-                  error={auditLogsQuery.error}
+                  loading={connectorAuditLogsQuery.isLoading}
+                  error={connectorAuditLogsQuery.error}
                 />
                 {activeConnection && activeConnection.status !== "disabled" ? (
                   <button
@@ -1748,7 +1753,7 @@ export default function SynarchAppPage() {
               auditLogs={selectedWorkQueueAuditLogs}
               loading={workQueueQuery.isLoading}
               summaryLoading={workQueueSummaryQuery.isLoading}
-              auditLoading={auditLogsQuery.isLoading}
+              auditLoading={workQueueAuditLogsQuery.isLoading}
               queueName={workQueueName}
               statusFilter={workQueueStatusFilter}
               action={workQueueAction}
@@ -1763,7 +1768,7 @@ export default function SynarchAppPage() {
               error={createWorkQueueMutation.error}
               reviewError={reviewWorkQueueMutation.error}
               recoveryError={recoverWorkQueueLeasesMutation.error}
-              auditError={auditLogsQuery.error}
+              auditError={workQueueAuditLogsQuery.error}
               recoveryResult={workQueueRecoveryResult}
               onQueueNameChange={setWorkQueueName}
               onStatusFilterChange={setWorkQueueStatusFilter}

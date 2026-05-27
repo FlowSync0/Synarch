@@ -3058,6 +3058,47 @@ def test_state_change_with_actor_headers_writes_audit_log() -> None:
     assert audit["target_id"] == project["id"]
 
 
+def test_audit_logs_support_action_prefix_and_limit_filters() -> None:
+    client = TestClient(app)
+    trace_id = "trace_audit_filter"
+
+    for index, action in enumerate(
+        [
+            "connector_connection.created",
+            "work_queue.item_created",
+            "work_queue.reviewed",
+        ]
+    ):
+        response = client.post(
+            "/audit-logs",
+            json={
+                "id": f"audit-filter-{index}",
+                "actor_type": "user",
+                "actor_id": "local-user",
+                "action": action,
+                "target_type": "audit_filter",
+                "target_id": f"target-{index}",
+                "payload": {},
+                "trace_id": trace_id,
+                "created_at": f"2026-05-27T10:00:0{index}Z",
+            },
+        )
+        assert response.status_code == 201
+
+    audit_response = client.get(
+        "/audit-logs",
+        params={
+            "trace_id": trace_id,
+            "action_prefix": "work_queue.",
+            "limit": 1,
+        },
+    )
+
+    assert audit_response.status_code == 200
+    audits = audit_response.json()
+    assert [audit["action"] for audit in audits] == ["work_queue.reviewed"]
+
+
 def test_agent_soul_flow_records_identity_event_and_audit() -> None:
     client = TestClient(app)
     trace_id = "trace_agent_soul_created"

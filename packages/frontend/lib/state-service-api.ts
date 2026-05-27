@@ -190,6 +190,15 @@ export type AuditLogRecord = {
   created_at: string;
 };
 
+export type AuditLogFilters = {
+  actorId?: string | null;
+  targetType?: string | null;
+  targetId?: string | null;
+  traceId?: string | null;
+  actionPrefix?: string | null;
+  limit?: number | null;
+};
+
 export type AiProviderType = "local" | "openrouter" | "openai" | "anthropic" | "custom";
 
 export type ModelProviderConfig = {
@@ -269,8 +278,28 @@ export async function listEvents(): Promise<EventRecord[]> {
   return parseJsonResponse<EventRecord[]>(response);
 }
 
-export async function listAuditLogs(): Promise<AuditLogRecord[]> {
-  const response = await fetch("/api/state-service/audit-logs", {
+export async function listAuditLogs(filters: AuditLogFilters = {}): Promise<AuditLogRecord[]> {
+  const params = new URLSearchParams();
+  if (filters.actorId) {
+    params.set("actor_id", filters.actorId);
+  }
+  if (filters.targetType) {
+    params.set("target_type", filters.targetType);
+  }
+  if (filters.targetId) {
+    params.set("target_id", filters.targetId);
+  }
+  if (filters.traceId) {
+    params.set("trace_id", filters.traceId);
+  }
+  if (filters.actionPrefix) {
+    params.set("action_prefix", filters.actionPrefix);
+  }
+  if (filters.limit) {
+    params.set("limit", String(filters.limit));
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/state-service/audit-logs${query ? `?${query}` : ""}`, {
     cache: "no-store"
   });
   return parseJsonResponse<AuditLogRecord[]>(response);

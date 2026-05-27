@@ -137,6 +137,8 @@ state-service `/work-queue/summary`, so operators can select a queue from live c
 typing queue names from memory.
 The same panel reads state-service audit logs and shows recent `work_queue.*` evidence for the
 selected queue and visible durable items, including operator/worker actor IDs and trace IDs.
+It asks state-service for a bounded `work_queue.` audit stream instead of loading the full audit
+history, so the operator surface stays usable as the deployment accumulates records.
 
 Connector setup now goes through Gateway `POST /connectors/{service_id}/connections`. API keys are
 written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
@@ -170,6 +172,8 @@ store encrypted connector secrets, because the OAuth callback also writes the re
 vault.
 The same connector panel shows recent `connector_connection.*` audit logs for the selected service
 with trace IDs, fingerprints, and secret-reference/deletion flags, but not the secret values.
+It asks state-service for a bounded `connector_connection.` audit stream instead of loading
+unrelated audit records.
 
 Manual configuration that commonly matters before unattended use:
 

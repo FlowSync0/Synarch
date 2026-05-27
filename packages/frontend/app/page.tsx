@@ -1623,7 +1623,7 @@ export default function DashboardPage() {
   });
   const auditLogsQuery = useQuery({
     queryKey: ["audit-logs"],
-    queryFn: listAuditLogs,
+    queryFn: () => listAuditLogs(),
     refetchInterval: 15_000
   });
   const projectsQuery = useQuery({
