@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDot,
   ExternalLink,
+  Globe2,
   KeyRound,
   ListChecks,
   PlugZap,
@@ -32,6 +33,7 @@ import {
   listHumanAssistanceRequests,
   listOperatorActions,
   listProjectBriefs,
+  listWebProviders,
   reencryptSecretVault,
   resolveHumanAssistanceRequest,
   runReadyTasks,
@@ -44,7 +46,8 @@ import {
   type OperatorAction,
   type ProjectBrief,
   type SystemReadinessItem,
-  type SystemReadinessStatus
+  type SystemReadinessStatus,
+  type WebProviderStatus
 } from "../../lib/gateway-api";
 import {
   createWorkQueueItem,
@@ -205,6 +208,10 @@ export default function SynarchAppPage() {
   const connectionsQuery = useQuery({
     queryKey: ["app-connector-connections"],
     queryFn: listConnectorConnections
+  });
+  const webProvidersQuery = useQuery({
+    queryKey: ["app-web-providers"],
+    queryFn: listWebProviders
   });
   const readinessQuery = useQuery({
     queryKey: ["app-readiness"],
@@ -409,6 +416,7 @@ export default function SynarchAppPage() {
       setApiKey("");
       void queryClient.invalidateQueries({ queryKey: ["app-services"] });
       void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-web-providers"] });
       void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
     }
   });
@@ -429,6 +437,7 @@ export default function SynarchAppPage() {
       setLastConnectorConnection(result.connection);
       void queryClient.invalidateQueries({ queryKey: ["app-services"] });
       void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-web-providers"] });
       void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
     }
   });
@@ -534,6 +543,19 @@ export default function SynarchAppPage() {
       return;
     }
     connectMutation.mutate();
+  };
+
+  const handleWebProviderSelect = (provider: WebProviderStatus) => {
+    const service = connectorServices.find(
+      (candidate) => metadataString(candidate, "web_provider") === provider.provider_id
+    );
+    if (!service) {
+      return;
+    }
+    setSelectedServiceId(service.id);
+    setConnectorMode(connectorModesForService(service)[0] ?? "no_key");
+    setLastConnectorConnection(null);
+    setApiKey("");
   };
 
   const handleWorkQueueSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -949,6 +971,15 @@ export default function SynarchAppPage() {
                 ) : null}
               </form>
             </section>
+
+            <WebProviderPanel
+              providers={webProvidersQuery.data ?? []}
+              services={connectorServices}
+              connections={connectionsQuery.data ?? []}
+              loading={webProvidersQuery.isLoading || servicesQuery.isLoading}
+              selectedServiceId={selectedService?.id ?? null}
+              onSelectProvider={handleWebProviderSelect}
+            />
 
             <section className="rounded-md border border-border bg-panel shadow-soft">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
@@ -1455,6 +1486,130 @@ function OperatorQueuePanel({
           {humanError instanceof Error ? humanError.message : "Réponse humaine impossible."}
         </p>
       ) : null}
+    </section>
+  );
+}
+
+function WebProviderPanel({
+  providers,
+  services,
+  connections,
+  loading,
+  selectedServiceId,
+  onSelectProvider
+}: {
+  providers: WebProviderStatus[];
+  services: ServiceDefinition[];
+  connections: ConnectorConnectionRecord[];
+  loading: boolean;
+  selectedServiceId: string | null;
+  onSelectProvider: (provider: WebProviderStatus) => void;
+}) {
+  const connectionsByService = connectionByService(connections);
+  const orderedProviders = [...providers].sort((left, right) => {
+    if (left.implemented !== right.implemented) {
+      return left.implemented ? -1 : 1;
+    }
+    if (left.configured !== right.configured) {
+      return left.configured ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
+  });
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">Web providers</h2>
+        <Globe2 className="h-4 w-4 text-accent" />
+      </div>
+      <div className="divide-y divide-border">
+        {loading ? (
+          <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+        ) : orderedProviders.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">Aucun provider.</p>
+        ) : (
+          orderedProviders.map((provider) => {
+            const service =
+              services.find(
+                (candidate) => metadataString(candidate, "web_provider") === provider.provider_id
+              ) ?? null;
+            const connection = service ? connectionsByService.get(service.id) : null;
+            const selected = service?.id === selectedServiceId;
+            const selectable = Boolean(service && provider.implemented);
+            return (
+              <article key={provider.provider_id} className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{provider.name}</p>
+                    <p className="truncate text-xs text-muted">
+                      {provider.category}
+                      {service ? ` / ${service.id}` : ""}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${
+                      provider.configured
+                        ? statusClass("completed")
+                        : provider.implemented
+                          ? statusClass("queued")
+                          : statusClass("draft")
+                    }`}
+                  >
+                    {provider.configured
+                      ? "configuré"
+                      : provider.implemented
+                        ? "disponible"
+                        : "prévu"}
+                  </span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {provider.requires_api_key ? (
+                    <span className="rounded-md bg-warn-soft px-2 py-1 text-[11px] text-warn ring-1 ring-warn/15">
+                      clé API
+                    </span>
+                  ) : (
+                    <span className="rounded-md bg-ok-soft px-2 py-1 text-[11px] text-ok ring-1 ring-ok/15">
+                      sans clé
+                    </span>
+                  )}
+                  {provider.configured_by.map((source) => (
+                    <span
+                      key={source}
+                      className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border"
+                    >
+                      {source}
+                    </span>
+                  ))}
+                  {connection ? (
+                    <span className={`rounded-md px-2 py-1 text-[11px] ring-1 ${statusClass(connection.status)}`}>
+                      {connection.status}
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs text-muted">{provider.notes}</p>
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0 truncate text-[11px] text-muted">
+                    {provider.capabilities.slice(0, 4).join(" / ")}
+                  </div>
+                  <button
+                    type="button"
+                    className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-semibold disabled:opacity-50 ${
+                      selected
+                        ? "border-accent bg-accent-soft text-accent"
+                        : "border-border bg-white text-ink hover:bg-slate-50"
+                    }`}
+                    disabled={!selectable}
+                    onClick={() => onSelectProvider(provider)}
+                  >
+                    <PlugZap className="h-3.5 w-3.5" />
+                    <span>{selected ? "Sélectionné" : "Configurer"}</span>
+                  </button>
+                </div>
+              </article>
+            );
+          })
+        )}
+      </div>
     </section>
   );
 }

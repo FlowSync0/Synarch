@@ -504,7 +504,7 @@ class WebProviderManifest:
         module_configured = (
             True if self.python_module is None else module_is_available(self.python_module)
         )
-        configured = key_configured and module_configured
+        configured = self.implemented and key_configured and module_configured
         return {
             "provider_id": self.provider_id,
             "name": self.name,
@@ -531,7 +531,7 @@ def web_provider_response(
         if manifest.requires_api_key
         else False
     )
-    if manifest.requires_api_key and connector_configured:
+    if manifest.implemented and manifest.requires_api_key and connector_configured:
         response["configured"] = True
     response["configured_by"] = web_provider_configured_by(
         manifest,
@@ -547,6 +547,8 @@ def web_provider_configured_by(
     env_configured: bool,
     connector_configured: bool,
 ) -> list[str]:
+    if not manifest.implemented:
+        return []
     configured_by: list[str] = []
     if not manifest.requires_api_key:
         configured_by.append("no_key")
@@ -1305,9 +1307,11 @@ def call_tool(
 
 
 @app.get("/web/providers")
-def list_web_providers() -> list[dict[str, object]]:
+def list_web_providers(
+    state_client: StateClient = Depends(get_state_client),
+) -> list[dict[str, object]]:
     return [
-        web_provider_response(manifest, None)
+        web_provider_response(manifest, state_client)
         for manifest in sorted(WEB_PROVIDER_MANIFESTS.values(), key=lambda item: item.provider_id)
     ]
 

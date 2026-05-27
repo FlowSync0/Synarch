@@ -404,6 +404,22 @@ export type ConnectorConnectionResult = {
   audit_log?: unknown | null;
 };
 
+export type WebProviderStatus = {
+  provider_id: string;
+  name: string;
+  category: string;
+  implemented: boolean;
+  requires_api_key: boolean;
+  api_key_env_var?: string | null;
+  python_module?: string | null;
+  configured: boolean;
+  configured_by: string[];
+  capabilities: string[];
+  risk_level: "low" | "medium" | "high";
+  requires_human_approval: boolean;
+  notes: string;
+};
+
 export type ConnectorConnectionDisableRequest = {
   rationale: string;
 };
@@ -759,6 +775,13 @@ export async function listConnectorConnections(): Promise<ConnectorConnectionRec
     cache: "no-store"
   });
   return parseJsonResponse<ConnectorConnectionRecord[]>(response);
+}
+
+export async function listWebProviders(): Promise<WebProviderStatus[]> {
+  const response = await fetch("/api/gateway/web/providers", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<WebProviderStatus[]>(response);
 }
 
 export async function connectConnectorService({

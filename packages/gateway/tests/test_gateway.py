@@ -3733,10 +3733,15 @@ def test_tool_gate_executes_web_fetch_adapter() -> None:
 def test_web_provider_registry_reports_configured_key_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    state_client = FakeStateClient()
+    app.dependency_overrides[get_state_client] = lambda: state_client
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     monkeypatch.delenv("BROWSERLESS_API_KEY", raising=False)
     monkeypatch.setattr(gateway_main, "module_is_available", lambda module_name: False)
-    response = TestClient(app).get("/web/providers")
+    try:
+        response = TestClient(app).get("/web/providers")
+    finally:
+        app.dependency_overrides.clear()
 
     assert response.status_code == 200
     providers = {provider["provider_id"]: provider for provider in response.json()}
@@ -3757,6 +3762,51 @@ def test_web_provider_registry_reports_configured_key_status(
     assert providers["browserless"]["configured"] is False
     assert providers["brightdata_web_unlocker"]["requires_api_key"] is True
     assert providers["brightdata_web_unlocker"]["risk_level"] == "high"
+    assert providers["crawl4ai"]["implemented"] is False
+    assert providers["crawl4ai"]["configured"] is False
+    assert providers["crawl4ai"]["configured_by"] == []
+
+
+def test_web_provider_registry_reports_connector_secret_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            metadata={"web_provider": "firecrawl", "requires_api_key": True},
+        )
+    )
+    state_client.connector_connections.append(
+        ConnectorConnectionRecord(
+            service_id="connector-firecrawl",
+            mode="api_key",
+            status="active",
+            credential_scopes=["firecrawl:api_key"],
+            secret_ref="local-file://connectors/connector-firecrawl/fp_test",
+            secret_fingerprint="fp_test",
+            connected_by_type=ActorType.user,
+            connected_by_id="local-user",
+            rationale="Connect Firecrawl.",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.setattr(gateway_main, "module_is_available", lambda module_name: False)
+    try:
+        response = TestClient(app).get("/web/providers")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    providers = {provider["provider_id"]: provider for provider in response.json()}
+    assert providers["firecrawl"]["configured"] is True
+    assert "connector_secret" in providers["firecrawl"]["configured_by"]
+    assert "env" not in providers["firecrawl"]["configured_by"]
 
 
 def test_tool_gate_executes_web_extract_local_provider(
