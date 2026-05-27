@@ -225,9 +225,9 @@ make work-queue-tick SYNARCH_WORK_QUEUE_NAME=reminders
 `docker compose --profile worker up -d work-queue-worker`. The first supported payload actions are
 `noop` and `log`; unknown actions are failed through the durable queue path and dead-lettered instead
 of being executed speculatively.
-Each tick records a durable `worker_heartbeats` row and a `worker.heartbeat` audit log when
-state-service is reachable. Heartbeats include worker kind, queue target, status, heartbeat count,
-last tick summary, last error, and last seen timestamp.
+Each local or Docker worker tick records a durable `worker_heartbeats` row and a
+`worker.heartbeat` audit log when state-service is reachable. Heartbeats include worker kind,
+target, status, heartbeat count, last tick summary, last error, and last seen timestamp.
 The `/app` workspace includes a work-queue panel that reads these same records through the Next
 state-service proxy, displays per-status counts, and can enqueue safe `log` items for operator
 smoke checks. The same panel can retry dead-lettered/failed items and dead-letter queued/running
@@ -248,7 +248,7 @@ make connector-job-worker
 This worker is not started by default. Each tick calls Gateway `/connector-jobs/run-ready` with an
 explicit `max_jobs` limit. Gateway only selects connector jobs whose `next_run_at` is empty or due.
 The worker writes structured JSON stdout with run counts, completed/failed/blocked/skipped counts,
-timestamps, duration, and transient errors.
+timestamps, duration, transient errors, and worker heartbeat output.
 
 Connector jobs can stop themselves without a separate manual request when a recorded run outputs
 `stop_condition_met: true` or `stop_job: true`. A job can also declare `metadata.max_runs` to stop a
@@ -299,6 +299,8 @@ Omit `SYNARCH_MEMORY_COMPACTION_SCOPE` to let the worker call Gateway
 `/memory-items/compaction-plan` first, then execute `compact-if-needed` for each planned scope.
 Gateway fills the plan request with active project workspace scopes from state-service. Use
 `SYNARCH_MEMORY_COMPACTION_PROJECT_ID` to constrain that discovery to one project.
+Each compaction tick records a `memory_compaction` worker heartbeat using the scope, project,
+agent, or `all` as the target.
 
 Run the active/inactive workspace scope check with:
 
@@ -344,6 +346,9 @@ For a local loop, use `make memory-embedding-backfill-loop`. For the Docker work
 ```bash
 SYNARCH_MEMORY_EMBEDDING_PROJECT_ID=project_demo make memory-embedding-backfill-worker
 ```
+
+Each embedding backfill tick records a `memory_embedding` worker heartbeat using the scope,
+project, agent, or memory status as the target.
 
 Run the live OpenRouter backfill check with:
 

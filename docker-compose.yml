@@ -85,12 +85,14 @@ services:
     command: python -m synarch_gateway.scheduler_worker --loop
     environment:
       GATEWAY_URL: http://gateway:8000
+      STATE_SERVICE_URL: http://state-service:8020
       SYNARCH_SCHEDULER_WORKER_ID: ${SYNARCH_SCHEDULER_WORKER_ID:-scheduler-worker-1}
       SYNARCH_SCHEDULER_MAX_TASKS: ${SYNARCH_SCHEDULER_MAX_TASKS:-3}
       SYNARCH_SCHEDULER_INTERVAL_SECONDS: ${SYNARCH_SCHEDULER_INTERVAL_SECONDS:-30}
       SYNARCH_SCHEDULER_TIMEOUT_SECONDS: ${SYNARCH_SCHEDULER_TIMEOUT_SECONDS:-180}
     depends_on:
       - gateway
+      - state-service
 
   connector-job-worker:
     profiles: ["worker"]
@@ -102,6 +104,7 @@ services:
     command: python -m synarch_gateway.connector_job_worker --loop
     environment:
       GATEWAY_URL: http://gateway:8000
+      STATE_SERVICE_URL: http://state-service:8020
       SYNARCH_CONNECTOR_JOB_WORKER_ID: ${SYNARCH_CONNECTOR_JOB_WORKER_ID:-connector-job-worker-1}
       SYNARCH_CONNECTOR_JOB_MAX_JOBS: ${SYNARCH_CONNECTOR_JOB_MAX_JOBS:-3}
       SYNARCH_CONNECTOR_JOB_KIND: ${SYNARCH_CONNECTOR_JOB_KIND:-cron}
@@ -112,6 +115,7 @@ services:
       SYNARCH_CONNECTOR_JOB_OWNER_AGENT_ID: ${SYNARCH_CONNECTOR_JOB_OWNER_AGENT_ID:-}
     depends_on:
       - gateway
+      - state-service
 
   memory-compaction-worker:
     profiles: ["worker"]
@@ -123,6 +127,7 @@ services:
     command: python -m synarch_gateway.memory_compaction_worker --loop
     environment:
       GATEWAY_URL: http://gateway:8000
+      STATE_SERVICE_URL: http://state-service:8020
       SYNARCH_MEMORY_COMPACTION_WORKER_ID: ${SYNARCH_MEMORY_COMPACTION_WORKER_ID:-memory-compaction-worker-1}
       SYNARCH_MEMORY_COMPACTION_SCOPE: ${SYNARCH_MEMORY_COMPACTION_SCOPE:-}
       SYNARCH_MEMORY_COMPACTION_PROJECT_ID: ${SYNARCH_MEMORY_COMPACTION_PROJECT_ID:-}
@@ -135,6 +140,7 @@ services:
       SYNARCH_MEMORY_COMPACTION_TIMEOUT_SECONDS: ${SYNARCH_MEMORY_COMPACTION_TIMEOUT_SECONDS:-60}
     depends_on:
       - gateway
+      - state-service
 
   memory-embedding-worker:
     profiles: ["worker"]
@@ -146,6 +152,7 @@ services:
     command: python -m synarch_gateway.memory_embedding_worker --loop
     environment:
       GATEWAY_URL: http://gateway:8000
+      STATE_SERVICE_URL: http://state-service:8020
       SYNARCH_MEMORY_EMBEDDING_WORKER_ID: ${SYNARCH_MEMORY_EMBEDDING_WORKER_ID:-memory-embedding-worker-1}
       SYNARCH_MEMORY_EMBEDDING_PROJECT_ID: ${SYNARCH_MEMORY_EMBEDDING_PROJECT_ID:-}
       SYNARCH_MEMORY_EMBEDDING_AGENT_ID: ${SYNARCH_MEMORY_EMBEDDING_AGENT_ID:-}
@@ -156,6 +163,7 @@ services:
       SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS: ${SYNARCH_MEMORY_EMBEDDING_TIMEOUT_SECONDS:-60}
     depends_on:
       - gateway
+      - state-service
 
   work-queue-worker:
     profiles: ["worker"]

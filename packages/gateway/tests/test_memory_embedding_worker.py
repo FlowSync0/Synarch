@@ -1,6 +1,7 @@
 import argparse
 import json
 from io import BytesIO
+from typing import cast
 from urllib.request import Request
 
 import pytest
@@ -112,6 +113,7 @@ def test_run_loop_continues_after_transient_error(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls = 0
+    recorded_heartbeats: list[dict[str, object]] = []
 
     def fake_tick(**kwargs: object) -> dict[str, object]:
         nonlocal calls
@@ -136,10 +138,23 @@ def test_run_loop_continues_after_transient_error(
             "result": {"backfilled_count": 1},
         }
 
+    def fake_heartbeat(**kwargs: object) -> dict[str, object]:
+        recorded_heartbeats.append(kwargs)
+        return {
+            "id": kwargs["worker_id"],
+            "status": kwargs["status"],
+            "heartbeat_count": len(recorded_heartbeats),
+        }
+
     monkeypatch.setattr(
         memory_embedding_worker,
         "run_memory_embedding_backfill_tick",
         fake_tick,
+    )
+    monkeypatch.setattr(
+        memory_embedding_worker,
+        "record_worker_heartbeat",
+        fake_heartbeat,
     )
     monkeypatch.setattr(
         "synarch_gateway.memory_embedding_worker.time.sleep",
@@ -166,5 +181,15 @@ def test_run_loop_continues_after_transient_error(
     lines = [json.loads(line) for line in BytesIO(capsys.readouterr().out.encode())]
     assert lines[0]["memory_embedding_backfill"]["status"] == "failed"
     assert lines[0]["error"]["type"] == "TimeoutError"
+    assert lines[0]["worker_heartbeat"]["status"] == "failed"
     assert lines[1]["memory_embedding_backfill"]["status"] == "completed"
     assert lines[1]["memory_embedding_backfill"]["tick"] == 2
+    assert lines[1]["worker_heartbeat"]["status"] == "completed"
+    assert [heartbeat["status"] for heartbeat in recorded_heartbeats] == [
+        "failed",
+        "completed",
+    ]
+    assert recorded_heartbeats[1]["worker_kind"] == "memory_embedding"
+    assert recorded_heartbeats[1]["target"] == "approved"
+    last_tick_result = cast(dict[str, object], recorded_heartbeats[1]["last_tick_result"])
+    assert last_tick_result["backfilled_count"] == 1

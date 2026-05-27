@@ -9,6 +9,8 @@ from typing import Any
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
+from synarch_gateway.worker_heartbeat import DEFAULT_STATE_SERVICE_URL, record_worker_heartbeat
+
 DEFAULT_GATEWAY_URL = "http://localhost:8000"
 DEFAULT_INTERVAL_SECONDS = 300.0
 DEFAULT_MAX_ITEMS = 10
@@ -134,6 +136,10 @@ def parser() -> argparse.ArgumentParser:
         default=os.getenv("GATEWAY_URL", DEFAULT_GATEWAY_URL),
     )
     argument_parser.add_argument(
+        "--state-service-url",
+        default=os.getenv("STATE_SERVICE_URL", DEFAULT_STATE_SERVICE_URL),
+    )
+    argument_parser.add_argument(
         "--worker-id",
         default=os.getenv("SYNARCH_MEMORY_EMBEDDING_WORKER_ID", DEFAULT_WORKER_ID),
     )
@@ -244,6 +250,25 @@ def run_loop(args: argparse.Namespace) -> None:
         result["memory_embedding_backfill"]["duration_seconds"] = (
             finished_at - started_at
         ).total_seconds()
+        try:
+            result["worker_heartbeat"] = record_worker_heartbeat(
+                state_service_url=getattr(args, "state_service_url", DEFAULT_STATE_SERVICE_URL),
+                worker_id=args.worker_id,
+                worker_kind="memory_embedding",
+                status=result["memory_embedding_backfill"]["status"],
+                target=args.scope or args.project_id or args.agent_id or args.status,
+                last_tick_result=result["memory_embedding_backfill"],
+                last_error=result.get("error", {}).get("message")
+                if isinstance(result.get("error"), dict)
+                else None,
+                trace_id=trace_id,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except Exception as heartbeat_error:
+            result["worker_heartbeat_error"] = {
+                "type": type(heartbeat_error).__name__,
+                "message": str(heartbeat_error),
+            }
         print(json.dumps(result, separators=(",", ":")), flush=True)
         if not args.loop or (args.max_ticks is not None and tick_count >= args.max_ticks):
             return

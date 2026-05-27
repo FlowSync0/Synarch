@@ -73,37 +73,37 @@ test-live-memory-graph:
 	scripts/live_memory_bridge_scope_e2e.sh
 
 scheduler-tick:
-	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)"
+	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)"
 
 scheduler-loop:
-	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)" --loop --interval-seconds "$(SYNARCH_SCHEDULER_INTERVAL_SECONDS)"
+	$(PYTHON) scripts/scheduler_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --max-tasks "$(SYNARCH_SCHEDULER_MAX_TASKS)" --loop --interval-seconds "$(SYNARCH_SCHEDULER_INTERVAL_SECONDS)"
 
 scheduler-worker:
 	docker compose up --build scheduler-worker
 
 connector-job-tick:
-	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)"
+	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)"
 
 connector-job-loop:
-	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)" --loop --interval-seconds "$(SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS)"
+	$(PYTHON) scripts/connector_job_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --max-jobs "$(SYNARCH_CONNECTOR_JOB_MAX_JOBS)" --loop --interval-seconds "$(SYNARCH_CONNECTOR_JOB_INTERVAL_SECONDS)"
 
 connector-job-worker:
 	docker compose up --build connector-job-worker
 
 memory-compaction-tick:
-	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)"
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)"
 
 memory-compaction-loop:
-	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)" --loop --interval-seconds "$(SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS)"
+	$(PYTHON) scripts/memory_compaction_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --scope "$(SYNARCH_MEMORY_COMPACTION_SCOPE)" --project-id "$(SYNARCH_MEMORY_COMPACTION_PROJECT_ID)" --min-source-tokens "$(SYNARCH_MEMORY_COMPACTION_MIN_SOURCE_TOKENS)" --max-scopes "$(SYNARCH_MEMORY_COMPACTION_MAX_SCOPES)" --loop --interval-seconds "$(SYNARCH_MEMORY_COMPACTION_INTERVAL_SECONDS)"
 
 memory-compaction-worker:
 	docker compose up --build memory-compaction-worker
 
 memory-embedding-backfill-tick:
-	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)"
+	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)"
 
 memory-embedding-backfill-loop:
-	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)" --loop --interval-seconds "$(SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS)"
+	$(PYTHON) scripts/memory_embedding_backfill_tick.py --gateway-url "$(GATEWAY_URL)" --state-service-url "$(STATE_SERVICE_URL)" --project-id "$(SYNARCH_MEMORY_EMBEDDING_PROJECT_ID)" --agent-id "$(SYNARCH_MEMORY_EMBEDDING_AGENT_ID)" --scope "$(SYNARCH_MEMORY_EMBEDDING_SCOPE)" --max-items "$(SYNARCH_MEMORY_EMBEDDING_MAX_ITEMS)" --loop --interval-seconds "$(SYNARCH_MEMORY_EMBEDDING_INTERVAL_SECONDS)"
 
 memory-embedding-backfill-worker:
 	docker compose up --build memory-embedding-worker
