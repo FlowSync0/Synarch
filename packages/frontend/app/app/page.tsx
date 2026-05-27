@@ -113,6 +113,28 @@ function metadataString(service: ServiceDefinition | null, key: string): string 
   return typeof value === "string" ? value : null;
 }
 
+function hasConnectorAuthorizationLink(service: ServiceDefinition): boolean {
+  return (
+    metadataString(service, "oauth_authorization_url") !== null ||
+    metadataString(service, "connect_url") !== null ||
+    metadataString(service, "manual_connection_url") !== null
+  );
+}
+
+function connectorModesForService(service: ServiceDefinition): ConnectorConnectionMode[] {
+  const modes: ConnectorConnectionMode[] = [];
+  if (metadataBoolean(service, "requires_api_key") || service.credential_scopes.length > 0) {
+    modes.push("api_key");
+  }
+  if (!metadataBoolean(service, "requires_api_key")) {
+    modes.push("no_key");
+  }
+  if (hasConnectorAuthorizationLink(service)) {
+    modes.push("oauth");
+  }
+  return modes.length > 0 ? modes : ["no_key"];
+}
+
 function selectedScopeSet(scopes: string[]): Set<string> {
   return new Set(scopes.filter(Boolean));
 }
@@ -124,6 +146,8 @@ export default function SynarchAppPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [connectorMode, setConnectorMode] = useState<ConnectorConnectionMode>("api_key");
+  const [lastConnectorConnection, setLastConnectorConnection] =
+    useState<ConnectorConnectionRecord | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [workQueueName, setWorkQueueName] = useState("default");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
@@ -195,6 +219,16 @@ export default function SynarchAppPage() {
   const selectedConnection = selectedService
     ? connectionsByService.get(selectedService.id) ?? null
     : null;
+  const activeConnection =
+    selectedService && lastConnectorConnection?.service_id === selectedService.id
+      ? lastConnectorConnection
+      : selectedConnection;
+  const availableConnectorModes = selectedService
+    ? connectorModesForService(selectedService)
+    : connectorModes;
+  const effectiveConnectorMode = availableConnectorModes.includes(connectorMode)
+    ? connectorMode
+    : (availableConnectorModes[0] ?? "no_key");
   const selectedBrief = briefsQuery.data?.[0] ?? null;
   const servicesById = useMemo(
     () => new Map((servicesQuery.data ?? []).map((service) => [service.id, service])),
@@ -260,15 +294,16 @@ export default function SynarchAppPage() {
       return connectConnectorService({
         serviceId: selectedService.id,
         request: {
-          mode: connectorMode,
-          api_key: connectorMode === "api_key" ? apiKey : undefined,
+          mode: effectiveConnectorMode,
+          api_key: effectiveConnectorMode === "api_key" ? apiKey : undefined,
           credential_scopes: selectedScopes,
           project_id: effectiveProjectId,
           rationale: "Connector configured from Synarch app."
         }
       });
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      setLastConnectorConnection(result.connection);
       setApiKey("");
       void queryClient.invalidateQueries({ queryKey: ["app-services"] });
       void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
@@ -341,7 +376,7 @@ export default function SynarchAppPage() {
 
   const handleConnectSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (connectorMode === "api_key" && apiKey.trim().length === 0) {
+    if (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0) {
       return;
     }
     connectMutation.mutate();
@@ -565,7 +600,14 @@ export default function SynarchAppPage() {
                   className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
                   value={selectedService?.id ?? ""}
                   onChange={(event) => {
-                    setSelectedServiceId(event.target.value);
+                    const nextServiceId = event.target.value;
+                    const nextService =
+                      connectorServices.find((service) => service.id === nextServiceId) ?? null;
+                    setSelectedServiceId(nextServiceId);
+                    setConnectorMode(
+                      nextService ? connectorModesForService(nextService)[0] ?? "no_key" : "no_key"
+                    );
+                    setLastConnectorConnection(null);
                     setApiKey("");
                   }}
                 >
@@ -595,16 +637,34 @@ export default function SynarchAppPage() {
                         </span>
                       ))}
                     </div>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      {availableConnectorModes.map((mode) => (
+                        <span
+                          key={mode}
+                          className="rounded-md bg-accent-soft px-2 py-1 text-[11px] text-accent ring-1 ring-accent/15"
+                        >
+                          {mode}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
 
-                <div className="grid grid-cols-3 gap-2">
-                  {connectorModes.map((mode) => (
+                <div
+                  className={`grid gap-2 ${
+                    availableConnectorModes.length === 1
+                      ? "grid-cols-1"
+                      : availableConnectorModes.length === 2
+                        ? "grid-cols-2"
+                        : "grid-cols-3"
+                  }`}
+                >
+                  {availableConnectorModes.map((mode) => (
                     <button
                       key={mode}
                       type="button"
                       className={`rounded-md border px-2 py-2 text-xs font-semibold ${
-                        connectorMode === mode
+                        effectiveConnectorMode === mode
                           ? "border-accent bg-accent-soft text-accent"
                           : "border-border bg-white text-muted"
                       }`}
@@ -615,7 +675,7 @@ export default function SynarchAppPage() {
                   ))}
                 </div>
 
-                {connectorMode === "api_key" ? (
+                {effectiveConnectorMode === "api_key" ? (
                   <input
                     className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
                     type="password"
@@ -666,15 +726,15 @@ export default function SynarchAppPage() {
                   disabled={
                     !selectedService ||
                     connectMutation.isPending ||
-                    (connectorMode === "api_key" && apiKey.trim().length === 0)
+                    (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0)
                   }
                 >
                   <KeyRound className="h-4 w-4" />
                   <span>{connectMutation.isPending ? "Connexion" : "Connecter"}</span>
                 </button>
 
-                {selectedConnection ? (
-                  <ConnectionStatus connection={selectedConnection} service={selectedService} />
+                {activeConnection ? (
+                  <ConnectionStatus connection={activeConnection} service={selectedService} />
                 ) : null}
                 {connectMutation.isError ? (
                   <p className="text-xs text-risk">
@@ -1412,9 +1472,11 @@ function ConnectionStatus({
         <span>{connection.mode}</span>
       </div>
       <p className="mt-1 text-ok">
-        {metadataBoolean(service, "requires_api_key")
+        {connection.secret_ref
           ? "Secret stocké dans le vault local."
-          : "Connexion sans clé active."}
+          : connection.mode === "oauth"
+            ? "Autorisation externe enregistrée."
+            : "Connexion sans clé active."}
       </p>
       <p className="mt-1 text-ok">
         Ref:{" "}
