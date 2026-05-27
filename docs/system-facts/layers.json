@@ -74,9 +74,10 @@
       "Connector job failure backoff and max_failures stop policy",
       "Task review queue and retry/cancel/update decisions",
       "Generic durable work_queue_items endpoints support create, claim with lease, complete, fail, dead-letter, and expired lease recovery",
-      "Safe generic work queue worker can consume noop/log payloads and dead-letter unsupported actions"
+      "Safe generic work queue worker can consume noop/log payloads and dead-letter unsupported actions",
+      "/app work-queue panel can monitor queue status counts and enqueue safe log items"
     ],
-    "main_gap": "No dedicated UI for generic work-queue items or dead-lettered generic jobs.",
+    "main_gap": "Generic work-queue UI does not yet expose retry/dead-letter resolution actions.",
     "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",
     "source": "docs/roadmap.md"
   },

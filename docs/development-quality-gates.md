@@ -223,6 +223,9 @@ make work-queue-tick SYNARCH_WORK_QUEUE_NAME=reminders
 `docker compose --profile worker up -d work-queue-worker`. The first supported payload actions are
 `noop` and `log`; unknown actions are failed through the durable queue path and dead-lettered instead
 of being executed speculatively.
+The `/app` workspace includes a work-queue panel that reads these same records through the Next
+state-service proxy, displays per-status counts, and can enqueue safe `log` items for operator
+smoke checks.
 
 Run one connector-job batch with:
 

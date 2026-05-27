@@ -71,6 +71,39 @@ export type ConnectorJobRunRecord = {
   completed_at: string;
 };
 
+export type WorkQueueStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "dead_lettered";
+
+export type WorkQueueItem = {
+  id: string;
+  queue_name: string;
+  status: WorkQueueStatus;
+  payload: Record<string, unknown>;
+  priority: number;
+  run_after_at?: string | null;
+  lease_owner_id?: string | null;
+  lease_expires_at?: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  result?: Record<string, unknown> | null;
+  last_error?: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+};
+
+export type WorkQueueItemCreateRequest = {
+  queue_name: string;
+  payload: Record<string, unknown>;
+  priority?: number;
+  max_attempts?: number;
+  run_after_at?: string | null;
+};
+
 export type ServiceDefinition = {
   id: string;
   name: string;
@@ -218,4 +251,33 @@ export async function listConnectorJobRuns(): Promise<ConnectorJobRunRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<ConnectorJobRunRecord[]>(response);
+}
+
+export async function listWorkQueueItems(queueName?: string): Promise<WorkQueueItem[]> {
+  const params = new URLSearchParams();
+  if (queueName) {
+    params.set("queue_name", queueName);
+  }
+  const query = params.toString();
+  const response = await fetch(
+    `/api/state-service/work-queue/items${query ? `?${query}` : ""}`,
+    {
+      cache: "no-store"
+    }
+  );
+  return parseJsonResponse<WorkQueueItem[]>(response);
+}
+
+export async function createWorkQueueItem(
+  item: WorkQueueItemCreateRequest
+): Promise<WorkQueueItem> {
+  const response = await fetch("/api/state-service/work-queue/items", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Synarch-Trace-Id": `trace_frontend_work_queue_${Date.now()}`
+    },
+    body: JSON.stringify(item)
+  });
+  return parseJsonResponse<WorkQueueItem>(response);
 }

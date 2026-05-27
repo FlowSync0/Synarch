@@ -7,8 +7,10 @@ import {
   CircleDot,
   ExternalLink,
   KeyRound,
+  ListChecks,
   PlugZap,
   Play,
+  Plus,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -32,10 +34,13 @@ import {
   type SystemReadinessStatus
 } from "../../lib/gateway-api";
 import {
+  createWorkQueueItem,
   listProjects,
   listServices,
+  listWorkQueueItems,
   type ProjectRecord,
-  type ServiceDefinition
+  type ServiceDefinition,
+  type WorkQueueItem
 } from "../../lib/state-service-api";
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
@@ -54,6 +59,7 @@ const projectStatusClass: Record<string, string> = {
   needs_review: "bg-warn-soft text-warn ring-warn/15",
   blocked: "bg-risk-soft text-risk ring-risk/15",
   failed: "bg-risk-soft text-risk ring-risk/15",
+  dead_lettered: "bg-risk-soft text-risk ring-risk/15",
   draft: "bg-slate-100 text-muted ring-border"
 };
 
@@ -106,6 +112,8 @@ export default function SynarchAppPage() {
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const [connectorMode, setConnectorMode] = useState<ConnectorConnectionMode>("api_key");
   const [apiKey, setApiKey] = useState("");
+  const [workQueueName, setWorkQueueName] = useState("default");
+  const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [scopeSelectionsByService, setScopeSelectionsByService] = useState<
     Record<string, string[]>
   >({});
@@ -119,6 +127,10 @@ export default function SynarchAppPage() {
   const readinessQuery = useQuery({
     queryKey: ["app-readiness"],
     queryFn: getSystemReadiness
+  });
+  const workQueueQuery = useQuery({
+    queryKey: ["app-work-queue", workQueueName],
+    queryFn: () => listWorkQueueItems(workQueueName.trim() || undefined)
   });
 
   const selectedProject =
@@ -214,6 +226,23 @@ export default function SynarchAppPage() {
     }
   });
 
+  const createWorkQueueMutation = useMutation({
+    mutationFn: () =>
+      createWorkQueueItem({
+        queue_name: workQueueName.trim() || "default",
+        payload: {
+          action: "log",
+          message: workQueueMessage.trim() || "operator-created"
+        },
+        priority: 100,
+        max_attempts: 1
+      }),
+    onSuccess: () => {
+      setWorkQueueMessage("");
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+    }
+  });
+
   const handleGoalSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (goal.trim().length === 0) {
@@ -228,6 +257,11 @@ export default function SynarchAppPage() {
       return;
     }
     connectMutation.mutate();
+  };
+
+  const handleWorkQueueSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    createWorkQueueMutation.mutate();
   };
 
   const readinessStatus = readinessQuery.data?.status ?? "warning";
@@ -533,6 +567,18 @@ export default function SynarchAppPage() {
                 ) : null}
               </div>
             </section>
+
+            <WorkQueuePanel
+              items={workQueueQuery.data ?? []}
+              loading={workQueueQuery.isLoading}
+              queueName={workQueueName}
+              message={workQueueMessage}
+              submitting={createWorkQueueMutation.isPending}
+              error={createWorkQueueMutation.error}
+              onQueueNameChange={setWorkQueueName}
+              onMessageChange={setWorkQueueMessage}
+              onSubmit={handleWorkQueueSubmit}
+            />
           </aside>
         </div>
       </div>
@@ -649,6 +695,114 @@ function ActionPanel({ actions, loading }: { actions: OperatorAction[]; loading:
       </div>
     </div>
   );
+}
+
+function WorkQueuePanel({
+  items,
+  loading,
+  queueName,
+  message,
+  submitting,
+  error,
+  onQueueNameChange,
+  onMessageChange,
+  onSubmit
+}: {
+  items: WorkQueueItem[];
+  loading: boolean;
+  queueName: string;
+  message: string;
+  submitting: boolean;
+  error: unknown;
+  onQueueNameChange: (value: string) => void;
+  onMessageChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
+    counts[item.status] = (counts[item.status] ?? 0) + 1;
+    return counts;
+  }, {});
+  const recentItems = [...items]
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, 4);
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h2 className="text-sm font-semibold">Queue durable</h2>
+        <ListChecks className="h-4 w-4 text-accent" />
+      </div>
+      <form className="flex flex-col gap-3 p-4" onSubmit={onSubmit}>
+        <input
+          className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+          value={queueName}
+          onChange={(event) => onQueueNameChange(event.target.value)}
+          placeholder="default"
+        />
+        <input
+          className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+          value={message}
+          onChange={(event) => onMessageChange(event.target.value)}
+          placeholder="message"
+        />
+        <button
+          type="submit"
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white disabled:opacity-60"
+          disabled={submitting || queueName.trim().length === 0}
+        >
+          <Plus className="h-4 w-4" />
+          <span>{submitting ? "Création" : "Ajouter"}</span>
+        </button>
+        {error ? (
+          <p className="text-xs text-risk">
+            {error instanceof Error ? error.message : "Création impossible."}
+          </p>
+        ) : null}
+      </form>
+      <div className="border-t border-border px-4 py-3">
+        <div className="flex flex-wrap gap-2">
+          {["queued", "running", "completed", "failed", "dead_lettered"].map((status) => (
+            <span
+              key={status}
+              className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(status)}`}
+            >
+              {status}: {statusCounts[status] ?? 0}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="divide-y divide-border">
+        {loading ? (
+          <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+        ) : recentItems.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">Aucun item.</p>
+        ) : (
+          recentItems.map((item) => (
+            <div key={item.id} className="px-4 py-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="truncate text-sm font-medium">{item.id}</p>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(item.status)}`}
+                >
+                  {item.status}
+                </span>
+              </div>
+              <p className="mt-1 truncate text-xs text-muted">
+                {workQueuePayloadLabel(item.payload)}
+              </p>
+              <p className="mt-1 text-[11px] text-muted">{formatDate(item.updated_at)}</p>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function workQueuePayloadLabel(payload: Record<string, unknown>): string {
+  const action = typeof payload.action === "string" ? payload.action : "payload";
+  const message = typeof payload.message === "string" ? payload.message : "";
+  return message ? `${action}: ${message}` : action;
 }
 
 function PanelEmpty({ icon, text }: { icon: ReactNode; text: string }) {
