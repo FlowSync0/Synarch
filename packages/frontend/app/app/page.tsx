@@ -178,7 +178,12 @@ function secretVaultBadges(item: SystemReadinessItem): string[] {
 
 export default function SynarchAppPage() {
   const queryClient = useQueryClient();
+  const [projectTitle, setProjectTitle] = useState("");
   const [goal, setGoal] = useState("");
+  const [successDefinition, setSuccessDefinition] = useState("");
+  const [firstNextAction, setFirstNextAction] = useState("");
+  const [projectReminderAt, setProjectReminderAt] = useState("");
+  const [projectSubmitNotice, setProjectSubmitNotice] = useState<string | null>(null);
   const [priority, setPriority] = useState<GoalPriority>("medium");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
@@ -304,23 +309,69 @@ export default function SynarchAppPage() {
   };
 
   const submitGoalMutation = useMutation({
-    mutationFn: () =>
-      submitGoal({
-        goal,
+    mutationFn: async () => {
+      const title = projectTitle.trim();
+      const objective = goal.trim();
+      const success = successDefinition.trim();
+      const firstAction = firstNextAction.trim();
+      const submission = await submitGoal({
+        title: title || undefined,
+        goal: objective,
         priority,
         requester: "local-user",
         constraints: [
           "Découper l'objectif en étapes vérifiables.",
           "Demander une action humaine pour captcha, accès, choix critique ou document ambigu."
         ],
-        context: { source: "synarch_app" }
-      }),
+        context: {
+          source: "synarch_app",
+          first_next_action: firstAction || undefined,
+          success_definition: success || undefined
+        }
+      });
+      let reminderQueued = false;
+      let reminderError: string | null = null;
+      if (projectReminderAt.trim().length > 0) {
+        try {
+          await createWorkQueueItem({
+            queue_name: "reminders",
+            payload: {
+              action: "project.reminder.emit",
+              project_id: submission.project.id,
+              message: firstAction || `Faire le point sur ${submission.project.title}`,
+              source: "synarch_app_onboarding"
+            },
+            priority: 80,
+            max_attempts: 3,
+            run_after_at: new Date(projectReminderAt).toISOString()
+          });
+          reminderQueued = true;
+        } catch (error) {
+          reminderError =
+            error instanceof Error ? error.message : "Rappel non planifié.";
+        }
+      }
+      return { submission, reminderQueued, reminderError };
+    },
     onSuccess: (result) => {
+      setProjectTitle("");
       setGoal("");
-      setSelectedProjectId(result.project.id);
+      setSuccessDefinition("");
+      setFirstNextAction("");
+      setProjectReminderAt("");
+      setSelectedProjectId(result.submission.project.id);
+      setProjectSubmitNotice(
+        result.reminderError
+          ? `Projet créé. Rappel non planifié: ${result.reminderError}`
+          : result.reminderQueued
+            ? "Projet créé avec rappel durable."
+            : "Projet créé."
+      );
       void queryClient.invalidateQueries({ queryKey: ["app-projects"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["app-operator-actions"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
     }
   });
 
@@ -473,6 +524,7 @@ export default function SynarchAppPage() {
     if (goal.trim().length === 0) {
       return;
     }
+    setProjectSubmitNotice(null);
     submitGoalMutation.mutate();
   };
 
@@ -564,14 +616,32 @@ export default function SynarchAppPage() {
           <aside className="flex min-w-0 flex-col gap-4">
             <section className="rounded-md border border-border bg-panel shadow-soft">
               <div className="border-b border-border px-4 py-3">
-                <h2 className="text-sm font-semibold">Nouvel objectif</h2>
+                <h2 className="text-sm font-semibold">Nouveau projet</h2>
               </div>
               <form className="flex flex-col gap-3 p-4" onSubmit={handleGoalSubmit}>
+                <input
+                  className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                  value={projectTitle}
+                  onChange={(event) => setProjectTitle(event.target.value)}
+                  placeholder="Titre projet"
+                />
                 <textarea
-                  className="min-h-32 resize-y rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:border-accent"
+                  className="min-h-28 resize-y rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:border-accent"
                   value={goal}
                   onChange={(event) => setGoal(event.target.value)}
-                  placeholder="Ex: organiser le sourcing de fournisseurs pour le projet moteur..."
+                  placeholder="Objectif"
+                />
+                <input
+                  className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                  value={successDefinition}
+                  onChange={(event) => setSuccessDefinition(event.target.value)}
+                  placeholder="Résultat attendu"
+                />
+                <textarea
+                  className="min-h-20 resize-y rounded-md border border-border bg-white px-3 py-2 text-sm outline-none focus:border-accent"
+                  value={firstNextAction}
+                  onChange={(event) => setFirstNextAction(event.target.value)}
+                  placeholder="Première action"
                 />
                 <div className="grid grid-cols-2 gap-2">
                   {priorityOptions.map((option) => (
@@ -589,6 +659,13 @@ export default function SynarchAppPage() {
                     </button>
                   ))}
                 </div>
+                <input
+                  className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                  type="datetime-local"
+                  value={projectReminderAt}
+                  onChange={(event) => setProjectReminderAt(event.target.value)}
+                  aria-label="Rappel"
+                />
                 <button
                   type="submit"
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-white hover:bg-accent-strong disabled:opacity-60"
@@ -603,6 +680,9 @@ export default function SynarchAppPage() {
                       ? submitGoalMutation.error.message
                       : "Création impossible."}
                   </p>
+                ) : null}
+                {projectSubmitNotice ? (
+                  <p className="text-xs text-ok">{projectSubmitNotice}</p>
                 ) : null}
               </form>
             </section>

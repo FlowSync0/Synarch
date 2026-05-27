@@ -19,6 +19,7 @@ export type TaskStatus =
 export type GoalPriority = "low" | "medium" | "high" | "critical";
 
 export type GoalEnvelope = {
+  title?: string;
   goal: string;
   priority: GoalPriority;
   context?: Record<string, unknown>;

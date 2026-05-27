@@ -814,8 +814,24 @@ def get_memory_client() -> MemoryClient:
 
 def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
     agent_id, rationale = choose_agent(envelope.goal)
+    project_title = envelope.title.strip() if envelope.title else envelope.goal[:80]
+    first_next_action = goal_context_string(envelope, "first_next_action")
+    success_definition = goal_context_string(envelope, "success_definition")
+    clarify_acceptance = [
+        "The original goal is restated in operational terms.",
+        "Unknowns, constraints, and stop conditions are listed.",
+    ]
+    if success_definition is not None:
+        clarify_acceptance.append(f"Definition of done: {success_definition}")
+    specialist_description = f"Plan the first scoped work package for: {envelope.goal[:80]}"
+    if first_next_action is not None:
+        specialist_description = (
+            f"{specialist_description}\nOperator first next action: {first_next_action}"
+        )
+    execution_label = first_next_action[:50] if first_next_action else envelope.goal[:50]
+    execution_title = f"Execute first scoped work package: {execution_label}"
     project_intent = ProjectIntent(
-        title=envelope.goal[:80],
+        title=project_title,
         goal=envelope.goal,
         priority=envelope.priority,
         owner_agent_id="agent-direction",
@@ -826,15 +842,12 @@ def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
             description="Turn the raw objective into explicit success criteria and constraints.",
             assigned_agent_id="agent-direction",
             priority=envelope.priority,
-            acceptance_criteria=[
-                "The original goal is restated in operational terms.",
-                "Unknowns, constraints, and stop conditions are listed.",
-            ],
+            acceptance_criteria=clarify_acceptance,
             sequence=1,
         ),
         TaskDraft(
             title="Prepare specialist action plan",
-            description=f"Plan the first scoped work package for: {envelope.goal[:80]}",
+            description=specialist_description,
             assigned_agent_id=agent_id,
             depends_on=["Clarify success criteria"],
             priority=envelope.priority,
@@ -845,7 +858,7 @@ def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
             sequence=2,
         ),
         TaskDraft(
-            title=f"Execute first scoped work package: {envelope.goal[:50]}",
+            title=execution_title,
             description="Execute only the first validated unit of work, not the full project.",
             assigned_agent_id=agent_id,
             depends_on=["Prepare specialist action plan"],
@@ -860,7 +873,7 @@ def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
             title="Review outcome and next split",
             description="Review the completed unit and decide the next smallest actionable slice.",
             assigned_agent_id="agent-direction",
-            depends_on=[f"Execute first scoped work package: {envelope.goal[:50]}"],
+            depends_on=[execution_title],
             priority=envelope.priority,
             acceptance_criteria=[
                 "The previous unit is accepted, rejected, or marked blocked with a reason.",
@@ -875,6 +888,14 @@ def plan_goal(envelope: GoalEnvelope) -> RoutingDecision:
         target_agents=sorted({"agent-direction", agent_id}),
         rationale=rationale,
     )
+
+
+def goal_context_string(envelope: GoalEnvelope, key: str) -> str | None:
+    value = envelope.context.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def audit_headers(envelope: GoalEnvelope, trace_id: str) -> dict[str, str]:
@@ -1061,10 +1082,12 @@ def goal_submission_events(
             type=EventType.goal_received,
             target=project.id,
             payload={
+                "title": envelope.title,
                 "goal": envelope.goal,
                 "priority": envelope.priority,
                 "requester": envelope.requester,
                 "constraints": envelope.constraints,
+                "context": envelope.context,
             },
             trace_id=trace_id,
         ),

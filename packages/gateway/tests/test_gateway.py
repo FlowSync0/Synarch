@@ -2642,6 +2642,41 @@ def test_goal_submit_persists_project_tasks_and_events() -> None:
     assert state_client.headers[-1]["x-synarch-trace-id"] == payload["trace_id"]
 
 
+def test_goal_submit_uses_operator_title_and_first_action_context() -> None:
+    state_client = FakeStateClient()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).post(
+            "/goals/submit",
+            json={
+                "title": "Sourcing moteur Chine",
+                "goal": "Trouver des fournisseurs de moteurs en Chine.",
+                "priority": "high",
+                "requester": "hugo",
+                "context": {
+                    "first_next_action": "Lister les plateformes fournisseurs et critères de tri.",
+                    "success_definition": "3 fournisseurs qualifiés avec méthode de contact.",
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["project"]["title"] == "Sourcing moteur Chine"
+    assert payload["routing_decision"]["project_intent"]["title"] == "Sourcing moteur Chine"
+    assert "Lister les plateformes fournisseurs" in payload["tasks"][1]["description"]
+    assert any(
+        "3 fournisseurs qualifiés" in criterion
+        for criterion in payload["tasks"][0]["acceptance_criteria"]
+    )
+    assert payload["events"][0]["payload"]["context"]["first_next_action"] == (
+        "Lister les plateformes fournisseurs et critères de tri."
+    )
+
+
 def test_goal_submit_returns_bad_gateway_when_state_service_is_unavailable() -> None:
     app.dependency_overrides[get_state_client] = FailingStateClient
 

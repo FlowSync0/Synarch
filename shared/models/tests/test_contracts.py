@@ -56,8 +56,20 @@ from synarch_models import (
 def test_goal_envelope_defaults() -> None:
     envelope = GoalEnvelope(goal="Build a finance workflow")
 
+    assert envelope.title is None
     assert envelope.priority == "medium"
     assert envelope.requester == "local-user"
+
+
+def test_goal_envelope_accepts_operator_title_and_context() -> None:
+    envelope = GoalEnvelope(
+        title="Supplier sourcing Q2",
+        goal="Find qualified motor suppliers in China.",
+        context={"first_next_action": "Map the supplier search channels."},
+    )
+
+    assert envelope.title == "Supplier sourcing Q2"
+    assert envelope.context["first_next_action"] == "Map the supplier search channels."
 
 
 def test_system_readiness_report_captures_manual_action_items() -> None:

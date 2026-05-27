@@ -80,6 +80,7 @@ class OperatorAction(SynarchModel):
 
 
 class GoalEnvelope(SynarchModel):
+    title: str | None = Field(default=None, min_length=1)
     goal: str = Field(min_length=1)
     priority: Priority = Priority.medium
     context: dict[str, Any] = Field(default_factory=dict)
