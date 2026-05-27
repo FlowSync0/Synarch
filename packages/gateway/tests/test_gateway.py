@@ -152,6 +152,51 @@ def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: P
     assert status["plaintext_secret_count"] == 0
 
 
+def test_secret_vault_can_use_encryption_key_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    key_path = tmp_path / "secret-vault.key"
+    key_path.write_text("file-vault-key\n", encoding="utf-8")
+    vault_root = tmp_path / "vault"
+    monkeypatch.delenv("SECRET_VAULT_KEY", raising=False)
+    monkeypatch.setenv("SECRET_VAULT_KEY_FILE", str(key_path))
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_dir", str(vault_root))
+
+    vault = gateway_main.get_secret_vault()
+    reference = vault.store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-file-secret",
+        actor_id="local-user",
+    )
+
+    status = gateway_main.secret_vault_status_payload()
+    assert status["encryption_enabled"] is True
+    assert status["encryption_key_source"] == "file"
+    assert status["encryption_key_file_env_var"] == "SECRET_VAULT_KEY_FILE"
+    assert "file-vault-key" not in str(status)
+    assert vault.load_connector_secret(reference.ref) == "fc-file-secret"
+
+
+def test_secret_vault_key_file_error_is_reported_without_secret_path_escape(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    missing_key_path = tmp_path / "missing.key"
+    monkeypatch.delenv("SECRET_VAULT_KEY", raising=False)
+    monkeypatch.setenv("SECRET_VAULT_KEY_FILE", str(missing_key_path))
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_dir", str(tmp_path / "vault"))
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_require_encryption", True)
+
+    item = gateway_main.secret_vault_readiness_item()
+
+    assert item.status == "blocked"
+    assert "SECRET_VAULT_KEY_FILE" in (item.manual_action or "")
+    assert item.evidence["encryption_enabled"] is False
+    assert item.evidence["encryption_key_error"] is not None
+    assert str(missing_key_path) not in item.evidence["encryption_key_error"]
+
+
 def test_local_file_secret_vault_rejects_plaintext_when_encryption_required(
     tmp_path: Path,
 ) -> None:

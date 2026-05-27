@@ -162,21 +162,36 @@ class SecretVault(Protocol):
     def delete_connector_secret(self, secret_ref: str) -> bool: ...
 
 
+@dataclass(frozen=True)
+class SecretVaultKeyConfig:
+    value: str | None = None
+    source: Literal["env", "file"] | None = None
+    error: str | None = None
+
+
 class LocalFileSecretVault:
     def __init__(
         self,
         root: str,
         encryption_key: str | None = None,
         *,
+        encryption_key_source: Literal["env", "file"] | None = None,
+        encryption_key_error: str | None = None,
         require_encryption: bool = False,
     ) -> None:
         self.root = Path(root)
         self.encryption_key = encryption_key
+        self.encryption_key_source = encryption_key_source
+        self.encryption_key_error = encryption_key_error
         self.require_encryption = require_encryption
 
     @property
     def encryption_enabled(self) -> bool:
-        return self.encryption_key is not None and bool(self.encryption_key.strip())
+        return (
+            self.encryption_key_error is None
+            and self.encryption_key is not None
+            and bool(self.encryption_key.strip())
+        )
 
     def store_connector_secret(
         self,
@@ -187,6 +202,8 @@ class LocalFileSecretVault:
     ) -> SecretReference:
         if not secret_value:
             raise HTTPException(status_code=400, detail="Secret value cannot be empty")
+        if self.encryption_key_error is not None:
+            raise HTTPException(status_code=409, detail=self.encryption_key_error)
         if self.require_encryption and not self.encryption_enabled:
             raise HTTPException(
                 status_code=409,
@@ -292,6 +309,8 @@ class LocalFileSecretVault:
         return path
 
     def fernet(self) -> Fernet:
+        if self.encryption_key_error is not None:
+            raise HTTPException(status_code=500, detail=self.encryption_key_error)
         if not self.encryption_enabled:
             raise HTTPException(
                 status_code=500,
@@ -333,6 +352,8 @@ class LocalFileSecretVault:
             "writable": writable,
             "encryption_required": self.require_encryption,
             "encryption_enabled": self.encryption_enabled,
+            "encryption_key_source": self.encryption_key_source,
+            "encryption_key_error": self.encryption_key_error,
             "secret_count": total_count,
             "encrypted_secret_count": encrypted_count,
             "plaintext_secret_count": plaintext_count,
@@ -340,6 +361,8 @@ class LocalFileSecretVault:
         }
 
     def reencrypt_plaintext_connector_secrets(self, *, actor_id: str) -> dict[str, object]:
+        if self.encryption_key_error is not None:
+            raise HTTPException(status_code=400, detail=self.encryption_key_error)
         if not self.encryption_enabled:
             raise HTTPException(
                 status_code=400,
@@ -621,6 +644,7 @@ class Settings(BaseSettings):
     service_health_timeout_seconds: float = 3.0
     secret_vault_dir: str = ".synarch/secrets"
     secret_vault_key_env_var: str = "SECRET_VAULT_KEY"
+    secret_vault_key_file_env_var: str = "SECRET_VAULT_KEY_FILE"
     secret_vault_require_encryption: bool = False
     gateway_public_url: str | None = None
     work_queue_worker_queue_name: str = "reminders"
@@ -655,10 +679,36 @@ def get_state_client() -> StateClient:
     )
 
 
+def secret_vault_key_config() -> SecretVaultKeyConfig:
+    key_file = os.getenv(settings.secret_vault_key_file_env_var)
+    if key_file is not None and key_file.strip():
+        try:
+            key_value = Path(key_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            return SecretVaultKeyConfig(
+                source="file",
+                error=f"{settings.secret_vault_key_file_env_var} cannot be read",
+            )
+        if not key_value:
+            return SecretVaultKeyConfig(
+                source="file",
+                error=f"{settings.secret_vault_key_file_env_var} is empty",
+            )
+        return SecretVaultKeyConfig(value=key_value, source="file")
+
+    env_key_value = os.getenv(settings.secret_vault_key_env_var)
+    if env_key_value is not None and env_key_value.strip():
+        return SecretVaultKeyConfig(value=env_key_value, source="env")
+    return SecretVaultKeyConfig()
+
+
 def get_secret_vault() -> SecretVault:
+    key_config = secret_vault_key_config()
     return LocalFileSecretVault(
         settings.secret_vault_dir,
-        encryption_key=os.getenv(settings.secret_vault_key_env_var),
+        encryption_key=key_config.value,
+        encryption_key_source=key_config.source,
+        encryption_key_error=key_config.error,
         require_encryption=settings.secret_vault_require_encryption,
     )
 
@@ -668,6 +718,7 @@ def secret_vault_status_payload() -> dict[str, object]:
     if isinstance(vault, LocalFileSecretVault):
         payload = vault.status()
         payload["encryption_key_env_var"] = settings.secret_vault_key_env_var
+        payload["encryption_key_file_env_var"] = settings.secret_vault_key_file_env_var
         return payload
     return {"backend": "custom", "writable": None, "encryption_enabled": None}
 
@@ -3180,6 +3231,19 @@ def ai_runtime_readiness_item(state_client: StateClient) -> SystemReadinessItem:
 def secret_vault_readiness_item() -> SystemReadinessItem:
     status = secret_vault_status_payload()
     encryption_required = status.get("encryption_required") is True
+    if status.get("encryption_key_error"):
+        return readiness_item(
+            "secret_vault",
+            "security",
+            "SecretVault",
+            "blocked",
+            "SecretVault encryption key configuration is invalid.",
+            (
+                f"Fix {settings.secret_vault_key_file_env_var} or unset it before "
+                "storing connector secrets."
+            ),
+            status,
+        )
     if status.get("writable") is not True:
         return readiness_item(
             "secret_vault",
@@ -3199,7 +3263,8 @@ def secret_vault_readiness_item() -> SystemReadinessItem:
                 "blocked",
                 "SecretVault production mode requires encryption before storing secrets.",
                 (
-                    f"Set {settings.secret_vault_key_env_var} or disable "
+                    f"Set {settings.secret_vault_key_env_var} or "
+                    f"{settings.secret_vault_key_file_env_var}; disable "
                     "SECRET_VAULT_REQUIRE_ENCRYPTION only for local development."
                 ),
                 status,
@@ -3211,7 +3276,8 @@ def secret_vault_readiness_item() -> SystemReadinessItem:
             "warning",
             "Local SecretVault is writable but stores new secrets without encryption at rest.",
             (
-                f"Set {settings.secret_vault_key_env_var} before connecting production "
+                f"Set {settings.secret_vault_key_env_var} or "
+                f"{settings.secret_vault_key_file_env_var} before connecting production "
                 "provider credentials."
             ),
             status,
