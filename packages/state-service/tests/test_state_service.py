@@ -1262,6 +1262,36 @@ def test_connector_connection_records_secret_ref_without_secret_value() -> None:
     assert audits[0]["action"] == "connector_connection.created"
 
 
+def test_connector_connection_rejects_no_key_for_credential_scoped_service() -> None:
+    client = TestClient(app)
+    assert client.post(
+        "/services",
+        json={
+            "id": "connector-github-no-key-rejected",
+            "name": "GitHub",
+            "kind": "tool_provider",
+            "capabilities": ["git.read"],
+            "credential_scopes": ["github:contents:read"],
+            "metadata": {"manual_connection_url": "https://github.com/settings/tokens"},
+        },
+    ).status_code == 201
+
+    response = client.post(
+        "/connector-connections",
+        json={
+            "service_id": "connector-github-no-key-rejected",
+            "mode": "no_key",
+            "credential_scopes": [],
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "No-key should not bypass declared credential scopes.",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "credential scopes" in response.json()["detail"]
+
+
 def test_connector_connection_disable_clears_active_secret_reference() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_disable"

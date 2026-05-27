@@ -7846,6 +7846,39 @@ def test_connect_service_stores_secret_in_vault_and_sends_only_secret_ref() -> N
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_connect"
 
 
+def test_connect_service_rejects_no_key_for_credential_scoped_service() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-github",
+            name="GitHub",
+            kind="tool_provider",
+            capabilities=["git.read"],
+            credential_scopes=["github:contents:read"],
+            metadata={"manual_connection_url": "https://github.com/settings/tokens"},
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-github/connections",
+            json={
+                "mode": "no_key",
+                "rationale": "No-key should not bypass declared credential scopes.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "credential scopes" in response.text
+    assert state_client.connector_connections == []
+    assert secret_vault.stored == []
+
+
 def test_connect_service_rejects_api_key_when_encryption_is_required(
     tmp_path: Path,
 ) -> None:

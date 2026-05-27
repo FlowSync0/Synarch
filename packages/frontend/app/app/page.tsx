@@ -264,6 +264,10 @@ function hasOAuthAuthorizationLink(service: ServiceDefinition): boolean {
   );
 }
 
+function requiresOAuth(service: ServiceDefinition): boolean {
+  return metadataBoolean(service, "requires_oauth") || hasOAuthAuthorizationLink(service);
+}
+
 function manualConnectionUrl(service: ServiceDefinition | null): string | null {
   return metadataString(service, "manual_connection_url");
 }
@@ -278,13 +282,21 @@ function connectionSetupInstructions(service: ServiceDefinition | null): string 
 
 function connectorModesForService(service: ServiceDefinition): ConnectorConnectionMode[] {
   const modes: ConnectorConnectionMode[] = [];
-  if (metadataBoolean(service, "requires_api_key") || service.credential_scopes.length > 0) {
+  const oauthRequired = requiresOAuth(service);
+  if (
+    metadataBoolean(service, "requires_api_key") ||
+    (service.credential_scopes.length > 0 && !oauthRequired)
+  ) {
     modes.push("api_key");
   }
-  if (!metadataBoolean(service, "requires_api_key")) {
+  if (
+    !metadataBoolean(service, "requires_api_key") &&
+    !oauthRequired &&
+    service.credential_scopes.length === 0
+  ) {
     modes.push("no_key");
   }
-  if (hasOAuthAuthorizationLink(service)) {
+  if (oauthRequired) {
     modes.push("oauth");
   }
   return modes.length > 0 ? modes : ["no_key"];

@@ -4320,6 +4320,13 @@ def validate_connector_connection_request(
             status_code=400,
             detail="This connector requires an API key connection",
         )
+    if connection_request.mode == "no_key" and (
+        service.credential_scopes or connection_request.credential_scopes
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Connector services with credential scopes cannot use no_key connections",
+        )
 
 
 @app.post("/connector-connections", response_model=ConnectorConnectionResult, status_code=201)

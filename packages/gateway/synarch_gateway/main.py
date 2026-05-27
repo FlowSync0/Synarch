@@ -459,6 +459,24 @@ class ConnectorConnectRequest(BaseModel):
     rationale: str = "Connect service through Synarch connector setup."
 
 
+def validate_connector_connect_request(
+    connection: ConnectorConnectRequest,
+    service: ServiceDefinition,
+) -> None:
+    if connection.mode != "no_key":
+        return
+    if service.metadata.get("requires_api_key") is True:
+        raise HTTPException(
+            status_code=400,
+            detail="This connector requires an API key connection",
+        )
+    if service.credential_scopes or connection.credential_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail="Connector services with credential scopes cannot use no_key connections",
+        )
+
+
 @dataclass(frozen=True)
 class ToolAdapterManifest:
     tool_name: str
@@ -1872,6 +1890,7 @@ def connect_service(
     actor_id = request.headers.get("x-synarch-actor-id", "local-user")
     try:
         service = service_definition_by_id(state_client, service_id)
+        validate_connector_connect_request(connection, service)
         secret_ref: SecretReference | None = None
         setup_url: str | None = None
         callback_url: str | None = None
