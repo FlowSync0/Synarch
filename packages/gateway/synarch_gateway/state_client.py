@@ -40,6 +40,7 @@ from synarch_models import (
     TaskRecord,
     TaskReviewDecision,
     TaskReviewResult,
+    WorkerHeartbeatRecord,
 )
 
 
@@ -348,6 +349,13 @@ class StateClient(Protocol):
         *,
         headers: dict[str, str],
     ) -> ConnectorJobMutationResult: ...
+
+    def list_worker_heartbeats(
+        self,
+        *,
+        worker_kind: str | None = None,
+        target: str | None = None,
+    ) -> list[WorkerHeartbeatRecord]: ...
 
 
 @dataclass(frozen=True)
@@ -890,6 +898,21 @@ class HttpStateClient:
             headers,
         )
         return ConnectorJobMutationResult.model_validate(response.json())
+
+    def list_worker_heartbeats(
+        self,
+        *,
+        worker_kind: str | None = None,
+        target: str | None = None,
+    ) -> list[WorkerHeartbeatRecord]:
+        response = self._get(
+            "/worker-heartbeats",
+            params=compact_params(worker_kind=worker_kind, target=target),
+        )
+        return [
+            WorkerHeartbeatRecord.model_validate(heartbeat)
+            for heartbeat in response.json()
+        ]
 
     def _get(
         self,

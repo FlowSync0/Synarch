@@ -121,7 +121,9 @@ curl http://localhost:8000/readiness
 
 The dashboard reads the same report through `GET /api/gateway/readiness`. Each item is
 `ready`, `warning`, or `blocked` and includes the manual action to perform when configuration or
-human review is required.
+human review is required. The report also watches the durable reminder queue worker through
+`worker_heartbeats`; if `work-queue-worker` stops reporting for the `reminders` queue, `/app` shows
+the stale or failed worker state instead of relying on an old status.
 
 The dashboard action center reads `GET /api/gateway/operator-actions`, backed by Gateway
 `/operator-actions`. It aggregates open task reviews, credential requests, human assistance
@@ -152,7 +154,8 @@ Manual configuration that commonly matters before unattended use:
 - `docker compose --profile worker up -d` when scheduler, connector, memory compaction, and
   embedding workers must run continuously. Use `docker compose --profile worker up -d
   work-queue-worker` when the durable reminder queue also needs to be consumed. Override
-  `SYNARCH_WORK_QUEUE_NAME` only when running a different generic queue.
+  `SYNARCH_WORK_QUEUE_NAME` only when running a different generic queue. Gateway considers that
+  worker stale after `WORK_QUEUE_WORKER_STALE_AFTER_SECONDS` seconds, default `120`.
 - `FIRECRAWL_API_KEY` or `BROWSERLESS_API_KEY`, or an active Synarch connector connection backed by
   SecretVault, only when local web extraction is not enough for
   JavaScript, anti-bot, or CAPTCHA-heavy pages.

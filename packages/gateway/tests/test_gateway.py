@@ -90,6 +90,7 @@ from synarch_models import (
     TaskStatus,
     ToolCallRequest,
     ToolResult,
+    WorkerHeartbeatRecord,
 )
 
 
@@ -245,6 +246,7 @@ class FakeStateClient:
         self.credential_grants: list[CredentialGrant] = []
         self.complexity_assessments: list[ProjectComplexityAssessment] = []
         self.split_applications: list[ProjectSplitApplication] = []
+        self.worker_heartbeats: list[WorkerHeartbeatRecord] = []
         self.headers: list[dict[str, str]] = []
 
     def create_project(
@@ -324,6 +326,21 @@ class FakeStateClient:
         if trace_id is not None:
             events = [event for event in events if event.trace_id == trace_id]
         return events
+
+    def list_worker_heartbeats(
+        self,
+        *,
+        worker_kind: str | None = None,
+        target: str | None = None,
+    ) -> list[WorkerHeartbeatRecord]:
+        heartbeats = self.worker_heartbeats
+        if worker_kind is not None:
+            heartbeats = [
+                heartbeat for heartbeat in heartbeats if heartbeat.worker_kind == worker_kind
+            ]
+        if target is not None:
+            heartbeats = [heartbeat for heartbeat in heartbeats if heartbeat.target == target]
+        return sorted(heartbeats, key=lambda heartbeat: heartbeat.last_seen_at, reverse=True)
 
     def list_services(
         self,
@@ -2876,6 +2893,9 @@ def test_system_readiness_reports_manual_configuration_and_actions(
     assert "SECRET_VAULT_KEY" in items["secret_vault"]["manual_action"]
     assert items["worker_loops"]["status"] == "warning"
     assert "--profile worker" in items["worker_loops"]["manual_action"]
+    assert items["work_queue_worker"]["status"] == "warning"
+    assert "work-queue-worker" in items["work_queue_worker"]["manual_action"]
+    assert items["work_queue_worker"]["evidence"]["queue_name"] == "reminders"
     assert items["operator_actions"]["status"] == "warning"
     assert items["operator_actions"]["evidence"] == {
         "review_task_count": 1,
@@ -2883,6 +2903,80 @@ def test_system_readiness_reports_manual_configuration_and_actions(
         "human_request_count": 1,
         "blocked_connector_job_count": 0,
     }
+
+
+def test_work_queue_worker_readiness_reports_recent_heartbeat() -> None:
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+
+    item = gateway_main.work_queue_worker_readiness_item(
+        [
+            WorkerHeartbeatRecord(
+                id="work-queue-worker-1",
+                worker_kind="work_queue",
+                status="completed",
+                target="reminders",
+                heartbeat_count=4,
+                last_tick_result={"completed_count": 1},
+                last_seen_at=now - timedelta(seconds=20),
+                updated_at=now - timedelta(seconds=20),
+            )
+        ],
+        now=now,
+    )
+
+    assert item.status == "ready"
+    assert item.evidence["worker_id"] == "work-queue-worker-1"
+    assert item.evidence["last_seen_age_seconds"] == 20
+    assert item.evidence["queue_name"] == "reminders"
+
+
+def test_work_queue_worker_readiness_reports_stale_heartbeat() -> None:
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+
+    item = gateway_main.work_queue_worker_readiness_item(
+        [
+            WorkerHeartbeatRecord(
+                id="work-queue-worker-1",
+                worker_kind="work_queue",
+                status="completed",
+                target="reminders",
+                heartbeat_count=4,
+                last_tick_result={},
+                last_seen_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+        ],
+        now=now,
+    )
+
+    assert item.status == "warning"
+    assert "stale" in item.detail
+    assert item.evidence["last_seen_age_seconds"] == 600
+
+
+def test_work_queue_worker_readiness_blocks_failed_heartbeat() -> None:
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+
+    item = gateway_main.work_queue_worker_readiness_item(
+        [
+            WorkerHeartbeatRecord(
+                id="work-queue-worker-1",
+                worker_kind="work_queue",
+                status="failed",
+                target="reminders",
+                heartbeat_count=4,
+                last_error="state timeout",
+                last_tick_result={},
+                last_seen_at=now - timedelta(seconds=20),
+                updated_at=now - timedelta(seconds=20),
+            )
+        ],
+        now=now,
+    )
+
+    assert item.status == "blocked"
+    assert "state timeout" in item.detail
+    assert "logs" in str(item.manual_action)
 
 
 def test_system_readiness_returns_blocked_report_when_state_is_unavailable() -> None:

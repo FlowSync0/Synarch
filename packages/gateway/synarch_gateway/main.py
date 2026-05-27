@@ -102,6 +102,7 @@ from synarch_models import (
     TaskStatus,
     ToolCallRequest,
     ToolResult,
+    WorkerHeartbeatRecord,
 )
 
 from .state_client import (
@@ -581,6 +582,8 @@ class Settings(BaseSettings):
     secret_vault_dir: str = ".synarch/secrets"
     secret_vault_key_env_var: str = "SECRET_VAULT_KEY"
     gateway_public_url: str | None = None
+    work_queue_worker_queue_name: str = "reminders"
+    work_queue_worker_stale_after_seconds: int = 120
 
 
 settings = Settings()
@@ -2865,6 +2868,10 @@ def build_system_readiness_report(state_client: StateClient) -> SystemReadinessR
         )
         scheduler_ticks = state_client.list_events(event_type=EventType.scheduler_tick.value)
         connector_ticks = state_client.list_events(event_type=EventType.connector_job_tick.value)
+        work_queue_worker_heartbeats = state_client.list_worker_heartbeats(
+            worker_kind="work_queue",
+            target=settings.work_queue_worker_queue_name,
+        )
     except StateServiceRequestError as error:
         return readiness_report(
             [
@@ -2917,6 +2924,7 @@ def build_system_readiness_report(state_client: StateClient) -> SystemReadinessR
             scheduler_tick_count=len(scheduler_ticks),
             connector_tick_count=len(connector_ticks),
         ),
+        work_queue_worker_readiness_item(work_queue_worker_heartbeats),
         operator_action_readiness_item(
             review_task_count=len(review_tasks),
             credential_request_count=len(credential_requests),
@@ -3211,6 +3219,82 @@ def worker_readiness_item(
             "scheduler_tick_count": scheduler_tick_count,
             "connector_tick_count": connector_tick_count,
         },
+    )
+
+
+def work_queue_worker_readiness_item(
+    heartbeats: list[WorkerHeartbeatRecord],
+    *,
+    now: datetime | None = None,
+) -> SystemReadinessItem:
+    checked_at = now or datetime.now(UTC)
+    queue_name = settings.work_queue_worker_queue_name
+    stale_after_seconds = settings.work_queue_worker_stale_after_seconds
+    if not heartbeats:
+        return readiness_item(
+            "work_queue_worker",
+            "automation",
+            "Durable reminder worker",
+            "warning",
+            f"No work_queue worker heartbeat is visible for queue {queue_name}.",
+            "Start docker compose --profile worker up -d work-queue-worker.",
+            {
+                "queue_name": queue_name,
+                "worker_kind": "work_queue",
+                "heartbeat_count": 0,
+                "stale_after_seconds": stale_after_seconds,
+            },
+        )
+
+    heartbeat = sorted(heartbeats, key=lambda item: item.last_seen_at, reverse=True)[0]
+    last_seen_age_seconds = max(
+        0,
+        int((checked_at - heartbeat.last_seen_at).total_seconds()),
+    )
+    evidence = {
+        "queue_name": queue_name,
+        "worker_id": heartbeat.id,
+        "worker_status": heartbeat.status,
+        "heartbeat_count": heartbeat.heartbeat_count,
+        "last_seen_at": heartbeat.last_seen_at.isoformat(),
+        "last_seen_age_seconds": last_seen_age_seconds,
+        "stale_after_seconds": stale_after_seconds,
+        "last_tick_result": heartbeat.last_tick_result,
+        "last_error": heartbeat.last_error,
+    }
+    if heartbeat.status in {"failed", "stopped"}:
+        detail = f"Durable reminder worker {heartbeat.id} is {heartbeat.status}."
+        if heartbeat.last_error:
+            detail = f"{detail} Last error: {heartbeat.last_error}"
+        return readiness_item(
+            "work_queue_worker",
+            "automation",
+            "Durable reminder worker",
+            "blocked",
+            detail,
+            "Inspect docker compose logs work-queue-worker, fix the error, then restart it.",
+            evidence,
+        )
+    if last_seen_age_seconds > stale_after_seconds:
+        return readiness_item(
+            "work_queue_worker",
+            "automation",
+            "Durable reminder worker",
+            "warning",
+            (
+                f"Durable reminder worker heartbeat is stale "
+                f"({last_seen_age_seconds}s old)."
+            ),
+            "Restart docker compose --profile worker up -d work-queue-worker.",
+            evidence,
+        )
+    return readiness_item(
+        "work_queue_worker",
+        "automation",
+        "Durable reminder worker",
+        "ready",
+        f"Durable reminder worker {heartbeat.id} is reporting for queue {queue_name}.",
+        evidence=evidence,
     )
 
 
