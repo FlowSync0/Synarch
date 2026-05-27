@@ -406,6 +406,21 @@ class WorkQueueItem(SynarchModel):
     completed_at: datetime | None = None
 
 
+class WorkQueueSummary(SynarchModel):
+    queue_name: str
+    item_count: int = Field(default=0, ge=0)
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    ready_count: int = Field(default=0, ge=0)
+    delayed_count: int = Field(default=0, ge=0)
+    running_count: int = Field(default=0, ge=0)
+    failed_count: int = Field(default=0, ge=0)
+    dead_lettered_count: int = Field(default=0, ge=0)
+    oldest_queued_at: datetime | None = None
+    next_run_after_at: datetime | None = None
+    latest_updated_at: datetime | None = None
+    latest_error: str | None = None
+
+
 class WorkQueueClaimRequest(SynarchModel):
     queue_name: str
     worker_id: str

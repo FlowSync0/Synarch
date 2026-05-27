@@ -49,6 +49,7 @@ from synarch_models import (
     TaskStatus,
     ToolCallRequest,
     ToolResult,
+    WorkQueueSummary,
 )
 
 
@@ -82,6 +83,29 @@ def test_system_readiness_report_captures_manual_action_items() -> None:
         "Set OPENROUTER_API_KEY before live AI runs."
     )
     assert payload["items"][0]["evidence"]["provider_id"] == "provider-local-runtime-stub"
+
+
+def test_work_queue_summary_contract_preserves_operational_counts() -> None:
+    summary = WorkQueueSummary(
+        queue_name="reminders",
+        item_count=5,
+        status_counts={"queued": 2, "running": 1, "failed": 1, "dead_lettered": 1},
+        ready_count=1,
+        delayed_count=1,
+        running_count=1,
+        failed_count=1,
+        dead_lettered_count=1,
+        latest_error="Needs human PDF password.",
+    )
+
+    payload = summary.model_dump(mode="json")
+
+    assert payload["queue_name"] == "reminders"
+    assert payload["item_count"] == 5
+    assert payload["status_counts"]["queued"] == 2
+    assert payload["ready_count"] == 1
+    assert payload["delayed_count"] == 1
+    assert payload["latest_error"] == "Needs human PDF password."
 
 
 def test_operator_action_contract_preserves_target_and_evidence() -> None:

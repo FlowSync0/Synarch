@@ -74,9 +74,10 @@
       "Connector job failure backoff and max_failures stop policy",
       "Task review queue and retry/cancel/update decisions",
       "Generic durable work_queue_items endpoints support create, claim with lease, complete, fail, dead-letter, and expired lease recovery",
+      "State-service exposes per-queue work-queue summaries for operator dashboards",
       "Safe generic work queue worker can consume noop/log payloads and dead-letter unsupported actions",
       "Scheduler, connector-job, memory, and work-queue workers publish durable heartbeat records shown in /app",
-      "/app work-queue panel can monitor queue status counts, enqueue safe log items, retry failed/dead-lettered items, and dead-letter queued/running/failed items"
+      "/app work-queue panel can monitor queue summaries and status counts, enqueue safe log items, retry failed/dead-lettered items, and dead-letter queued/running/failed items"
     ],
     "main_gap": "Generic work-queue worker currently supports only safe noop/log payloads and no payload editing UI yet.",
     "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",

@@ -246,6 +246,73 @@ def test_work_queue_review_dead_letters_queued_item() -> None:
     assert claim_response.json()["claimed_items"] == []
 
 
+def test_work_queue_summary_groups_operational_queue_state() -> None:
+    client = TestClient(app)
+    now = datetime.now(UTC)
+
+    work_items = [
+        {
+            "id": "work-reminder-ready",
+            "queue_name": "reminders",
+            "status": "queued",
+            "payload": {"action": "project.reminder.emit"},
+            "priority": 10,
+            "created_at": (now - timedelta(minutes=10)).isoformat(),
+        },
+        {
+            "id": "work-reminder-delayed",
+            "queue_name": "reminders",
+            "status": "queued",
+            "payload": {"action": "project.reminder.emit"},
+            "run_after_at": (now + timedelta(hours=2)).isoformat(),
+        },
+        {
+            "id": "work-reminder-running",
+            "queue_name": "reminders",
+            "status": "running",
+            "payload": {"action": "project.reminder.emit"},
+            "lease_owner_id": "worker-reminders",
+            "lease_expires_at": (now + timedelta(minutes=5)).isoformat(),
+        },
+        {
+            "id": "work-pdf-dead",
+            "queue_name": "pdf-ingestion",
+            "status": "dead_lettered",
+            "payload": {"action": "pdf.extract"},
+            "last_error": "PDF password required.",
+            "completed_at": now.isoformat(),
+        },
+        {
+            "id": "work-pdf-failed",
+            "queue_name": "pdf-ingestion",
+            "status": "failed",
+            "payload": {"action": "pdf.extract"},
+            "last_error": "OCR provider failed.",
+        },
+    ]
+    for item in work_items:
+        assert client.post("/work-queue/items", json=item).status_code == 201
+
+    response = client.get("/work-queue/summary")
+
+    assert response.status_code == 200
+    summaries = {item["queue_name"]: item for item in response.json()}
+    assert list(summaries) == ["pdf-ingestion", "reminders"]
+    assert summaries["reminders"]["item_count"] == 3
+    assert summaries["reminders"]["status_counts"] == {"queued": 2, "running": 1}
+    assert summaries["reminders"]["ready_count"] == 1
+    assert summaries["reminders"]["delayed_count"] == 1
+    assert summaries["reminders"]["running_count"] == 1
+    assert summaries["reminders"]["failed_count"] == 0
+    assert summaries["reminders"]["dead_lettered_count"] == 0
+    assert summaries["reminders"]["oldest_queued_at"] is not None
+    assert summaries["reminders"]["next_run_after_at"] is not None
+    assert summaries["pdf-ingestion"]["item_count"] == 2
+    assert summaries["pdf-ingestion"]["failed_count"] == 1
+    assert summaries["pdf-ingestion"]["dead_lettered_count"] == 1
+    assert summaries["pdf-ingestion"]["latest_error"] == "OCR provider failed."
+
+
 def test_worker_heartbeat_upsert_tracks_durable_worker_status() -> None:
     client = TestClient(app)
     trace_id = "trace_worker_heartbeat"

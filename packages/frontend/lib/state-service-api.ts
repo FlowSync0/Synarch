@@ -96,6 +96,21 @@ export type WorkQueueItem = {
   completed_at?: string | null;
 };
 
+export type WorkQueueSummary = {
+  queue_name: string;
+  item_count: number;
+  status_counts: Record<string, number>;
+  ready_count: number;
+  delayed_count: number;
+  running_count: number;
+  failed_count: number;
+  dead_lettered_count: number;
+  oldest_queued_at?: string | null;
+  next_run_after_at?: string | null;
+  latest_updated_at?: string | null;
+  latest_error?: string | null;
+};
+
 export type WorkQueueItemCreateRequest = {
   queue_name: string;
   payload: Record<string, unknown>;
@@ -301,6 +316,13 @@ export async function listWorkQueueItems(queueName?: string): Promise<WorkQueueI
     }
   );
   return parseJsonResponse<WorkQueueItem[]>(response);
+}
+
+export async function listWorkQueueSummary(): Promise<WorkQueueSummary[]> {
+  const response = await fetch("/api/state-service/work-queue/summary", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<WorkQueueSummary[]>(response);
 }
 
 export async function listWorkerHeartbeats(): Promise<WorkerHeartbeatRecord[]> {

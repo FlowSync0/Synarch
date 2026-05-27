@@ -75,6 +75,7 @@ from synarch_models import (
     WorkQueueItem,
     WorkQueueRecoveryResult,
     WorkQueueReviewDecision,
+    WorkQueueSummary,
 )
 from synarch_state_service.repositories import RecordRepository, StateRepositories
 
@@ -1856,6 +1857,66 @@ def work_queue_ready_items(queue_name: str, now: datetime) -> list[WorkQueueItem
     return sorted(items, key=lambda item: (item.priority, item.created_at, item.id))
 
 
+def work_queue_summaries(items: list[WorkQueueItem], now: datetime) -> list[WorkQueueSummary]:
+    grouped_items: dict[str, list[WorkQueueItem]] = {}
+    for item in items:
+        grouped_items.setdefault(item.queue_name, []).append(item)
+
+    summaries: list[WorkQueueSummary] = []
+    for queue_name, queue_items in sorted(grouped_items.items()):
+        status_counts: dict[str, int] = {}
+        for item in queue_items:
+            status_counts[item.status] = status_counts.get(item.status, 0) + 1
+
+        queued_items = [item for item in queue_items if item.status == "queued"]
+        ready_items = [
+            item
+            for item in queued_items
+            if item.attempt_count < item.max_attempts
+            and (item.run_after_at is None or item.run_after_at <= now)
+        ]
+        delayed_items = [
+            item
+            for item in queued_items
+            if item.run_after_at is not None and item.run_after_at > now
+        ]
+        latest_error_item = max(
+            (item for item in queue_items if item.last_error),
+            key=lambda item: item.updated_at,
+            default=None,
+        )
+        summaries.append(
+            WorkQueueSummary(
+                queue_name=queue_name,
+                item_count=len(queue_items),
+                status_counts=status_counts,
+                ready_count=len(ready_items),
+                delayed_count=len(delayed_items),
+                running_count=status_counts.get("running", 0),
+                failed_count=status_counts.get("failed", 0),
+                dead_lettered_count=status_counts.get("dead_lettered", 0),
+                oldest_queued_at=min(
+                    (item.created_at for item in queued_items),
+                    default=None,
+                ),
+                next_run_after_at=min(
+                    (item.run_after_at for item in delayed_items if item.run_after_at is not None),
+                    default=None,
+                ),
+                latest_updated_at=max(
+                    (item.updated_at for item in queue_items),
+                    default=None,
+                ),
+                latest_error=(
+                    latest_error_item.last_error
+                    if latest_error_item is not None
+                    else None
+                ),
+            )
+        )
+    return summaries
+
+
 @app.post("/work-queue/items", response_model=WorkQueueItem, status_code=201)
 def create_work_queue_item(item: WorkQueueItem, request: Request) -> WorkQueueItem:
     record = create_record(REPOSITORIES.work_queue_items, item.id, item)
@@ -1871,6 +1932,14 @@ def create_work_queue_item(item: WorkQueueItem, request: Request) -> WorkQueueIt
         },
     )
     return record
+
+
+@app.get("/work-queue/summary", response_model=list[WorkQueueSummary])
+def list_work_queue_summary() -> list[WorkQueueSummary]:
+    return work_queue_summaries(
+        REPOSITORIES.work_queue_items.list_records(),
+        datetime.now(UTC),
+    )
 
 
 @app.get("/work-queue/items", response_model=list[WorkQueueItem])

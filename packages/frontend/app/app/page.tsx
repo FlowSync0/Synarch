@@ -51,11 +51,13 @@ import {
   listServices,
   listWorkerHeartbeats,
   listWorkQueueItems,
+  listWorkQueueSummary,
   reviewWorkQueueItem,
   type ProjectRecord,
   type ServiceDefinition,
   type WorkerHeartbeatRecord,
-  type WorkQueueItem
+  type WorkQueueItem,
+  type WorkQueueSummary
 } from "../../lib/state-service-api";
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
@@ -191,6 +193,11 @@ export default function SynarchAppPage() {
   const workQueueQuery = useQuery({
     queryKey: ["app-work-queue", workQueueName],
     queryFn: () => listWorkQueueItems(workQueueName.trim() || undefined),
+    refetchInterval: 15_000
+  });
+  const workQueueSummaryQuery = useQuery({
+    queryKey: ["app-work-queue-summary"],
+    queryFn: listWorkQueueSummary,
     refetchInterval: 15_000
   });
   const workerHeartbeatsQuery = useQuery({
@@ -375,6 +382,7 @@ export default function SynarchAppPage() {
       setWorkQueueMessage("");
       setWorkQueueRunAfter("");
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
     }
   });
@@ -392,6 +400,7 @@ export default function SynarchAppPage() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
     }
   });
 
@@ -505,6 +514,7 @@ export default function SynarchAppPage() {
               onClick={() => {
                 void readinessQuery.refetch();
                 void workerHeartbeatsQuery.refetch();
+                void workQueueSummaryQuery.refetch();
                 void workQueueQuery.refetch();
               }}
               title="Rafraîchir l'état système"
@@ -864,7 +874,9 @@ export default function SynarchAppPage() {
 
             <WorkQueuePanel
               items={workQueueQuery.data ?? []}
+              summaries={workQueueSummaryQuery.data ?? []}
               loading={workQueueQuery.isLoading}
+              summaryLoading={workQueueSummaryQuery.isLoading}
               queueName={workQueueName}
               action={workQueueAction}
               message={workQueueMessage}
@@ -1367,9 +1379,93 @@ function WorkerPanel({
   );
 }
 
+function QueueSummaryStrip({
+  summaries,
+  selectedQueueName,
+  loading,
+  onSelect
+}: {
+  summaries: WorkQueueSummary[];
+  selectedQueueName: string;
+  loading: boolean;
+  onSelect: (queueName: string) => void;
+}) {
+  const orderedSummaries = [...summaries].sort((left, right) => {
+    const leftProblemCount = left.failed_count + left.dead_lettered_count;
+    const rightProblemCount = right.failed_count + right.dead_lettered_count;
+    if (leftProblemCount !== rightProblemCount) {
+      return rightProblemCount - leftProblemCount;
+    }
+    if (left.ready_count !== right.ready_count) {
+      return right.ready_count - left.ready_count;
+    }
+    return left.queue_name.localeCompare(right.queue_name);
+  });
+
+  return (
+    <div className="border-b border-border px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <p className="text-xs font-semibold uppercase text-muted">Queues</p>
+        <span className="text-xs text-muted">{summaries.length}</span>
+      </div>
+      {loading ? (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-muted">Chargement...</p>
+      ) : orderedSummaries.length === 0 ? (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-muted">Aucune queue.</p>
+      ) : (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {orderedSummaries.map((summary) => {
+            const problemCount = summary.failed_count + summary.dead_lettered_count;
+            const selected = summary.queue_name === selectedQueueName;
+            return (
+              <button
+                key={summary.queue_name}
+                type="button"
+                className={`flex min-w-[180px] flex-col gap-2 rounded-md border px-3 py-2 text-left ${
+                  selected ? "border-accent bg-accent-soft" : "border-border bg-white"
+                }`}
+                onClick={() => onSelect(summary.queue_name)}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm font-semibold">{summary.queue_name}</span>
+                  <span className="shrink-0 text-[11px] text-muted">{summary.item_count}</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <span className="rounded-md bg-ok-soft px-2 py-0.5 text-[11px] text-ok ring-1 ring-ok/15">
+                    prêt {summary.ready_count}
+                  </span>
+                  <span className="rounded-md bg-info-soft px-2 py-0.5 text-[11px] text-info ring-1 ring-info/15">
+                    actif {summary.running_count}
+                  </span>
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[11px] ring-1 ${
+                      problemCount > 0
+                        ? "bg-risk-soft text-risk ring-risk/15"
+                        : "bg-slate-100 text-muted ring-border"
+                    }`}
+                  >
+                    err {problemCount}
+                  </span>
+                </div>
+                {summary.next_run_after_at ? (
+                  <p className="truncate text-[11px] text-muted">
+                    prochain {formatDate(summary.next_run_after_at)}
+                  </p>
+                ) : null}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkQueuePanel({
   items,
+  summaries,
   loading,
+  summaryLoading,
   queueName,
   action,
   message,
@@ -1388,7 +1484,9 @@ function WorkQueuePanel({
   onReview
 }: {
   items: WorkQueueItem[];
+  summaries: WorkQueueSummary[];
   loading: boolean;
+  summaryLoading: boolean;
   queueName: string;
   action: WorkQueueAction;
   message: string;
@@ -1413,6 +1511,10 @@ function WorkQueuePanel({
   const recentItems = [...items]
     .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
     .slice(0, 4);
+  const normalizedQueueName = queueName.trim();
+  const selectedSummary =
+    summaries.find((summary) => summary.queue_name === normalizedQueueName) ?? null;
+  const visibleStatusCounts = selectedSummary?.status_counts ?? statusCounts;
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
@@ -1420,6 +1522,12 @@ function WorkQueuePanel({
         <h2 className="text-sm font-semibold">Queue durable</h2>
         <ListChecks className="h-4 w-4 text-accent" />
       </div>
+      <QueueSummaryStrip
+        summaries={summaries}
+        selectedQueueName={normalizedQueueName}
+        loading={summaryLoading}
+        onSelect={onQueueNameChange}
+      />
       <form className="flex flex-col gap-3 p-4" onSubmit={onSubmit}>
         <div className="grid grid-cols-2 rounded-md border border-border bg-slate-50 p-1">
           <button
@@ -1498,10 +1606,23 @@ function WorkQueuePanel({
               key={status}
               className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(status)}`}
             >
-              {status}: {statusCounts[status] ?? 0}
+              {status}: {visibleStatusCounts[status] ?? 0}
             </span>
           ))}
+          {selectedSummary ? (
+            <>
+              <span className="rounded-md bg-ok-soft px-2 py-1 text-xs text-ok ring-1 ring-ok/15">
+                prêts: {selectedSummary.ready_count}
+              </span>
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs text-muted ring-1 ring-border">
+                différés: {selectedSummary.delayed_count}
+              </span>
+            </>
+          ) : null}
         </div>
+        {selectedSummary?.latest_error ? (
+          <p className="mt-2 line-clamp-2 text-xs text-risk">{selectedSummary.latest_error}</p>
+        ) : null}
       </div>
       <div className="divide-y divide-border">
         {loading ? (
