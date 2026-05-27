@@ -158,6 +158,10 @@ OAuth/manual-link connectors can publish `oauth_authorization_url`, `connect_url
 `redirect_uri`, receives `/connectors/{service_id}/oauth/callback`, stores the received code in
 SecretVault, and completes the connector connection in state-service without persisting the raw code
 in state records.
+In `/app`, the connector form shows a readiness checklist for service, mode, SecretVault, scopes,
+and connection state. API-key and OAuth connection buttons stay disabled when SecretVault cannot
+store encrypted connector secrets, because the OAuth callback also writes the received code into the
+vault.
 
 Manual configuration that commonly matters before unattended use:
 

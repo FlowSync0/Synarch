@@ -148,6 +148,7 @@ type ConnectorJobFilter = (typeof connectorJobFilters)[number];
 type WorkerHealthFilter = WorkerHeartbeatStatus | "all" | "problem" | "stale";
 type ReadinessFilter = SystemReadinessStatus | "all" | "attention";
 type GlobalActionFilter = OperatorAction["kind"] | "all";
+type ConnectorReadinessTone = "ready" | "warning" | "blocked" | "neutral";
 type ConnectorJobActionVariables = {
   jobId: string;
   action: ConnectorJobAction;
@@ -436,6 +437,34 @@ function secretVaultBadges(item: SystemReadinessItem): string[] {
   ];
 }
 
+function connectorNeedsSecretVault(mode: ConnectorConnectionMode): boolean {
+  return mode === "api_key" || mode === "oauth";
+}
+
+function connectorSecretVaultDetail(mode: ConnectorConnectionMode): string {
+  if (mode === "api_key") {
+    return "Clé API stockée chiffrée; l'interface ne conserve pas la valeur.";
+  }
+  if (mode === "oauth") {
+    return "Code OAuth/callback stocké dans SecretVault après autorisation.";
+  }
+  return "Aucun secret requis pour ce mode.";
+}
+
+function connectorSetupUrl(
+  service: ServiceDefinition | null,
+  connection: ConnectorConnectionRecord | null,
+  mode: ConnectorConnectionMode
+): string | null {
+  if (connection?.setup_url) {
+    return connection.setup_url;
+  }
+  if (mode === "api_key") {
+    return manualConnectionUrl(service);
+  }
+  return null;
+}
+
 export default function SynarchAppPage() {
   const queryClient = useQueryClient();
   const [projectTitle, setProjectTitle] = useState("");
@@ -634,8 +663,8 @@ export default function SynarchAppPage() {
   const secretVaultReadiness =
     readinessQuery.data?.items.find((item) => item.id === "secret_vault") ?? null;
   const connectorSecretVaultReady = secretVaultCanStoreConnectorSecrets(secretVaultReadiness);
-  const apiKeyConnectorBlocked =
-    effectiveConnectorMode === "api_key" && !connectorSecretVaultReady;
+  const connectorSecretVaultBlocked =
+    connectorNeedsSecretVault(effectiveConnectorMode) && !connectorSecretVaultReady;
   const workQueueWorkerReadiness = readinessQuery.data?.items.find(
     (item) => item.id === "work_queue_worker"
   );
@@ -950,7 +979,7 @@ export default function SynarchAppPage() {
     if (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0) {
       return;
     }
-    if (apiKeyConnectorBlocked) {
+    if (connectorSecretVaultBlocked) {
       return;
     }
     connectMutation.mutate();
@@ -1392,10 +1421,11 @@ export default function SynarchAppPage() {
                   hasApiKey={apiKey.trim().length > 0}
                 />
 
-                {effectiveConnectorMode === "api_key" ? (
+                {connectorNeedsSecretVault(effectiveConnectorMode) ? (
                   <SecretVaultConnectorGate
                     item={secretVaultReadiness}
                     loading={readinessQuery.isLoading}
+                    mode={effectiveConnectorMode}
                   />
                 ) : null}
 
@@ -1438,6 +1468,16 @@ export default function SynarchAppPage() {
                   />
                 ) : null}
 
+                <ConnectorReadinessChecklist
+                  service={selectedService}
+                  connection={activeConnection}
+                  mode={effectiveConnectorMode}
+                  selectedScopes={selectedScopes}
+                  hasApiKey={apiKey.trim().length > 0}
+                  secretVaultReady={connectorSecretVaultReady}
+                  secretVaultLoading={readinessQuery.isLoading}
+                />
+
                 {serviceScopes.length > 0 ? (
                   <div className="flex flex-col gap-2">
                     <p className="text-xs font-semibold text-muted">Scopes</p>
@@ -1478,8 +1518,13 @@ export default function SynarchAppPage() {
                   disabled={
                     !selectedService ||
                     connectMutation.isPending ||
-                    apiKeyConnectorBlocked ||
+                    connectorSecretVaultBlocked ||
                     (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0)
+                  }
+                  title={
+                    connectorSecretVaultBlocked
+                      ? "SecretVault doit être prêt avant de connecter ce service."
+                      : undefined
                   }
                 >
                   <KeyRound className="h-4 w-4" />
@@ -2844,10 +2889,12 @@ function HumanAssistanceRequestCard({
 
 function SecretVaultConnectorGate({
   item,
-  loading
+  loading,
+  mode
 }: {
   item: SystemReadinessItem | null;
   loading: boolean;
+  mode: ConnectorConnectionMode;
 }) {
   if (loading) {
     return (
@@ -2874,11 +2921,11 @@ function SecretVaultConnectorGate({
         )}
         <div className="min-w-0">
           <p className="font-semibold">
-            {ready ? "SecretVault prêt pour les clés API" : "SecretVault requis"}
+            {ready ? "SecretVault prêt pour ce connecteur" : "SecretVault requis"}
           </p>
           <p className="mt-1">
             {ready
-              ? "Les nouvelles clés connecteur seront stockées chiffrées, sans valeur exposée dans state-service."
+              ? connectorSecretVaultDetail(mode)
               : item?.manual_action ??
                 "Attendre ou corriger SecretVault avant d'enregistrer une clé connecteur."}
           </p>
@@ -2895,6 +2942,146 @@ function SecretVaultConnectorGate({
             </div>
           ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function connectorReadinessToneClass(tone: ConnectorReadinessTone): string {
+  if (tone === "ready") {
+    return "border-ok/20 bg-ok-soft text-ok";
+  }
+  if (tone === "warning") {
+    return "border-warn/20 bg-warn-soft text-warn";
+  }
+  if (tone === "blocked") {
+    return "border-risk/20 bg-risk-soft text-risk";
+  }
+  return "border-border bg-slate-50 text-muted";
+}
+
+function connectorReadinessIcon(tone: ConnectorReadinessTone): ReactNode {
+  if (tone === "ready") {
+    return <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />;
+  }
+  if (tone === "warning" || tone === "blocked") {
+    return <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />;
+  }
+  return <CircleDot className="mt-0.5 h-4 w-4 shrink-0" />;
+}
+
+function ConnectorReadinessChecklist({
+  service,
+  connection,
+  mode,
+  selectedScopes,
+  hasApiKey,
+  secretVaultReady,
+  secretVaultLoading
+}: {
+  service: ServiceDefinition | null;
+  connection: ConnectorConnectionRecord | null;
+  mode: ConnectorConnectionMode;
+  selectedScopes: string[];
+  hasApiKey: boolean;
+  secretVaultReady: boolean;
+  secretVaultLoading: boolean;
+}) {
+  const setupUrl = connectorSetupUrl(service, connection, mode);
+  const scopesRequired = (service?.credential_scopes.length ?? 0) > 0;
+  const scopesReady = !scopesRequired || selectedScopes.length > 0;
+  const secretRequired = connectorNeedsSecretVault(mode);
+  const storedSecretReady = Boolean(connection?.secret_fingerprint);
+  const pendingSecretInput = mode === "api_key" && hasApiKey;
+  const secretReady = !secretRequired || (secretVaultReady && (mode === "oauth" || storedSecretReady || pendingSecretInput));
+  const connectionReady = connection?.status === "active";
+  const authorizationPending = connection?.status === "needs_oauth";
+
+  const items: {
+    label: string;
+    detail: string;
+    tone: ConnectorReadinessTone;
+  }[] = [
+    {
+      label: "Service",
+      detail: service ? `${service.name} / ${service.id}` : "Aucun connecteur sélectionné",
+      tone: service ? "ready" : "blocked"
+    },
+    {
+      label: "Mode",
+      detail: connectorModeDetails[mode].description,
+      tone: "ready"
+    },
+    {
+      label: "SecretVault",
+      detail: secretRequired
+        ? secretVaultLoading
+          ? "Vérification du vault en cours."
+          : secretReady
+            ? connectorSecretVaultDetail(mode)
+            : "SecretVault doit être prêt avant de connecter ce service."
+        : connectorSecretVaultDetail(mode),
+      tone: secretRequired
+        ? secretVaultLoading
+          ? "neutral"
+          : secretReady
+            ? "ready"
+            : "blocked"
+        : "ready"
+    },
+    {
+      label: "Scopes",
+      detail: scopesRequired ? selectedScopes.join(" / ") || "Aucun scope sélectionné" : "Aucun scope requis",
+      tone: scopesReady ? "ready" : "blocked"
+    },
+    {
+      label: "Connexion",
+      detail: connectionReady
+        ? `Active depuis ${formatDate(connection?.updated_at)}`
+        : authorizationPending
+          ? "Autorisation externe à finaliser."
+          : "À créer depuis ce formulaire.",
+      tone: connectionReady ? "ready" : authorizationPending ? "warning" : "neutral"
+    }
+  ];
+
+  return (
+    <div
+      data-testid="connector-readiness-checklist"
+      className="rounded-md border border-border bg-white"
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-ink">Connexion simplifiée</p>
+          <p className="truncate text-[11px] text-muted">
+            Préconditions visibles avant d&apos;exposer un service aux agents.
+          </p>
+        </div>
+        {setupUrl ? (
+          <a
+            href={setupUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border px-2 text-xs font-semibold text-ink hover:bg-slate-50"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            <span>{authorizationPending ? "Autoriser" : "Ouvrir"}</span>
+          </a>
+        ) : null}
+      </div>
+      <div className="grid gap-2 p-3">
+        {items.map((item) => (
+          <div
+            key={item.label}
+            className={`flex items-start gap-2 rounded-md border px-3 py-2 text-xs ${connectorReadinessToneClass(item.tone)}`}
+          >
+            {connectorReadinessIcon(item.tone)}
+            <div className="min-w-0">
+              <p className="font-semibold">{item.label}</p>
+              <p className="mt-0.5 line-clamp-2">{item.detail}</p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
