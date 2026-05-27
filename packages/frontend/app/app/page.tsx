@@ -119,6 +119,8 @@ const projectStatusClass: Record<string, string> = {
   active: "bg-ok-soft text-ok ring-ok/15",
   needs_oauth: "bg-warn-soft text-warn ring-warn/15",
   disabled: "bg-risk-soft text-risk ring-risk/15",
+  stale: "bg-warn-soft text-warn ring-warn/15",
+  healthy: "bg-ok-soft text-ok ring-ok/15",
   draft: "bg-slate-100 text-muted ring-border"
 };
 
@@ -134,6 +136,35 @@ function formatDate(value?: string | null): string {
     dateStyle: "short",
     timeStyle: "short"
   }).format(new Date(value));
+}
+
+function secondsSince(value?: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return null;
+  }
+  return Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) {
+    return "n/a";
+  }
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}j`;
 }
 
 function connectionByService(
@@ -374,6 +405,12 @@ export default function SynarchAppPage() {
     () => new Map((servicesQuery.data ?? []).map((service) => [service.id, service])),
     [servicesQuery.data]
   );
+  const workQueueWorkerReadiness = readinessQuery.data?.items.find(
+    (item) => item.id === "work_queue_worker"
+  );
+  const workerStaleAfterSeconds = workQueueWorkerReadiness
+    ? evidenceNumber(workQueueWorkerReadiness, "stale_after_seconds") || 120
+    : 120;
   const visibleCredentialRequests = useMemo(
     () => visibleCredentialAccessRequests(credentialRequestsQuery.data ?? [], effectiveProjectId),
     [credentialRequestsQuery.data, effectiveProjectId]
@@ -1241,6 +1278,7 @@ export default function SynarchAppPage() {
             <WorkerPanel
               heartbeats={workerHeartbeatsQuery.data ?? []}
               loading={workerHeartbeatsQuery.isLoading}
+              staleAfterSeconds={workerStaleAfterSeconds}
             />
 
             <WorkQueuePanel
@@ -2273,27 +2311,58 @@ function WebProviderPanel({
 
 function WorkerPanel({
   heartbeats,
-  loading
+  loading,
+  staleAfterSeconds
 }: {
   heartbeats: WorkerHeartbeatRecord[];
   loading: boolean;
+  staleAfterSeconds: number;
 }) {
   const recentHeartbeats = [...heartbeats]
     .sort((left, right) => right.last_seen_at.localeCompare(left.last_seen_at))
-    .slice(0, 4);
+    .slice(0, 5);
   const statusCounts = heartbeats.reduce<Record<string, number>>((counts, heartbeat) => {
     counts[heartbeat.status] = (counts[heartbeat.status] ?? 0) + 1;
     return counts;
   }, {});
+  const staleCount = heartbeats.filter((heartbeat) => {
+    const age = secondsSince(heartbeat.last_seen_at);
+    return (
+      !["failed", "stopped"].includes(heartbeat.status) &&
+      age !== null &&
+      age > staleAfterSeconds
+    );
+  }).length;
+  const failedCount = heartbeats.filter((heartbeat) =>
+    ["failed", "stopped"].includes(heartbeat.status)
+  ).length;
+  const healthyCount = heartbeats.filter((heartbeat) => {
+    const age = secondsSince(heartbeat.last_seen_at);
+    return (
+      !["failed", "stopped"].includes(heartbeat.status) &&
+      (age === null || age <= staleAfterSeconds)
+    );
+  }).length;
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Workers</h2>
-        <Activity className="h-4 w-4 text-accent" />
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Workers</h2>
+          <p className="text-xs text-muted">
+            stale après {formatDuration(staleAfterSeconds)}
+          </p>
+        </div>
+        <Activity className="h-4 w-4 shrink-0 text-accent" />
       </div>
       <div className="border-b border-border px-4 py-3">
         <div className="flex flex-wrap gap-2">
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(failedCount > 0 ? "failed" : "healthy")}`}>
+            actifs: {healthyCount}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(staleCount > 0 ? "stale" : "healthy")}`}>
+            stale: {staleCount}
+          </span>
           {["completed", "failed", "running", "idle", "stopped"].map((status) => (
             <span
               key={status}
@@ -2310,33 +2379,81 @@ function WorkerPanel({
         ) : recentHeartbeats.length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted">Aucun worker signalé.</p>
         ) : (
-          recentHeartbeats.map((heartbeat) => (
-            <div key={heartbeat.id} className="px-4 py-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-medium">{heartbeat.id}</p>
-                <span
-                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(heartbeat.status)}`}
-                >
-                  {heartbeat.status}
-                </span>
+          recentHeartbeats.map((heartbeat) => {
+            const ageSeconds = secondsSince(heartbeat.last_seen_at);
+            const isStale = ageSeconds !== null && ageSeconds > staleAfterSeconds;
+            const statusLabel =
+              heartbeat.status === "failed" || heartbeat.status === "stopped"
+                ? heartbeat.status
+                : isStale
+                  ? "stale"
+                  : heartbeat.status;
+            const tickSummary = workerTickSummary(heartbeat.last_tick_result);
+            return (
+              <div key={heartbeat.id} className="px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-medium">{heartbeat.id}</p>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(statusLabel)}`}
+                  >
+                    {statusLabel}
+                  </span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
+                  <span className="truncate">
+                    {heartbeat.worker_kind}
+                    {heartbeat.target ? ` / ${heartbeat.target}` : ""}
+                  </span>
+                  <span className="shrink-0">vu {formatDuration(ageSeconds)}</span>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    #{heartbeat.heartbeat_count}
+                  </span>
+                  {tickSummary.map((item) => (
+                    <span
+                      key={item}
+                      className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                {heartbeat.last_error ? (
+                  <p className="mt-1 line-clamp-2 text-xs text-risk">{heartbeat.last_error}</p>
+                ) : null}
+                <p className="mt-1 text-[11px] text-muted">
+                  {formatDate(heartbeat.last_seen_at)}
+                </p>
               </div>
-              <div className="mt-1 flex items-center justify-between gap-2 text-xs text-muted">
-                <span className="truncate">
-                  {heartbeat.worker_kind}
-                  {heartbeat.target ? ` / ${heartbeat.target}` : ""}
-                </span>
-                <span className="shrink-0">#{heartbeat.heartbeat_count}</span>
-              </div>
-              {heartbeat.last_error ? (
-                <p className="mt-1 line-clamp-2 text-xs text-risk">{heartbeat.last_error}</p>
-              ) : null}
-              <p className="mt-1 text-[11px] text-muted">{formatDate(heartbeat.last_seen_at)}</p>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
   );
+}
+
+function workerTickSummary(result: Record<string, unknown>): string[] {
+  const labels: string[] = [];
+  for (const [key, label] of [
+    ["tick", "tick"],
+    ["claimed_count", "claim"],
+    ["completed_count", "done"],
+    ["failed_count", "fail"],
+    ["recovered_item_count", "recover"],
+    ["dead_lettered_recovery_count", "dead"]
+  ] as const) {
+    const value = result[key];
+    if (typeof value === "number") {
+      labels.push(`${label} ${value}`);
+    }
+  }
+  const status = result.status;
+  if (typeof status === "string" && labels.length < 6) {
+    labels.unshift(status);
+  }
+  return labels.slice(0, 6);
 }
 
 function QueueSummaryStrip({
