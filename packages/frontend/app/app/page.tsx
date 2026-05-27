@@ -752,7 +752,7 @@ export default function SynarchAppPage() {
                 <ShieldCheck className="h-4 w-4 text-ok" />
               </div>
               <div className="divide-y divide-border">
-                {(readinessQuery.data?.items ?? []).slice(0, 6).map((item) => (
+                {(readinessQuery.data?.items ?? []).slice(0, 8).map((item) => (
                   <div key={item.id} className="flex items-start gap-3 px-4 py-3">
                     {item.status === "ready" ? (
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />

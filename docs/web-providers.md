@@ -21,8 +21,8 @@ permission, credential, event, and audit gates.
   status, risk level, and whether human approval is required before use.
 - Gateway `POST /connectors/{service_id}/connections` stores provider API keys in the configured
   SecretVault and writes only `secret_ref` plus a short fingerprint into state-service. The default
-  local vault is `.synarch/secrets`; production should swap this behind the same contract for a
-  platform secret manager.
+  local vault is `.synarch/secrets`; set `SECRET_VAULT_KEY` to encrypt new local vault entries at
+  rest, or swap the vault behind the same contract for a platform secret manager.
 - Local development needs the Python `playwright` package and Chromium browser bundle. Synarch pins
   Playwright in `packages/gateway/pyproject.toml` so the Python package and browser bundle stay
   reproducible. Docker installs Chromium automatically for the gateway image; outside Docker run
@@ -30,8 +30,8 @@ permission, credential, event, and audit gates.
 - `web.extract` supports:
   - `local_fetch`: no key, uses the existing public-HTTP fetch path and returns normalized markdown-like text.
   - `local_playwright`: no key, launches local Chromium through Playwright and extracts browser-rendered HTML text.
-  - `firecrawl`: requires `FIRECRAWL_API_KEY`, calls Firecrawl `/v2/scrape`, and returns markdown.
-  - `browserless`: requires `BROWSERLESS_API_KEY`, calls Browserless `/content`, and returns rendered HTML text.
+  - `firecrawl`: uses an active `connector-firecrawl` SecretVault connection or `FIRECRAWL_API_KEY`, calls Firecrawl `/v2/scrape`, and returns markdown.
+  - `browserless`: uses an active `connector-browserless` SecretVault connection or `BROWSERLESS_API_KEY`, calls Browserless `/content`, and returns rendered HTML text.
 - Service registry defaults include:
   - `connector-web-local` with `web_provider=local_fetch`
   - `connector-web-browser-local` with `web_provider=local_playwright`

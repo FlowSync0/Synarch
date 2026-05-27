@@ -1,3 +1,5 @@
+import base64
+import binascii
 import hashlib
 import importlib
 import importlib.util
@@ -16,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlsplit, urlu
 from uuid import uuid4
 
 import httpx
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
@@ -152,10 +155,17 @@ class SecretVault(Protocol):
         actor_id: str,
     ) -> SecretReference: ...
 
+    def load_connector_secret(self, secret_ref: str) -> str: ...
+
 
 class LocalFileSecretVault:
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, encryption_key: str | None = None) -> None:
         self.root = Path(root)
+        self.encryption_key = encryption_key
+
+    @property
+    def encryption_enabled(self) -> bool:
+        return self.encryption_key is not None and bool(self.encryption_key.strip())
 
     def store_connector_secret(
         self,
@@ -176,10 +186,20 @@ class LocalFileSecretVault:
         path = directory / f"{fingerprint}.json"
         payload = {
             "service_id": service_id,
-            "secret_value": secret_value,
             "created_by": actor_id,
             "created_at": datetime.now(UTC).isoformat(),
         }
+        if self.encryption_enabled:
+            payload.update(
+                {
+                    "encoding": "fernet",
+                    "ciphertext": self.fernet().encrypt(secret_value.encode("utf-8")).decode(
+                        "utf-8"
+                    ),
+                }
+            )
+        else:
+            payload.update({"encoding": "plaintext", "secret_value": secret_value})
         path.write_text(json.dumps(payload), encoding="utf-8")
         path.chmod(0o600)
         return SecretReference(
@@ -187,6 +207,115 @@ class LocalFileSecretVault:
             vault="local_file",
             fingerprint=fingerprint,
         )
+
+    def load_connector_secret(self, secret_ref: str) -> str:
+        path = self.path_from_ref(secret_ref)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError as error:
+            raise HTTPException(status_code=404, detail="Secret reference not found") from error
+        except json.JSONDecodeError as error:
+            raise HTTPException(
+                status_code=500,
+                detail="Secret reference is not valid JSON",
+            ) from error
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=500, detail="Secret reference payload is invalid")
+
+        encoding = payload.get("encoding")
+        if encoding == "fernet":
+            ciphertext = payload.get("ciphertext")
+            if not isinstance(ciphertext, str) or not ciphertext:
+                raise HTTPException(status_code=500, detail="Encrypted secret payload is invalid")
+            try:
+                return self.fernet().decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+            except InvalidToken as error:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Secret reference cannot be decrypted with the configured key",
+                ) from error
+
+        secret_value = payload.get("secret_value")
+        if isinstance(secret_value, str) and secret_value:
+            return secret_value
+        raise HTTPException(status_code=500, detail="Secret reference payload has no secret value")
+
+    def path_from_ref(self, secret_ref: str) -> Path:
+        parsed = urlparse(secret_ref)
+        parts = [part for part in parsed.path.split("/") if part]
+        if parsed.scheme != "local-file" or parsed.netloc != "connectors" or len(parts) != 2:
+            raise HTTPException(status_code=400, detail="Unsupported secret reference")
+        service_id = safe_secret_path_component(parts[0])
+        fingerprint = safe_secret_path_component(parts[1])
+        root = self.root.resolve()
+        path = (root / "connectors" / service_id / f"{fingerprint}.json").resolve()
+        if root not in path.parents:
+            raise HTTPException(status_code=400, detail="Secret reference escapes vault root")
+        return path
+
+    def fernet(self) -> Fernet:
+        if not self.encryption_enabled:
+            raise HTTPException(
+                status_code=500,
+                detail="Secret vault encryption key is not configured",
+            )
+        return Fernet(secret_vault_fernet_key(self.encryption_key or ""))
+
+    def status(self) -> dict[str, object]:
+        writable = True
+        error: str | None = None
+        try:
+            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            probe_path = self.root / ".write-probe"
+            probe_path.write_text("ok", encoding="utf-8")
+            probe_path.unlink(missing_ok=True)
+        except OSError as write_error:
+            writable = False
+            error = str(write_error)
+
+        encrypted_count = 0
+        plaintext_count = 0
+        total_count = 0
+        connector_root = self.root / "connectors"
+        if connector_root.exists():
+            for path in connector_root.glob("*/*.json"):
+                total_count += 1
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, dict) and payload.get("encoding") == "fernet":
+                    encrypted_count += 1
+                if isinstance(payload, dict) and "secret_value" in payload:
+                    plaintext_count += 1
+
+        return {
+            "backend": "local_file",
+            "storage_path": str(self.root),
+            "writable": writable,
+            "encryption_enabled": self.encryption_enabled,
+            "secret_count": total_count,
+            "encrypted_secret_count": encrypted_count,
+            "plaintext_secret_count": plaintext_count,
+            "error": error,
+        }
+
+
+def safe_secret_path_component(value: str) -> str:
+    if not value or any(character in value for character in {"/", "\\", ".", "\x00"}):
+        raise HTTPException(status_code=400, detail="Invalid secret reference path")
+    return value
+
+
+def secret_vault_fernet_key(secret: str) -> bytes:
+    candidate = secret.encode("utf-8")
+    try:
+        decoded = base64.urlsafe_b64decode(candidate)
+    except (ValueError, binascii.Error):
+        decoded = b""
+    if len(decoded) == 32:
+        return candidate
+    return base64.urlsafe_b64encode(hashlib.sha256(candidate).digest())
 
 
 class ConnectorConnectRequest(BaseModel):
@@ -286,6 +415,68 @@ class WebProviderManifest:
         }
 
 
+def web_provider_response(
+    manifest: WebProviderManifest,
+    state_client: StateClient | None,
+) -> dict[str, object]:
+    response = manifest.as_response()
+    connector_configured = (
+        web_provider_has_active_connector_secret(manifest.provider_id, state_client)
+        if manifest.requires_api_key
+        else False
+    )
+    if manifest.requires_api_key and connector_configured:
+        response["configured"] = True
+    response["configured_by"] = web_provider_configured_by(
+        manifest,
+        env_configured=bool(manifest.api_key_env_var and os.getenv(manifest.api_key_env_var)),
+        connector_configured=connector_configured,
+    )
+    return response
+
+
+def web_provider_configured_by(
+    manifest: WebProviderManifest,
+    *,
+    env_configured: bool,
+    connector_configured: bool,
+) -> list[str]:
+    configured_by: list[str] = []
+    if not manifest.requires_api_key:
+        configured_by.append("no_key")
+    if env_configured:
+        configured_by.append("env")
+    if connector_configured:
+        configured_by.append("connector_secret")
+    if manifest.python_module is not None and module_is_available(manifest.python_module):
+        configured_by.append("python_module")
+    return configured_by
+
+
+def web_provider_has_active_connector_secret(
+    provider_id: str,
+    state_client: StateClient | None,
+) -> bool:
+    if state_client is None:
+        return False
+    try:
+        service_ids = [
+            service.id
+            for service in state_client.list_services(enabled=True)
+            if service.metadata.get("web_provider") == provider_id
+        ]
+        return any(
+            connection.secret_ref is not None
+            for service_id in service_ids
+            for connection in state_client.list_connector_connections(
+                service_id=service_id,
+                status="active",
+            )
+        )
+    except (StateServiceRequestError, StateServiceUnavailable):
+        return False
+
+
 class Settings(BaseSettings):
     control_plane_url: str = "http://localhost:8010"
     state_service_url: str = "http://localhost:8020"
@@ -321,6 +512,7 @@ class Settings(BaseSettings):
     web_extract_review_evidence_max_bytes: int = 4_096
     service_health_timeout_seconds: float = 3.0
     secret_vault_dir: str = ".synarch/secrets"
+    secret_vault_key_env_var: str = "SECRET_VAULT_KEY"
     gateway_public_url: str | None = None
 
 
@@ -353,7 +545,19 @@ def get_state_client() -> StateClient:
 
 
 def get_secret_vault() -> SecretVault:
-    return LocalFileSecretVault(settings.secret_vault_dir)
+    return LocalFileSecretVault(
+        settings.secret_vault_dir,
+        encryption_key=os.getenv(settings.secret_vault_key_env_var),
+    )
+
+
+def secret_vault_status_payload() -> dict[str, object]:
+    vault = get_secret_vault()
+    if isinstance(vault, LocalFileSecretVault):
+        payload = vault.status()
+        payload["encryption_key_env_var"] = settings.secret_vault_key_env_var
+        return payload
+    return {"backend": "custom", "writable": None, "encryption_enabled": None}
 
 
 def metadata_string(service: ServiceDefinition, key: str) -> str | None:
@@ -944,9 +1148,14 @@ def call_tool(
 @app.get("/web/providers")
 def list_web_providers() -> list[dict[str, object]]:
     return [
-        manifest.as_response()
+        web_provider_response(manifest, None)
         for manifest in sorted(WEB_PROVIDER_MANIFESTS.values(), key=lambda item: item.provider_id)
     ]
+
+
+@app.get("/secret-vault/status")
+def get_secret_vault_status() -> dict[str, object]:
+    return secret_vault_status_payload()
 
 
 @app.post(
@@ -2563,7 +2772,8 @@ def build_system_readiness_report(state_client: StateClient) -> SystemReadinessR
         ),
         seed_services_readiness_item(services),
         ai_runtime_readiness_item(state_client),
-        web_provider_readiness_item(),
+        secret_vault_readiness_item(),
+        web_provider_readiness_item(state_client),
         worker_readiness_item(
             scheduler_tick_count=len(scheduler_ticks),
             connector_tick_count=len(connector_ticks),
@@ -2704,7 +2914,52 @@ def ai_runtime_readiness_item(state_client: StateClient) -> SystemReadinessItem:
     )
 
 
-def web_provider_readiness_item() -> SystemReadinessItem:
+def secret_vault_readiness_item() -> SystemReadinessItem:
+    status = secret_vault_status_payload()
+    if status.get("writable") is not True:
+        return readiness_item(
+            "secret_vault",
+            "security",
+            "SecretVault",
+            "blocked",
+            "SecretVault storage is not writable.",
+            "Fix SECRET_VAULT_DIR permissions or mount a writable secret volume.",
+            status,
+        )
+    if status.get("encryption_enabled") is not True:
+        return readiness_item(
+            "secret_vault",
+            "security",
+            "SecretVault",
+            "warning",
+            "Local SecretVault is writable but stores new secrets without encryption at rest.",
+            (
+                f"Set {settings.secret_vault_key_env_var} before connecting production "
+                "provider credentials."
+            ),
+            status,
+        )
+    if status.get("plaintext_secret_count", 0) not in {0, None}:
+        return readiness_item(
+            "secret_vault",
+            "security",
+            "SecretVault",
+            "warning",
+            "SecretVault encryption is enabled but older plaintext entries still exist.",
+            "Rotate or reconnect those provider credentials so future entries are encrypted.",
+            status,
+        )
+    return readiness_item(
+        "secret_vault",
+        "security",
+        "SecretVault",
+        "ready",
+        "SecretVault is writable and encrypts new local connector secrets.",
+        evidence=status,
+    )
+
+
+def web_provider_readiness_item(state_client: StateClient) -> SystemReadinessItem:
     default_provider = settings.web_extract_default_provider
     supported_provider_ids = {"local_fetch", "local_playwright", "firecrawl", "browserless"}
     if default_provider not in supported_provider_ids:
@@ -2724,10 +2979,10 @@ def web_provider_readiness_item() -> SystemReadinessItem:
             },
         )
     default_manifest = WEB_PROVIDER_MANIFESTS[default_provider]
-    default_provider_status = default_manifest.as_response()
+    default_provider_status = web_provider_response(default_manifest, state_client)
     configured_provider_ids: list[str] = []
     for manifest in WEB_PROVIDER_MANIFESTS.values():
-        provider = manifest.as_response()
+        provider = web_provider_response(manifest, state_client)
         provider_id = provider["provider_id"]
         if (
             isinstance(provider_id, str)
@@ -3223,9 +3478,21 @@ def execute_web_extract_tool(
     if provider == "local_playwright":
         return extract_with_local_playwright(url, max_bytes=max_bytes)
     if provider == "firecrawl":
-        return extract_with_firecrawl(url, max_bytes=max_bytes)
+        api_key = web_provider_api_key(
+            "firecrawl",
+            service_id=tool_call.service_id,
+            state_client=state_client,
+            env_var=settings.firecrawl_api_key_env_var,
+        )
+        return extract_with_firecrawl(url, max_bytes=max_bytes, api_key=api_key)
     if provider == "browserless":
-        return extract_with_browserless(url, max_bytes=max_bytes)
+        api_key = web_provider_api_key(
+            "browserless",
+            service_id=tool_call.service_id,
+            state_client=state_client,
+            env_var=settings.browserless_api_key_env_var,
+        )
+        return extract_with_browserless(url, max_bytes=max_bytes, api_key=api_key)
     raise HTTPException(status_code=400, detail=f"Unsupported web.extract provider: {provider}")
 
 
@@ -3527,14 +3794,64 @@ def fetch_with_local_playwright(url: str) -> dict[str, object]:
         raise HTTPException(status_code=502, detail="local_playwright request failed") from error
 
 
-def extract_with_firecrawl(url: str, *, max_bytes: int) -> dict[str, object]:
-    api_key = os.getenv(settings.firecrawl_api_key_env_var)
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail=f"{settings.firecrawl_api_key_env_var} is not configured",
-        )
+def web_provider_api_key(
+    provider: WebExtractionProvider,
+    *,
+    service_id: str | None,
+    state_client: StateClient,
+    env_var: str,
+) -> str:
+    secret = web_provider_connector_secret(
+        provider,
+        service_id=service_id,
+        state_client=state_client,
+    )
+    if secret:
+        return secret
+    env_secret = os.getenv(env_var)
+    if env_secret:
+        return env_secret
+    raise HTTPException(
+        status_code=503,
+        detail=f"{env_var} or active connector secret is not configured",
+    )
 
+
+def web_provider_connector_secret(
+    provider: WebExtractionProvider,
+    *,
+    service_id: str | None,
+    state_client: StateClient,
+) -> str | None:
+    if service_id is None:
+        return None
+    service = service_definition_by_id(state_client, service_id)
+    if service.metadata.get("web_provider") != provider:
+        return None
+    connections = state_client.list_connector_connections(
+        service_id=service_id,
+        status="active",
+    )
+    secret_refs = [
+        connection.secret_ref
+        for connection in sorted(
+            connections,
+            key=lambda connection: connection.updated_at,
+            reverse=True,
+        )
+        if connection.secret_ref
+    ]
+    if not secret_refs:
+        return None
+    return get_secret_vault().load_connector_secret(secret_refs[0])
+
+
+def extract_with_firecrawl(
+    url: str,
+    *,
+    max_bytes: int,
+    api_key: str,
+) -> dict[str, object]:
     try:
         response = httpx.post(
             f"{settings.firecrawl_base_url.rstrip('/')}/v2/scrape",
@@ -3587,14 +3904,12 @@ def extract_with_firecrawl(url: str, *, max_bytes: int) -> dict[str, object]:
     }
 
 
-def extract_with_browserless(url: str, *, max_bytes: int) -> dict[str, object]:
-    api_key = os.getenv(settings.browserless_api_key_env_var)
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail=f"{settings.browserless_api_key_env_var} is not configured",
-        )
-
+def extract_with_browserless(
+    url: str,
+    *,
+    max_bytes: int,
+    api_key: str,
+) -> dict[str, object]:
     try:
         response = httpx.post(
             f"{settings.browserless_base_url.rstrip('/')}/content",

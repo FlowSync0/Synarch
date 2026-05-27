@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import synarch_gateway.main as gateway_main
 from synarch_gateway.main import (
+    LocalFileSecretVault,
     app,
     get_control_plane_client,
     get_memory_client,
@@ -23,6 +25,7 @@ from synarch_gateway.task_runner import (
     next_ready_task,
 )
 from synarch_models import (
+    ActorType,
     AgentDefinition,
     AgentLifecycleRequest,
     AgentProjectAssignment,
@@ -112,6 +115,33 @@ class FakeSecretVault:
             vault="fake",
             fingerprint="fp_test",
         )
+
+    def load_connector_secret(self, secret_ref: str) -> str:
+        for stored in reversed(self.stored):
+            if secret_ref == f"fake://connectors/{stored['service_id']}/fp_test":
+                return stored["secret_value"]
+        raise AssertionError(f"Unexpected secret ref: {secret_ref}")
+
+
+def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: Path) -> None:
+    vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
+
+    reference = vault.store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-live-secret",
+        actor_id="local-user",
+    )
+
+    secret_files = list((tmp_path / "connectors" / "connector-firecrawl").glob("*.json"))
+    assert len(secret_files) == 1
+    stored_payload = secret_files[0].read_text(encoding="utf-8")
+    assert "fc-live-secret" not in stored_payload
+    assert '"ciphertext"' in stored_payload
+    assert vault.load_connector_secret(reference.ref) == "fc-live-secret"
+    status = vault.status()
+    assert status["encryption_enabled"] is True
+    assert status["encrypted_secret_count"] == 1
+    assert status["plaintext_secret_count"] == 0
 
 
 class FakeStateClient:
@@ -2670,7 +2700,10 @@ def test_service_health_check_filters_agent_services_and_records_trace(
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_service_health"
 
 
-def test_system_readiness_reports_manual_configuration_and_actions() -> None:
+def test_system_readiness_reports_manual_configuration_and_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("SECRET_VAULT_KEY", raising=False)
     state_client = FakeStateClient()
     state_client.projects.append(
         ProjectRecord(
@@ -2759,6 +2792,9 @@ def test_system_readiness_reports_manual_configuration_and_actions() -> None:
     assert items["seed_services"]["status"] == "ready"
     assert items["ai_runtime"]["status"] == "warning"
     assert "OPENROUTER_API_KEY" in items["ai_runtime"]["manual_action"]
+    assert items["secret_vault"]["status"] == "warning"
+    assert items["secret_vault"]["evidence"]["encryption_enabled"] is False
+    assert "SECRET_VAULT_KEY" in items["secret_vault"]["manual_action"]
     assert items["worker_loops"]["status"] == "warning"
     assert "--profile worker" in items["worker_loops"]["manual_action"]
     assert items["operator_actions"]["status"] == "warning"
@@ -3742,7 +3778,9 @@ def test_web_extract_firecrawl_requires_api_key(monkeypatch: pytest.MonkeyPatch)
         app.dependency_overrides.clear()
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "FIRECRAWL_API_KEY is not configured"
+    assert response.json()["detail"] == (
+        "FIRECRAWL_API_KEY or active connector secret is not configured"
+    )
 
 
 def test_tool_gate_executes_web_extract_firecrawl_provider(
@@ -3835,6 +3873,105 @@ def test_tool_gate_executes_web_extract_firecrawl_provider(
     assert state_client.audit_logs[0].action == "tool.allowed"
 
 
+def test_tool_gate_executes_web_extract_firecrawl_with_connector_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    secret_vault = FakeSecretVault()
+    secret_ref = secret_vault.store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="firecrawl-vault-key",
+        actor_id="local-user",
+    )
+    monkeypatch.setattr(gateway_main, "get_secret_vault", lambda: secret_vault)
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            allowed_divisions=["ops-sourcing"],
+            metadata={"web_provider": "firecrawl"},
+        )
+    )
+    state_client.connector_connections.append(
+        ConnectorConnectionRecord(
+            service_id="connector-firecrawl",
+            mode="api_key",
+            status="active",
+            credential_scopes=["firecrawl:api_key"],
+            secret_ref=secret_ref.ref,
+            secret_fingerprint=secret_ref.fingerprint,
+            connected_by_type=ActorType.user,
+            connected_by_id="local-user",
+            rationale="Connected from Synarch app.",
+        )
+    )
+    control_plane = FakeControlPlaneClient(
+        {
+            "agent-ops-sourcing": LocalWorldView(
+                agent_id="agent-ops-sourcing",
+                role="Ops sourcing",
+                division="ops-sourcing",
+                permissions=PermissionBundle(allowed_tools=["web.extract"], denied_tools=[]),
+                available_services=["connector-firecrawl"],
+                available_service_capabilities={"connector-firecrawl": ["web.extract"]},
+                available_service_credential_scopes={
+                    "connector-firecrawl": ["firecrawl:api_key"]
+                },
+            )
+        }
+    )
+
+    def fake_post(
+        url: str,
+        *,
+        headers: dict[str, str],
+        json: dict[str, object],
+        timeout: float,
+    ) -> httpx.Response:
+        assert headers["Authorization"] == "Bearer firecrawl-vault-key"
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "markdown": "Vault-backed extraction.",
+                    "metadata": {"title": "Vault"},
+                    "statusCode": 200,
+                }
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_control_plane_client] = lambda: control_plane
+
+    try:
+        response = TestClient(app).post(
+            "/tools/call",
+            headers={"X-Synarch-Trace-Id": "trace_web_extract_firecrawl_vault"},
+            json={
+                "agent_id": "agent-ops-sourcing",
+                "tool_name": "web.extract",
+                "service_id": "connector-firecrawl",
+                "project_id": "project_sourcing",
+                "reason": "Extract supplier page content with Firecrawl.",
+                "arguments": {"url": "https://example.com"},
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["output"]["provider"] == "firecrawl"
+    assert payload["output"]["markdown"] == "Vault-backed extraction."
+    assert "firecrawl-vault-key" not in str(payload)
+
+
 def test_web_extract_browserless_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("BROWSERLESS_API_KEY", raising=False)
     state_client = FakeStateClient()
@@ -3883,7 +4020,9 @@ def test_web_extract_browserless_requires_api_key(monkeypatch: pytest.MonkeyPatc
         app.dependency_overrides.clear()
 
     assert response.status_code == 503
-    assert response.json()["detail"] == "BROWSERLESS_API_KEY is not configured"
+    assert response.json()["detail"] == (
+        "BROWSERLESS_API_KEY or active connector secret is not configured"
+    )
 
 
 def test_tool_gate_executes_web_extract_browserless_provider(

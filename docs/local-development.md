@@ -131,8 +131,11 @@ Connector setup now goes through Gateway `POST /connectors/{service_id}/connecti
 written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
 fingerprint. The default local vault path is `.synarch/secrets`; override it with `SECRET_VAULT_DIR`.
 The path is git-ignored. Docker mounts this path through the `synarch_secrets` volume so connector
-keys survive container recreation. Production deployments should replace the local file vault with
-Vault/KMS or the platform secret manager behind the same `secret_ref` contract.
+keys survive container recreation. Set `SECRET_VAULT_KEY` before storing production credentials so
+new local vault entries are encrypted at rest; without it, Gateway reports a SecretVault readiness
+warning and stores local development secrets as chmod `0600` JSON. Production deployments can still
+replace the local file vault with Vault/KMS or the platform secret manager behind the same
+`secret_ref` contract.
 OAuth/manual-link connectors can publish `oauth_authorization_url`, `connect_url`, or
 `manual_connection_url` in service metadata. Gateway generates a `setup_url` with `state` and
 `redirect_uri`, receives `/connectors/{service_id}/oauth/callback`, stores the received code in
@@ -147,7 +150,8 @@ Manual configuration that commonly matters before unattended use:
 - `docker compose --profile worker up -d` when scheduler, connector, memory compaction, and
   embedding workers must run continuously. Use `docker compose --profile worker up -d
   work-queue-worker` when a generic durable queue also needs to be consumed.
-- `FIRECRAWL_API_KEY` or `BROWSERLESS_API_KEY` only when local web extraction is not enough for
+- `FIRECRAWL_API_KEY` or `BROWSERLESS_API_KEY`, or an active Synarch connector connection backed by
+  SecretVault, only when local web extraction is not enough for
   JavaScript, anti-bot, or CAPTCHA-heavy pages.
 - Dashboard review queues for credential grants, human assistance, blocked connector jobs, and
   tasks in review.
