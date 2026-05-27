@@ -65,11 +65,26 @@ import {
   type WorkerHeartbeatRecord,
   type WorkQueueItem,
   type WorkQueueRecoveryResult,
+  type WorkQueueStatus,
   type WorkQueueSummary
 } from "../../lib/state-service-api";
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
 const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
+const workQueueStatusOptions: WorkQueueStatus[] = [
+  "queued",
+  "running",
+  "failed",
+  "dead_lettered",
+  "completed"
+];
+const workQueueStatusRank: Record<WorkQueueStatus, number> = {
+  failed: 0,
+  dead_lettered: 1,
+  running: 2,
+  queued: 3,
+  completed: 4
+};
 const connectorModeDetails: Record<
   ConnectorConnectionMode,
   { label: string; description: string; submitLabel: string }
@@ -91,6 +106,7 @@ const connectorModeDetails: Record<
   }
 };
 type WorkQueueAction = "project_reminder" | "log";
+type WorkQueueStatusFilter = WorkQueueStatus | "all";
 type TaskReviewMutationVariables = {
   taskId: string;
   decision: { action: "retry" | "cancel" | "update" };
@@ -391,6 +407,8 @@ export default function SynarchAppPage() {
   const [apiKey, setApiKey] = useState("");
   const [workQueueName, setWorkQueueName] = useState("reminders");
   const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
+  const [workQueueStatusFilter, setWorkQueueStatusFilter] =
+    useState<WorkQueueStatusFilter>("all");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
   const [workQueueRecoveryResult, setWorkQueueRecoveryResult] =
@@ -1464,6 +1482,7 @@ export default function SynarchAppPage() {
               loading={workQueueQuery.isLoading}
               summaryLoading={workQueueSummaryQuery.isLoading}
               queueName={workQueueName}
+              statusFilter={workQueueStatusFilter}
               action={workQueueAction}
               message={workQueueMessage}
               runAfter={workQueueRunAfter}
@@ -1477,6 +1496,7 @@ export default function SynarchAppPage() {
               recoveryError={recoverWorkQueueLeasesMutation.error}
               recoveryResult={workQueueRecoveryResult}
               onQueueNameChange={setWorkQueueName}
+              onStatusFilterChange={setWorkQueueStatusFilter}
               onActionChange={setWorkQueueAction}
               onMessageChange={setWorkQueueMessage}
               onRunAfterChange={setWorkQueueRunAfter}
@@ -2983,6 +3003,30 @@ function workerTickSummary(result: Record<string, unknown>): string[] {
   return labels.slice(0, 6);
 }
 
+function workQueueItemReady(item: WorkQueueItem): boolean {
+  if (item.status !== "queued") {
+    return false;
+  }
+  if (!item.run_after_at) {
+    return true;
+  }
+  return new Date(item.run_after_at).getTime() <= Date.now();
+}
+
+function compareWorkQueueItems(left: WorkQueueItem, right: WorkQueueItem): number {
+  const rankDelta = workQueueStatusRank[left.status] - workQueueStatusRank[right.status];
+  if (rankDelta !== 0) {
+    return rankDelta;
+  }
+  if (left.status === "queued" && workQueueItemReady(left) !== workQueueItemReady(right)) {
+    return workQueueItemReady(left) ? -1 : 1;
+  }
+  if (left.priority !== right.priority) {
+    return left.priority - right.priority;
+  }
+  return right.updated_at.localeCompare(left.updated_at);
+}
+
 function QueueSummaryStrip({
   summaries,
   selectedQueueName,
@@ -3071,6 +3115,7 @@ function WorkQueuePanel({
   loading,
   summaryLoading,
   queueName,
+  statusFilter,
   action,
   message,
   runAfter,
@@ -3084,6 +3129,7 @@ function WorkQueuePanel({
   recoveryError,
   recoveryResult,
   onQueueNameChange,
+  onStatusFilterChange,
   onActionChange,
   onMessageChange,
   onRunAfterChange,
@@ -3096,6 +3142,7 @@ function WorkQueuePanel({
   loading: boolean;
   summaryLoading: boolean;
   queueName: string;
+  statusFilter: WorkQueueStatusFilter;
   action: WorkQueueAction;
   message: string;
   runAfter: string;
@@ -3109,6 +3156,7 @@ function WorkQueuePanel({
   recoveryError: unknown;
   recoveryResult: WorkQueueRecoveryResult | null;
   onQueueNameChange: (value: string) => void;
+  onStatusFilterChange: (value: WorkQueueStatusFilter) => void;
   onActionChange: (value: WorkQueueAction) => void;
   onMessageChange: (value: string) => void;
   onRunAfterChange: (value: string) => void;
@@ -3120,13 +3168,16 @@ function WorkQueuePanel({
     counts[item.status] = (counts[item.status] ?? 0) + 1;
     return counts;
   }, {});
-  const recentItems = [...items]
-    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-    .slice(0, 4);
   const normalizedQueueName = queueName.trim();
   const selectedSummary =
     summaries.find((summary) => summary.queue_name === normalizedQueueName) ?? null;
   const visibleStatusCounts = selectedSummary?.status_counts ?? statusCounts;
+  const filteredItems =
+    statusFilter === "all" ? items : items.filter((item) => item.status === statusFilter);
+  const visibleItems = [...filteredItems].sort(compareWorkQueueItems).slice(0, 8);
+  const problemCount =
+    (visibleStatusCounts.failed ?? 0) + (visibleStatusCounts.dead_lettered ?? 0);
+  const activeCount = (visibleStatusCounts.queued ?? 0) + (visibleStatusCounts.running ?? 0);
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
@@ -3238,15 +3289,13 @@ function WorkQueuePanel({
         ) : null}
       </form>
       <div className="border-t border-border px-4 py-3">
-        <div className="flex flex-wrap gap-2">
-          {["queued", "running", "completed", "failed", "dead_lettered"].map((status) => (
-            <span
-              key={status}
-              className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(status)}`}
-            >
-              {status}: {visibleStatusCounts[status] ?? 0}
-            </span>
-          ))}
+        <div className="mb-3 flex flex-wrap gap-2">
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(problemCount > 0 ? "failed" : "healthy")}`}>
+            incidents: {problemCount}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(activeCount > 0 ? "running" : "healthy")}`}>
+            actifs: {activeCount}
+          </span>
           {selectedSummary ? (
             <>
               <span className="rounded-md bg-ok-soft px-2 py-1 text-xs text-ok ring-1 ring-ok/15">
@@ -3258,6 +3307,29 @@ function WorkQueuePanel({
             </>
           ) : null}
         </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(["all", ...workQueueStatusOptions] as WorkQueueStatusFilter[]).map((status) => {
+            const selected = statusFilter === status;
+            const count =
+              status === "all"
+                ? items.length
+                : (visibleStatusCounts[status] ?? 0);
+            return (
+              <button
+                key={status}
+                type="button"
+                className={`h-8 shrink-0 rounded-md border px-2 text-xs font-semibold ${
+                  selected
+                    ? "border-accent bg-accent-soft text-accent"
+                    : "border-border bg-white text-muted hover:bg-slate-50"
+                }`}
+                onClick={() => onStatusFilterChange(status)}
+              >
+                {status}: {count}
+              </button>
+            );
+          })}
+        </div>
         {selectedSummary?.latest_error ? (
           <p className="mt-2 line-clamp-2 text-xs text-risk">{selectedSummary.latest_error}</p>
         ) : null}
@@ -3265,12 +3337,15 @@ function WorkQueuePanel({
       <div className="divide-y divide-border">
         {loading ? (
           <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
-        ) : recentItems.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-muted">Aucun item.</p>
+        ) : visibleItems.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">
+            {statusFilter === "all" ? "Aucun item." : "Aucun item pour ce filtre."}
+          </p>
         ) : (
-          recentItems.map((item) => {
+          visibleItems.map((item) => {
             const canRetry = item.status === "failed" || item.status === "dead_lettered";
             const canDeadLetter = item.status !== "completed" && item.status !== "dead_lettered";
+            const ready = workQueueItemReady(item);
             return (
               <div key={item.id} className="px-4 py-3">
                 <div className="flex items-center justify-between gap-2">
@@ -3284,6 +3359,51 @@ function WorkQueuePanel({
                 <p className="mt-1 truncate text-xs text-muted">
                   {workQueuePayloadLabel(item.payload)}
                 </p>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    priorité {item.priority}
+                  </span>
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    essais {item.attempt_count}/{item.max_attempts}
+                  </span>
+                  {item.status === "queued" ? (
+                    <span
+                      className={`rounded-md px-2 py-1 text-[11px] ring-1 ${
+                        ready
+                          ? "bg-ok-soft text-ok ring-ok/15"
+                          : "bg-info-soft text-info ring-info/15"
+                      }`}
+                    >
+                      {ready ? "prêt" : "différé"}
+                    </span>
+                  ) : null}
+                  {item.lease_owner_id ? (
+                    <span className="rounded-md bg-warn-soft px-2 py-1 text-[11px] text-warn ring-1 ring-warn/15">
+                      lease {item.lease_owner_id}
+                    </span>
+                  ) : null}
+                </div>
+                {item.last_error ? (
+                  <p className="mt-2 line-clamp-2 rounded-md bg-risk-soft px-2 py-1 text-xs text-risk">
+                    {item.last_error}
+                  </p>
+                ) : null}
+                <details className="mt-2 rounded-md border border-border bg-slate-50 px-2 py-2 text-xs text-muted">
+                  <summary className="cursor-pointer font-semibold text-ink">
+                    Détails exécution
+                  </summary>
+                  <div className="mt-2 space-y-1">
+                    <p>créé: {formatDate(item.created_at)}</p>
+                    <p>mis à jour: {formatDate(item.updated_at)}</p>
+                    {item.run_after_at ? <p>run_after: {formatDate(item.run_after_at)}</p> : null}
+                    {item.lease_expires_at ? (
+                      <p>lease expire: {formatDate(item.lease_expires_at)}</p>
+                    ) : null}
+                    {item.completed_at ? <p>terminé: {formatDate(item.completed_at)}</p> : null}
+                    <p>payload: {payloadPreview(item.payload)}</p>
+                    {item.result ? <p>résultat: {payloadPreview(item.result)}</p> : null}
+                  </div>
+                </details>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <p className="mr-auto text-[11px] text-muted">{formatDate(item.updated_at)}</p>
                   {canRetry ? (
