@@ -710,6 +710,38 @@ def test_human_assistance_request_records_event_audit_and_resolution() -> None:
     ]
 
 
+def test_human_assistance_request_rejects_unknown_agent_without_task() -> None:
+    client = TestClient(app)
+    project_response = client.post(
+        "/projects",
+        json={
+            "title": "Manual escalation",
+            "goal": "Validate human assistance request input boundaries.",
+            "owner_agent_id": "agent-direction",
+        },
+    )
+    assert project_response.status_code == 201
+
+    assistance_response = client.post(
+        "/human-assistance-requests",
+        json={
+            "id": "human-assistance-unknown-agent-test",
+            "project_id": project_response.json()["id"],
+            "task_id": None,
+            "agent_id": "agent-does-not-exist",
+            "kind": "manual_action",
+            "title": "Manual gate",
+            "description": "Should fail before hitting the database foreign key.",
+            "urgency": "medium",
+            "requested_by_type": "system",
+            "requested_by_id": "test-suite",
+        },
+    )
+
+    assert assistance_response.status_code == 400
+    assert assistance_response.json()["detail"] == "Unknown agent: agent-does-not-exist"
+
+
 def test_human_assistance_answer_requeues_blocked_task() -> None:
     client = TestClient(app)
     trace_id = "trace_human_assistance_requeue_task"

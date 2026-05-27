@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
+  Check,
   CheckCircle2,
   CircleDot,
   ExternalLink,
@@ -15,21 +16,29 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
-  Workflow
+  Workflow,
+  X
 } from "lucide-react";
 import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 import {
+  applyCredentialAccessGrant,
   connectConnectorService,
+  decideCredentialAccessRequest,
   getSystemReadiness,
+  listCredentialAccessRequests,
   listConnectorConnections,
+  listHumanAssistanceRequests,
   listOperatorActions,
   listProjectBriefs,
+  resolveHumanAssistanceRequest,
   runReadyTasks,
   submitGoal,
   type ConnectorConnectionMode,
   type ConnectorConnectionRecord,
+  type CredentialAccessRequest,
   type GoalPriority,
+  type HumanAssistanceRequest,
   type OperatorAction,
   type ProjectBrief,
   type SystemReadinessStatus
@@ -118,6 +127,7 @@ export default function SynarchAppPage() {
   const [apiKey, setApiKey] = useState("");
   const [workQueueName, setWorkQueueName] = useState("default");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
+  const [humanResponsesById, setHumanResponsesById] = useState<Record<string, string>>({});
   const [scopeSelectionsByService, setScopeSelectionsByService] = useState<
     Record<string, string[]>
   >({});
@@ -139,6 +149,16 @@ export default function SynarchAppPage() {
   const workerHeartbeatsQuery = useQuery({
     queryKey: ["app-worker-heartbeats"],
     queryFn: listWorkerHeartbeats,
+    refetchInterval: 15_000
+  });
+  const credentialRequestsQuery = useQuery({
+    queryKey: ["app-credential-access-requests"],
+    queryFn: listCredentialAccessRequests,
+    refetchInterval: 15_000
+  });
+  const humanAssistanceQuery = useQuery({
+    queryKey: ["app-human-assistance-requests"],
+    queryFn: listHumanAssistanceRequests,
     refetchInterval: 15_000
   });
 
@@ -176,6 +196,27 @@ export default function SynarchAppPage() {
     ? connectionsByService.get(selectedService.id) ?? null
     : null;
   const selectedBrief = briefsQuery.data?.[0] ?? null;
+  const servicesById = useMemo(
+    () => new Map((servicesQuery.data ?? []).map((service) => [service.id, service])),
+    [servicesQuery.data]
+  );
+  const visibleCredentialRequests = useMemo(
+    () => visibleCredentialAccessRequests(credentialRequestsQuery.data ?? [], effectiveProjectId),
+    [credentialRequestsQuery.data, effectiveProjectId]
+  );
+  const visibleHumanRequests = useMemo(
+    () => visibleHumanAssistanceRequests(humanAssistanceQuery.data ?? [], effectiveProjectId),
+    [humanAssistanceQuery.data, effectiveProjectId]
+  );
+
+  const invalidateOperatorState = () => {
+    void queryClient.invalidateQueries({ queryKey: ["app-credential-access-requests"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-human-assistance-requests"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-operator-actions"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
+    void queryClient.invalidateQueries({ queryKey: ["app-projects"] });
+  };
 
   const submitGoalMutation = useMutation({
     mutationFn: () =>
@@ -268,6 +309,28 @@ export default function SynarchAppPage() {
     }
   });
 
+  const credentialDecisionMutation = useMutation({
+    mutationFn: decideCredentialAccessRequest,
+    onSuccess: invalidateOperatorState
+  });
+
+  const credentialGrantMutation = useMutation({
+    mutationFn: applyCredentialAccessGrant,
+    onSuccess: invalidateOperatorState
+  });
+
+  const humanAssistanceMutation = useMutation({
+    mutationFn: resolveHumanAssistanceRequest,
+    onSuccess: (_result, variables) => {
+      setHumanResponsesById((current) => {
+        const next = { ...current };
+        delete next[variables.requestId];
+        return next;
+      });
+      invalidateOperatorState();
+    }
+  });
+
   const handleGoalSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (goal.trim().length === 0) {
@@ -291,6 +354,36 @@ export default function SynarchAppPage() {
 
   const handleWorkQueueReview = (itemId: string, action: "retry" | "dead_letter") => {
     reviewWorkQueueMutation.mutate({ itemId, action });
+  };
+
+  const handleCredentialDecision = (
+    requestId: string,
+    status: "approved" | "rejected"
+  ) => {
+    credentialDecisionMutation.mutate({ requestId, status });
+  };
+
+  const handleCredentialGrant = (requestId: string, serviceId: string) => {
+    credentialGrantMutation.mutate({ requestId, serviceId });
+  };
+
+  const handleHumanResponseChange = (requestId: string, response: string) => {
+    setHumanResponsesById((current) => ({
+      ...current,
+      [requestId]: response
+    }));
+  };
+
+  const handleHumanResolution = (
+    requestId: string,
+    status: "answered" | "dismissed"
+  ) => {
+    const response = humanResponsesById[requestId]?.trim();
+    humanAssistanceMutation.mutate({
+      requestId,
+      status,
+      response: response || `${status} from Synarch app.`
+    });
   };
 
   const readinessStatus = readinessQuery.data?.status ?? "warning";
@@ -433,6 +526,25 @@ export default function SynarchAppPage() {
               <BriefPanel brief={selectedBrief} loading={briefsQuery.isLoading} />
               <ActionPanel actions={activeActions} loading={actionsQuery.isLoading} />
             </div>
+            <OperatorQueuePanel
+              credentialRequests={visibleCredentialRequests}
+              humanRequests={visibleHumanRequests}
+              servicesById={servicesById}
+              humanResponsesById={humanResponsesById}
+              loading={credentialRequestsQuery.isLoading || humanAssistanceQuery.isLoading}
+              credentialDecisionPending={credentialDecisionMutation.isPending}
+              credentialGrantPending={credentialGrantMutation.isPending}
+              humanAssistancePending={humanAssistanceMutation.isPending}
+              credentialDecisionVariables={credentialDecisionMutation.variables}
+              credentialGrantVariables={credentialGrantMutation.variables}
+              humanAssistanceVariables={humanAssistanceMutation.variables}
+              credentialError={credentialDecisionMutation.error ?? credentialGrantMutation.error}
+              humanError={humanAssistanceMutation.error}
+              onCredentialDecision={handleCredentialDecision}
+              onCredentialGrant={handleCredentialGrant}
+              onHumanResponseChange={handleHumanResponseChange}
+              onHumanResolution={handleHumanResolution}
+            />
             {runProjectMutation.isError ? (
               <p className="border-t border-border px-4 py-3 text-sm text-risk">
                 {runProjectMutation.error instanceof Error
@@ -733,6 +845,305 @@ function ActionPanel({ actions, loading }: { actions: OperatorAction[]; loading:
         ))}
       </div>
     </div>
+  );
+}
+
+function visibleCredentialAccessRequests(
+  requests: CredentialAccessRequest[],
+  projectId: string | null
+): CredentialAccessRequest[] {
+  return [...requests]
+    .filter((request) => request.status === "requested" || request.status === "approved")
+    .sort((left, right) => {
+      const leftMatchesProject = projectId !== null && left.project_id === projectId;
+      const rightMatchesProject = projectId !== null && right.project_id === projectId;
+      if (leftMatchesProject !== rightMatchesProject) {
+        return leftMatchesProject ? -1 : 1;
+      }
+      if (left.status !== right.status) {
+        return left.status === "requested" ? -1 : 1;
+      }
+      return right.created_at.localeCompare(left.created_at);
+    })
+    .slice(0, 6);
+}
+
+function visibleHumanAssistanceRequests(
+  requests: HumanAssistanceRequest[],
+  projectId: string | null
+): HumanAssistanceRequest[] {
+  return [...requests]
+    .filter((request) => request.status === "requested")
+    .sort((left, right) => {
+      const leftMatchesProject = projectId !== null && left.project_id === projectId;
+      const rightMatchesProject = projectId !== null && right.project_id === projectId;
+      if (leftMatchesProject !== rightMatchesProject) {
+        return leftMatchesProject ? -1 : 1;
+      }
+      if (left.urgency !== right.urgency) {
+        return priorityRank(right.urgency) - priorityRank(left.urgency);
+      }
+      return right.created_at.localeCompare(left.created_at);
+    })
+    .slice(0, 6);
+}
+
+function priorityRank(priority: GoalPriority): number {
+  return {
+    low: 1,
+    medium: 2,
+    high: 3,
+    critical: 4
+  }[priority];
+}
+
+function OperatorQueuePanel({
+  credentialRequests,
+  humanRequests,
+  servicesById,
+  humanResponsesById,
+  loading,
+  credentialDecisionPending,
+  credentialGrantPending,
+  humanAssistancePending,
+  credentialDecisionVariables,
+  credentialGrantVariables,
+  humanAssistanceVariables,
+  credentialError,
+  humanError,
+  onCredentialDecision,
+  onCredentialGrant,
+  onHumanResponseChange,
+  onHumanResolution
+}: {
+  credentialRequests: CredentialAccessRequest[];
+  humanRequests: HumanAssistanceRequest[];
+  servicesById: Map<string, ServiceDefinition>;
+  humanResponsesById: Record<string, string>;
+  loading: boolean;
+  credentialDecisionPending: boolean;
+  credentialGrantPending: boolean;
+  humanAssistancePending: boolean;
+  credentialDecisionVariables?: { requestId: string; status: "approved" | "rejected" };
+  credentialGrantVariables?: { requestId: string; serviceId: string };
+  humanAssistanceVariables?: {
+    requestId: string;
+    status: "answered" | "dismissed";
+    response: string;
+  };
+  credentialError: unknown;
+  humanError: unknown;
+  onCredentialDecision: (requestId: string, status: "approved" | "rejected") => void;
+  onCredentialGrant: (requestId: string, serviceId: string) => void;
+  onHumanResponseChange: (requestId: string, response: string) => void;
+  onHumanResolution: (requestId: string, status: "answered" | "dismissed") => void;
+}) {
+  const hasRows = credentialRequests.length > 0 || humanRequests.length > 0;
+  return (
+    <section className="border-t border-border px-4 py-4">
+      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">Autorisations et assistance</h3>
+          <p className="text-xs text-muted">
+            Credentials, accès outils, captcha, PDF et décisions bloquantes.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-md bg-warn-soft px-2 py-1 text-warn ring-1 ring-warn/15">
+            credentials: {credentialRequests.length}
+          </span>
+          <span className="rounded-md bg-info-soft px-2 py-1 text-info ring-1 ring-info/15">
+            humain: {humanRequests.length}
+          </span>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="rounded-md bg-slate-50 px-3 py-3 text-sm text-muted">Chargement...</p>
+      ) : !hasRows ? (
+        <p className="rounded-md bg-ok-soft px-3 py-3 text-sm text-ok">
+          Aucune autorisation ou assistance ouverte.
+        </p>
+      ) : (
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-2">
+              <KeyRound className="h-4 w-4 text-accent" />
+              <h4 className="text-xs font-semibold uppercase text-muted">Credentials</h4>
+            </div>
+            <div className="space-y-2">
+              {credentialRequests.length === 0 ? (
+                <p className="rounded-md bg-slate-50 px-3 py-3 text-sm text-muted">
+                  Aucune demande d&apos;accès ouverte.
+                </p>
+              ) : (
+                credentialRequests.map((request) => {
+                  const candidateServiceId = request.candidate_service_ids[0] ?? "";
+                  const candidateService = servicesById.get(candidateServiceId);
+                  const canApplyGrant = request.status === "approved" && candidateServiceId;
+                  const isDecisionPending =
+                    credentialDecisionPending &&
+                    credentialDecisionVariables?.requestId === request.id;
+                  const isGrantPending =
+                    credentialGrantPending && credentialGrantVariables?.requestId === request.id;
+                  return (
+                    <article key={request.id} className="rounded-md border border-border bg-white p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{request.tool_name}</p>
+                          <p className="truncate text-xs text-muted">
+                            {request.agent_id} / {request.task_id}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(request.status)}`}
+                        >
+                          {request.status}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-xs text-muted">{request.reason}</p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {(request.requested_scopes.length > 0
+                          ? request.requested_scopes
+                          : ["scope outil"]
+                        ).map((scope) => (
+                          <span
+                            key={scope}
+                            className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border"
+                          >
+                            {scope}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="mt-2 truncate text-[11px] text-muted">
+                        Service candidat: {candidateService?.name ?? (candidateServiceId || "aucun")}
+                      </p>
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        {request.status === "requested" ? (
+                          <>
+                            <button
+                              type="button"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ok/30 px-2 text-xs font-medium text-ok disabled:opacity-50"
+                              disabled={credentialDecisionPending || credentialGrantPending}
+                              onClick={() => onCredentialDecision(request.id, "approved")}
+                            >
+                              <Check className="h-3.5 w-3.5" />
+                              <span>{isDecisionPending ? "..." : "Approuver"}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-risk/30 px-2 text-xs font-medium text-risk disabled:opacity-50"
+                              disabled={credentialDecisionPending || credentialGrantPending}
+                              onClick={() => onCredentialDecision(request.id, "rejected")}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                              <span>Rejeter</span>
+                            </button>
+                          </>
+                        ) : null}
+                        {request.status === "approved" ? (
+                          <button
+                            type="button"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-2 text-xs font-semibold text-white disabled:opacity-50"
+                            disabled={!canApplyGrant || credentialGrantPending}
+                            onClick={() => {
+                              if (candidateServiceId) {
+                                onCredentialGrant(request.id, candidateServiceId);
+                              }
+                            }}
+                          >
+                            <KeyRound className="h-3.5 w-3.5" />
+                            <span>{isGrantPending ? "Application" : "Appliquer le grant"}</span>
+                          </button>
+                        ) : null}
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          <div className="min-w-0">
+            <div className="mb-2 flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-warn" />
+              <h4 className="text-xs font-semibold uppercase text-muted">Assistance humaine</h4>
+            </div>
+            <div className="space-y-2">
+              {humanRequests.length === 0 ? (
+                <p className="rounded-md bg-slate-50 px-3 py-3 text-sm text-muted">
+                  Aucune demande humaine ouverte.
+                </p>
+              ) : (
+                humanRequests.map((request) => {
+                  const response = humanResponsesById[request.id] ?? "";
+                  const isPending =
+                    humanAssistancePending &&
+                    humanAssistanceVariables?.requestId === request.id;
+                  return (
+                    <article key={request.id} className="rounded-md border border-border bg-white p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{request.title}</p>
+                          <p className="truncate text-xs text-muted">
+                            {request.kind} / {request.agent_id}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(request.urgency)}`}
+                        >
+                          {request.urgency}
+                        </span>
+                      </div>
+                      <p className="mt-2 line-clamp-2 text-xs text-muted">
+                        {request.description}
+                      </p>
+                      <textarea
+                        className="mt-3 min-h-20 w-full resize-y rounded-md border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent"
+                        value={response}
+                        onChange={(event) => onHumanResponseChange(request.id, event.target.value)}
+                        placeholder="Réponse opérateur, résumé PDF, captcha terminé, décision prise..."
+                      />
+                      <div className="mt-3 flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-risk/30 px-2 text-xs font-medium text-risk disabled:opacity-50"
+                          disabled={humanAssistancePending}
+                          onClick={() => onHumanResolution(request.id, "dismissed")}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          <span>Dismiss</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-2 text-xs font-semibold text-white disabled:opacity-50"
+                          disabled={humanAssistancePending || response.trim().length === 0}
+                          onClick={() => onHumanResolution(request.id, "answered")}
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          <span>{isPending ? "Envoi" : "Répondre"}</span>
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {credentialError ? (
+        <p className="mt-3 text-xs text-risk">
+          {credentialError instanceof Error ? credentialError.message : "Décision credential impossible."}
+        </p>
+      ) : null}
+      {humanError ? (
+        <p className="mt-3 text-xs text-risk">
+          {humanError instanceof Error ? humanError.message : "Réponse humaine impossible."}
+        </p>
+      ) : null}
+    </section>
   );
 }
 

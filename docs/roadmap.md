@@ -1,6 +1,6 @@
 # Synarch Roadmap
 
-Last updated: 2026-05-13
+Last updated: 2026-05-27
 
 This roadmap is the operating map for Synarch. The README explains the vision, and
 `docs/development-quality-gates.md` defines the verification discipline. This document answers:
@@ -42,7 +42,7 @@ through the dashboard.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface plus `/app` operator workspace with live goal creation, project list, project brief, operator actions, readiness, worker heartbeats, work-queue controls, and connector connection setup. The detailed dashboard still exposes agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector history. | No live cost dashboard yet. | Create goal from `/app`, run ready tasks, connect a provider, then inspect timeline/audit trace. |
+| A. Interface | Partial | Next.js control surface plus `/app` operator workspace with live goal creation, project list, project brief, operator actions, credential approvals/grants, human-assistance answers, readiness, worker heartbeats, work-queue controls, and connector connection setup. The detailed dashboard still exposes agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector history. | No live cost dashboard yet. | Create goal from `/app`, run ready tasks, connect a provider, answer a human-assistance gate, then inspect timeline/audit trace. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, exposes an opt-in scheduler worker, and state-service has a generic durable `work_queue_items` table plus safe worker for non-task workers. | Routing is keyword-based only and the generic work queue worker currently supports only safe `noop`/`log` payloads. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode, interim OpenRouter execution, and model-gateway-backed execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, and no sandboxed tool execution inside the runtime. | Narrow division workflow returns typed output, event, cost, and memory candidate. |

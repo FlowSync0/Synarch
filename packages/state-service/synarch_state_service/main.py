@@ -562,6 +562,11 @@ def validate_human_assistance_request(assistance_request: HumanAssistanceRequest
             detail=f"Unknown project: {assistance_request.project_id}",
         )
     if assistance_request.task_id is None:
+        if not REPOSITORIES.agents.exists(assistance_request.agent_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown agent: {assistance_request.agent_id}",
+            )
         return
     task = REPOSITORIES.tasks.get(assistance_request.task_id)
     if task is None:
