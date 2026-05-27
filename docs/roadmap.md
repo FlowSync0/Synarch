@@ -314,7 +314,7 @@ Progress:
   `work_queue.reviewed` decisions, including `/app` operator controls.
 - Done: state-service persists worker heartbeat records with PostgreSQL migration and
   `worker.heartbeat` audit logs; scheduler, connector-job, memory, and work-queue workers publish
-  heartbeats that `/app` shows as latest worker statuses.
+  heartbeats that `/app` shows as latest worker statuses and selected queue worker coverage.
 - Done: Gateway readiness checks the durable reminder queue worker heartbeat and reports stale,
   failed, or stopped workers directly in `/app`.
 - Done: gateway can run agent-filtered service health checks, returning a typed status report while

@@ -1560,6 +1560,7 @@ export default function SynarchAppPage() {
             <WorkQueuePanel
               items={workQueueQuery.data ?? []}
               summaries={workQueueSummaryQuery.data ?? []}
+              workerHeartbeats={workerHeartbeatsQuery.data ?? []}
               loading={workQueueQuery.isLoading}
               summaryLoading={workQueueSummaryQuery.isLoading}
               queueName={workQueueName}
@@ -1571,6 +1572,7 @@ export default function SynarchAppPage() {
               submitting={createWorkQueueMutation.isPending}
               reviewing={reviewWorkQueueMutation.isPending}
               recovering={recoverWorkQueueLeasesMutation.isPending}
+              staleAfterSeconds={workerStaleAfterSeconds}
               canSubmit={canSubmitWorkQueue}
               error={createWorkQueueMutation.error}
               reviewError={reviewWorkQueueMutation.error}
@@ -4255,6 +4257,33 @@ function compareWorkQueueItems(left: WorkQueueItem, right: WorkQueueItem): numbe
   return right.updated_at.localeCompare(left.updated_at);
 }
 
+function latestWorkQueueHeartbeat(
+  heartbeats: WorkerHeartbeatRecord[],
+  queueName: string
+): WorkerHeartbeatRecord | null {
+  const queueHeartbeats = heartbeats
+    .filter((heartbeat) => heartbeat.worker_kind === "work_queue" && heartbeat.target === queueName)
+    .sort((left, right) => right.last_seen_at.localeCompare(left.last_seen_at));
+  return queueHeartbeats[0] ?? null;
+}
+
+function workQueueWorkerStatusLabel(
+  heartbeat: WorkerHeartbeatRecord | null,
+  staleAfterSeconds: number
+): WorkerDisplayStatus | "missing" {
+  if (!heartbeat) {
+    return "missing";
+  }
+  return workerDisplayStatus(heartbeat, staleAfterSeconds);
+}
+
+function workQueueWorkerStatusClass(status: WorkerDisplayStatus | "missing"): string {
+  if (status === "missing") {
+    return "bg-risk-soft text-risk ring-risk/15";
+  }
+  return statusClass(status);
+}
+
 function QueueSummaryStrip({
   summaries,
   selectedQueueName,
@@ -4340,6 +4369,7 @@ function QueueSummaryStrip({
 function WorkQueuePanel({
   items,
   summaries,
+  workerHeartbeats,
   loading,
   summaryLoading,
   queueName,
@@ -4351,6 +4381,7 @@ function WorkQueuePanel({
   submitting,
   reviewing,
   recovering,
+  staleAfterSeconds,
   canSubmit,
   error,
   reviewError,
@@ -4367,6 +4398,7 @@ function WorkQueuePanel({
 }: {
   items: WorkQueueItem[];
   summaries: WorkQueueSummary[];
+  workerHeartbeats: WorkerHeartbeatRecord[];
   loading: boolean;
   summaryLoading: boolean;
   queueName: string;
@@ -4378,6 +4410,7 @@ function WorkQueuePanel({
   submitting: boolean;
   reviewing: boolean;
   recovering: boolean;
+  staleAfterSeconds: number;
   canSubmit: boolean;
   error: unknown;
   reviewError: unknown;
@@ -4406,6 +4439,9 @@ function WorkQueuePanel({
   const problemCount =
     (visibleStatusCounts.failed ?? 0) + (visibleStatusCounts.dead_lettered ?? 0);
   const activeCount = (visibleStatusCounts.queued ?? 0) + (visibleStatusCounts.running ?? 0);
+  const queueHeartbeat = latestWorkQueueHeartbeat(workerHeartbeats, normalizedQueueName);
+  const queueWorkerStatus = workQueueWorkerStatusLabel(queueHeartbeat, staleAfterSeconds);
+  const queueWorkerAgeSeconds = secondsSince(queueHeartbeat?.last_seen_at);
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
@@ -4433,6 +4469,28 @@ function WorkQueuePanel({
         loading={summaryLoading}
         onSelect={onQueueNameChange}
       />
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-start justify-between gap-3 rounded-md border border-border bg-slate-50 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase text-muted">Worker queue sélectionnée</p>
+            <p className="mt-1 truncate text-sm font-medium">
+              {queueHeartbeat?.id ?? "Aucun worker actif pour cette queue"}
+            </p>
+            <p className="mt-1 truncate text-xs text-muted">
+              {queueHeartbeat
+                ? `vu ${formatDuration(queueWorkerAgeSeconds)} / heartbeat #${queueHeartbeat.heartbeat_count}`
+                : "Les items resteront durables dans PostgreSQL mais ne seront pas consommés automatiquement."}
+            </p>
+          </div>
+          <span
+            className={`shrink-0 rounded-md px-2 py-1 text-xs font-semibold ring-1 ${workQueueWorkerStatusClass(
+              queueWorkerStatus
+            )}`}
+          >
+            {queueWorkerStatus}
+          </span>
+        </div>
+      </div>
       <form className="flex flex-col gap-3 p-4" onSubmit={onSubmit}>
         <div className="grid grid-cols-2 rounded-md border border-border bg-slate-50 p-1">
           <button

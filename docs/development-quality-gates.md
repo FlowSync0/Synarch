@@ -240,7 +240,8 @@ The `/app` workspace includes a work-queue panel that reads these same records t
 state-service proxy, displays a per-queue summary selector plus per-status counts, can enqueue
 project reminders, and can enqueue safe `log` items for operator smoke checks. The same panel can
 retry dead-lettered/failed items and dead-letter queued/running items. `/app` also shows the latest
-worker heartbeat statuses.
+worker heartbeat statuses and the selected queue's active/stale/missing worker coverage, so durable
+PostgreSQL items are not mistaken for actively consumed work.
 
 Connector connection lifecycle gates:
 
