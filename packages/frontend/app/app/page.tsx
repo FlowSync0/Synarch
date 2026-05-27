@@ -23,6 +23,7 @@ import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 
 import {
   applyCredentialAccessGrant,
+  checkServiceHealth,
   connectConnectorService,
   decideTaskReview,
   decideCredentialAccessRequest,
@@ -52,6 +53,7 @@ import {
   type OperatorAction,
   type ProjectBrief,
   type ProjectTimeline,
+  type ServiceHealthReport,
   type SystemReadinessItem,
   type SystemReadinessStatus,
   type WebProviderStatus
@@ -180,6 +182,8 @@ const projectStatusClass: Record<string, string> = {
   disabled: "bg-risk-soft text-risk ring-risk/15",
   stale: "bg-warn-soft text-warn ring-warn/15",
   healthy: "bg-ok-soft text-ok ring-ok/15",
+  unhealthy: "bg-risk-soft text-risk ring-risk/15",
+  unknown: "bg-slate-100 text-muted ring-border",
   draft: "bg-slate-100 text-muted ring-border"
 };
 
@@ -449,6 +453,7 @@ export default function SynarchAppPage() {
     useState<ConnectorJobFilter>("attention");
   const [workerHealthFilter, setWorkerHealthFilter] = useState<WorkerHealthFilter>("all");
   const [readinessFilter, setReadinessFilter] = useState<ReadinessFilter>("attention");
+  const [serviceHealthAgentId, setServiceHealthAgentId] = useState("");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
   const [workQueueRecoveryResult, setWorkQueueRecoveryResult] =
@@ -863,6 +868,14 @@ export default function SynarchAppPage() {
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-timeline"] });
       void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+    }
+  });
+
+  const serviceHealthMutation = useMutation({
+    mutationFn: () => checkServiceHealth(serviceHealthAgentId.trim() || undefined),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-timeline"] });
     }
   });
 
@@ -1509,6 +1522,19 @@ export default function SynarchAppPage() {
               reencryptError={reencryptSecretVaultMutation.error}
               onFilterChange={setReadinessFilter}
               onReencrypt={() => reencryptSecretVaultMutation.mutate()}
+            />
+
+            <ServiceHealthPanel
+              report={serviceHealthMutation.data ?? null}
+              agentId={serviceHealthAgentId}
+              selectedAgentId={selectedProject?.owner_agent_id ?? null}
+              running={serviceHealthMutation.isPending}
+              error={serviceHealthMutation.error}
+              onAgentIdChange={setServiceHealthAgentId}
+              onUseSelectedAgent={() =>
+                setServiceHealthAgentId(selectedProject?.owner_agent_id ?? "")
+              }
+              onCheck={() => serviceHealthMutation.mutate()}
             />
 
             <WorkerPanel
@@ -3432,6 +3458,177 @@ function SystemReadinessPanel({
               </div>
             );
           })
+        )}
+      </div>
+    </section>
+  );
+}
+
+function serviceHealthRank(status: string): number {
+  return {
+    unhealthy: 0,
+    unknown: 1,
+    healthy: 2
+  }[status] ?? 3;
+}
+
+function serviceHealthCounts(report: ServiceHealthReport | null): Record<string, number> {
+  return (report?.checks ?? []).reduce<Record<string, number>>(
+    (counts, check) => {
+      counts[check.status] = (counts[check.status] ?? 0) + 1;
+      return counts;
+    },
+    { healthy: 0, unhealthy: 0, unknown: 0 }
+  );
+}
+
+function ServiceHealthPanel({
+  report,
+  agentId,
+  selectedAgentId,
+  running,
+  error,
+  onAgentIdChange,
+  onUseSelectedAgent,
+  onCheck
+}: {
+  report: ServiceHealthReport | null;
+  agentId: string;
+  selectedAgentId: string | null;
+  running: boolean;
+  error: unknown;
+  onAgentIdChange: (value: string) => void;
+  onUseSelectedAgent: () => void;
+  onCheck: () => void;
+}) {
+  const counts = serviceHealthCounts(report);
+  const incidentCount = counts.unhealthy + counts.unknown;
+  const checks = [...(report?.checks ?? [])].sort((left, right) => {
+    const statusDelta = serviceHealthRank(left.status) - serviceHealthRank(right.status);
+    if (statusDelta !== 0) {
+      return statusDelta;
+    }
+    return left.name.localeCompare(right.name);
+  });
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Health services</h2>
+          <p className="text-xs text-muted">Probe réel Gateway avec event et audit trace.</p>
+        </div>
+        <ShieldCheck className="h-4 w-4 shrink-0 text-ok" />
+      </div>
+      <div className="flex flex-col gap-3 border-b border-border px-4 py-3">
+        <div className="flex flex-wrap gap-2">
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(incidentCount > 0 ? "failed" : "healthy")}`}>
+            incidents: {incidentCount}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass("healthy")}`}>
+            healthy: {counts.healthy}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass("unhealthy")}`}>
+            unhealthy: {counts.unhealthy}
+          </span>
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass("unknown")}`}>
+            unknown: {counts.unknown}
+          </span>
+        </div>
+        <div className="flex flex-col gap-2">
+          <input
+            aria-label="Agent service health"
+            className="h-9 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+            value={agentId}
+            onChange={(event) => onAgentIdChange(event.target.value)}
+            placeholder="agent_id optionnel"
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-semibold text-ink hover:bg-slate-50 disabled:opacity-60"
+              disabled={!selectedAgentId}
+              onClick={onUseSelectedAgent}
+              title="Limiter le check aux services visibles par l'agent du projet sélectionné"
+            >
+              <CircleDot className="h-3.5 w-3.5" />
+              <span>Agent projet</span>
+            </button>
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-ink px-2 text-xs font-semibold text-white disabled:opacity-60"
+              disabled={running}
+              onClick={onCheck}
+              title="Exécuter un probe santé sur les services filtrés"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span>{running ? "Vérification" : "Vérifier"}</span>
+            </button>
+          </div>
+        </div>
+        {report ? (
+          <p className="text-xs text-muted">
+            trace {report.trace_id}
+            {report.agent_id ? ` / agent ${report.agent_id}` : " / tous services"}
+          </p>
+        ) : (
+          <p className="text-xs text-muted">
+            Aucun probe lancé depuis cette session.
+          </p>
+        )}
+        {error ? (
+          <p className="text-xs text-risk">
+            {error instanceof Error ? error.message : "Health-check impossible."}
+          </p>
+        ) : null}
+      </div>
+      <div className="divide-y divide-border">
+        {checks.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">Aucun résultat.</p>
+        ) : (
+          checks.slice(0, 10).map((check) => (
+            <article key={check.service_id} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{check.name}</p>
+                  <p className="truncate text-xs text-muted">{check.service_id}</p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(check.status)}`}
+                >
+                  {check.status}
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1">
+                <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                  {check.kind}
+                </span>
+                {typeof check.status_code === "number" ? (
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    HTTP {check.status_code}
+                  </span>
+                ) : null}
+                {typeof check.response_time_ms === "number" ? (
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    {check.response_time_ms}ms
+                  </span>
+                ) : null}
+                {check.health_endpoint ? (
+                  <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                    {check.health_endpoint}
+                  </span>
+                ) : null}
+              </div>
+              {check.error ? (
+                <p className="mt-2 line-clamp-2 rounded-md bg-risk-soft px-2 py-1 text-xs text-risk">
+                  {check.error}
+                </p>
+              ) : null}
+              <p className="mt-2 truncate text-[11px] text-muted">
+                {check.base_url ?? "aucune base_url"} / {formatDate(check.checked_at)}
+              </p>
+            </article>
+          ))
         )}
       </div>
     </section>
