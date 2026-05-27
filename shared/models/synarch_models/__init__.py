@@ -98,6 +98,7 @@ from .contracts import (
     WorkQueueFailureRequest,
     WorkQueueItem,
     WorkQueueRecoveryResult,
+    WorkQueueReviewDecision,
 )
 from .enums import (
     ActorType,
@@ -236,4 +237,5 @@ __all__ = [
     "WorkQueueFailureRequest",
     "WorkQueueItem",
     "WorkQueueRecoveryResult",
+    "WorkQueueReviewDecision",
 ]

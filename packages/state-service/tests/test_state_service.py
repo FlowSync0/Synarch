@@ -130,6 +130,122 @@ def test_work_queue_failure_dead_letters_after_max_attempts() -> None:
     assert failed_item["completed_at"] is not None
 
 
+def test_work_queue_review_retry_requeues_dead_lettered_item() -> None:
+    client = TestClient(app)
+    trace_id = "trace_work_queue_review_retry"
+
+    assert client.post(
+        "/work-queue/items",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "work-review-retry-1",
+            "queue_name": "pdf-ingestion",
+            "payload": {"action": "log", "message": "retry me"},
+            "max_attempts": 1,
+        },
+    ).status_code == 201
+    assert client.post(
+        "/work-queue/claim",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "queue_name": "pdf-ingestion",
+            "worker_id": "worker-pdf",
+            "limit": 1,
+        },
+    ).status_code == 200
+    assert client.post(
+        "/work-queue/items/work-review-retry-1/fail",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "worker_id": "worker-pdf",
+            "error": "Needs human review.",
+        },
+    ).json()["status"] == "dead_lettered"
+
+    retry_response = client.post(
+        "/work-queue/items/work-review-retry-1/review-decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "action": "retry",
+            "reviewed_by_type": "user",
+            "reviewed_by_id": "local-user",
+            "reason": "Human provided the missing information.",
+        },
+    )
+
+    assert retry_response.status_code == 200
+    retried_item = retry_response.json()
+    assert retried_item["status"] == "queued"
+    assert retried_item["lease_owner_id"] is None
+    assert retried_item["completed_at"] is None
+    assert retried_item["last_error"] is None
+    assert retried_item["max_attempts"] == 2
+
+    audit_actions = [
+        audit["action"] for audit in client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    ]
+    assert audit_actions[-1] == "work_queue.reviewed"
+
+    retry_claim = client.post(
+        "/work-queue/claim",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "queue_name": "pdf-ingestion",
+            "worker_id": "worker-pdf-retry",
+            "limit": 1,
+        },
+    ).json()
+    assert retry_claim["claimed_items"][0]["id"] == "work-review-retry-1"
+    assert retry_claim["claimed_items"][0]["attempt_count"] == 2
+
+
+def test_work_queue_review_dead_letters_queued_item() -> None:
+    client = TestClient(app)
+    trace_id = "trace_work_queue_review_dead_letter"
+
+    assert client.post(
+        "/work-queue/items",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "work-review-dead-letter-1",
+            "queue_name": "webhooks",
+            "payload": {"action": "log", "message": "bad target"},
+        },
+    ).status_code == 201
+
+    decision_response = client.post(
+        "/work-queue/items/work-review-dead-letter-1/review-decisions",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "action": "dead_letter",
+            "reviewed_by_type": "user",
+            "reviewed_by_id": "local-user",
+            "reason": "Invalid webhook target.",
+        },
+    )
+
+    assert decision_response.status_code == 200
+    item = decision_response.json()
+    assert item["status"] == "dead_lettered"
+    assert item["last_error"] == "Invalid webhook target."
+    assert item["completed_at"] is not None
+
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert audits[-1]["action"] == "work_queue.reviewed"
+    assert audits[-1]["payload"]["action"] == "dead_letter"
+
+    claim_response = client.post(
+        "/work-queue/claim",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "queue_name": "webhooks",
+            "worker_id": "worker-webhooks",
+            "limit": 1,
+        },
+    )
+    assert claim_response.json()["claimed_items"] == []
+
+
 def test_work_queue_recover_expired_lease_requeues_item() -> None:
     client = TestClient(app)
     expired_at = datetime.now(UTC) - timedelta(minutes=5)

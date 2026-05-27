@@ -72,6 +72,7 @@ from synarch_models import (
     WorkQueueFailureRequest,
     WorkQueueItem,
     WorkQueueRecoveryResult,
+    WorkQueueReviewDecision,
 )
 from synarch_state_service.repositories import RecordRepository, StateRepositories
 
@@ -1928,6 +1929,84 @@ def fail_work_queue_item(
             "queue_name": record.queue_name,
             "status": record.status,
             "error": failure.error,
+        },
+    )
+    return record
+
+
+@app.post("/work-queue/items/{item_id}/review-decisions", response_model=WorkQueueItem)
+def apply_work_queue_review_decision(
+    item_id: str,
+    decision: WorkQueueReviewDecision,
+    request: Request,
+) -> WorkQueueItem:
+    item = read_record(REPOSITORIES.work_queue_items, item_id, "work queue item")
+    if decision.action == "retry" and item.status not in {"failed", "dead_lettered"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Work item cannot be retried from {item.status}",
+        )
+    if decision.action == "dead_letter" and item.status in {"completed", "dead_lettered"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Work item cannot be dead-lettered from {item.status}",
+        )
+
+    reviewed_at = datetime.now(UTC)
+    previous_status = item.status
+    update: dict[str, Any]
+    if decision.action == "retry":
+        update = {
+            "status": "queued",
+            "run_after_at": decision.retry_after_at,
+            "lease_owner_id": None,
+            "lease_expires_at": None,
+            "max_attempts": max(item.max_attempts, item.attempt_count + 1),
+            "last_error": None,
+            "updated_at": reviewed_at,
+            "completed_at": None,
+        }
+    else:
+        update = {
+            "status": "dead_lettered",
+            "run_after_at": None,
+            "lease_owner_id": None,
+            "lease_expires_at": None,
+            "last_error": decision.reason,
+            "updated_at": reviewed_at,
+            "completed_at": reviewed_at,
+        }
+
+    record = update_record_if(
+        REPOSITORIES.work_queue_items,
+        item.id,
+        item.model_copy(update=update),
+        {"status": previous_status},
+    )
+    if record is None:
+        current_item = read_record(REPOSITORIES.work_queue_items, item_id, "work queue item")
+        raise HTTPException(status_code=409, detail=f"Work item is already {current_item.status}")
+
+    write_audit_log(
+        AuditContext(
+            actor_type=decision.reviewed_by_type,
+            actor_id=decision.reviewed_by_id,
+            trace_id=request.headers.get("x-synarch-trace-id"),
+        ),
+        action="work_queue.reviewed",
+        target_type="work_queue_item",
+        target_id=record.id,
+        payload={
+            "queue_name": record.queue_name,
+            "action": decision.action,
+            "reason": decision.reason,
+            "previous_status": previous_status,
+            "next_status": record.status,
+            "attempt_count": record.attempt_count,
+            "max_attempts": record.max_attempts,
+            "retry_after_at": record.run_after_at.isoformat()
+            if record.run_after_at is not None
+            else None,
         },
     )
     return record

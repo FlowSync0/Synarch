@@ -75,9 +75,9 @@
       "Task review queue and retry/cancel/update decisions",
       "Generic durable work_queue_items endpoints support create, claim with lease, complete, fail, dead-letter, and expired lease recovery",
       "Safe generic work queue worker can consume noop/log payloads and dead-letter unsupported actions",
-      "/app work-queue panel can monitor queue status counts and enqueue safe log items"
+      "/app work-queue panel can monitor queue status counts, enqueue safe log items, retry failed/dead-lettered items, and dead-letter queued/running/failed items"
     ],
-    "main_gap": "Generic work-queue UI does not yet expose retry/dead-letter resolution actions.",
+    "main_gap": "Generic work-queue worker currently supports only safe noop/log payloads and no payload editing UI yet.",
     "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",
     "source": "docs/roadmap.md"
   },

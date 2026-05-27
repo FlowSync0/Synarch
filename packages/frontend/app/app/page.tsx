@@ -38,6 +38,7 @@ import {
   listProjects,
   listServices,
   listWorkQueueItems,
+  reviewWorkQueueItem,
   type ProjectRecord,
   type ServiceDefinition,
   type WorkQueueItem
@@ -243,6 +244,22 @@ export default function SynarchAppPage() {
     }
   });
 
+  const reviewWorkQueueMutation = useMutation({
+    mutationFn: ({ itemId, action }: { itemId: string; action: "retry" | "dead_letter" }) =>
+      reviewWorkQueueItem(itemId, {
+        action,
+        reviewed_by_type: "user",
+        reviewed_by_id: "local-user",
+        reason:
+          action === "retry"
+            ? "Retry requested from Synarch app."
+            : "Dead-letter requested from Synarch app."
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+    }
+  });
+
   const handleGoalSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (goal.trim().length === 0) {
@@ -262,6 +279,10 @@ export default function SynarchAppPage() {
   const handleWorkQueueSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     createWorkQueueMutation.mutate();
+  };
+
+  const handleWorkQueueReview = (itemId: string, action: "retry" | "dead_letter") => {
+    reviewWorkQueueMutation.mutate({ itemId, action });
   };
 
   const readinessStatus = readinessQuery.data?.status ?? "warning";
@@ -574,10 +595,13 @@ export default function SynarchAppPage() {
               queueName={workQueueName}
               message={workQueueMessage}
               submitting={createWorkQueueMutation.isPending}
+              reviewing={reviewWorkQueueMutation.isPending}
               error={createWorkQueueMutation.error}
+              reviewError={reviewWorkQueueMutation.error}
               onQueueNameChange={setWorkQueueName}
               onMessageChange={setWorkQueueMessage}
               onSubmit={handleWorkQueueSubmit}
+              onReview={handleWorkQueueReview}
             />
           </aside>
         </div>
@@ -703,20 +727,26 @@ function WorkQueuePanel({
   queueName,
   message,
   submitting,
+  reviewing,
   error,
+  reviewError,
   onQueueNameChange,
   onMessageChange,
-  onSubmit
+  onSubmit,
+  onReview
 }: {
   items: WorkQueueItem[];
   loading: boolean;
   queueName: string;
   message: string;
   submitting: boolean;
+  reviewing: boolean;
   error: unknown;
+  reviewError: unknown;
   onQueueNameChange: (value: string) => void;
   onMessageChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onReview: (itemId: string, action: "retry" | "dead_letter") => void;
 }) {
   const statusCounts = items.reduce<Record<string, number>>((counts, item) => {
     counts[item.status] = (counts[item.status] ?? 0) + 1;
@@ -758,6 +788,11 @@ function WorkQueuePanel({
             {error instanceof Error ? error.message : "Création impossible."}
           </p>
         ) : null}
+        {reviewError ? (
+          <p className="text-xs text-risk">
+            {reviewError instanceof Error ? reviewError.message : "Décision impossible."}
+          </p>
+        ) : null}
       </form>
       <div className="border-t border-border px-4 py-3">
         <div className="flex flex-wrap gap-2">
@@ -777,22 +812,50 @@ function WorkQueuePanel({
         ) : recentItems.length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted">Aucun item.</p>
         ) : (
-          recentItems.map((item) => (
-            <div key={item.id} className="px-4 py-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-medium">{item.id}</p>
-                <span
-                  className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(item.status)}`}
-                >
-                  {item.status}
-                </span>
+          recentItems.map((item) => {
+            const canRetry = item.status === "failed" || item.status === "dead_lettered";
+            const canDeadLetter = item.status !== "completed" && item.status !== "dead_lettered";
+            return (
+              <div key={item.id} className="px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-medium">{item.id}</p>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(item.status)}`}
+                  >
+                    {item.status}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs text-muted">
+                  {workQueuePayloadLabel(item.payload)}
+                </p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <p className="mr-auto text-[11px] text-muted">{formatDate(item.updated_at)}</p>
+                  {canRetry ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2 text-[11px] font-medium text-ink disabled:opacity-60"
+                      disabled={reviewing}
+                      onClick={() => onReview(item.id, "retry")}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>Réessayer</span>
+                    </button>
+                  ) : null}
+                  {canDeadLetter ? (
+                    <button
+                      type="button"
+                      className="inline-flex h-7 items-center gap-1.5 rounded-md border border-risk/30 px-2 text-[11px] font-medium text-risk disabled:opacity-60"
+                      disabled={reviewing}
+                      onClick={() => onReview(item.id, "dead_letter")}
+                    >
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      <span>Dead-letter</span>
+                    </button>
+                  ) : null}
+                </div>
               </div>
-              <p className="mt-1 truncate text-xs text-muted">
-                {workQueuePayloadLabel(item.payload)}
-              </p>
-              <p className="mt-1 text-[11px] text-muted">{formatDate(item.updated_at)}</p>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>

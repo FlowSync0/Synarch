@@ -432,6 +432,14 @@ class WorkQueueFailureRequest(SynarchModel):
     dead_letter: bool = False
 
 
+class WorkQueueReviewDecision(SynarchModel):
+    action: Literal["retry", "dead_letter"]
+    reviewed_by_type: ActorType
+    reviewed_by_id: str
+    reason: str = Field(min_length=1)
+    retry_after_at: datetime | None = None
+
+
 class WorkQueueRecoveryResult(SynarchModel):
     recovered_item_ids: list[str] = Field(default_factory=list)
     dead_lettered_item_ids: list[str] = Field(default_factory=list)

@@ -212,6 +212,8 @@ to `running` with a lease through conditional state updates. `/work-queue/items/
 the lease and stores the result. `/work-queue/items/{id}/fail` requeues or dead-letters depending on
 attempt count. `/work-queue/recover-expired-leases` requeues expired running items or dead-letters
 exhausted ones. Every queue mutation writes an audit log.
+`/work-queue/items/{id}/review-decisions` lets an operator retry a failed/dead-lettered item or
+dead-letter an active queued/running/failed item; the decision writes `work_queue.reviewed`.
 
 A safe generic worker is available for queues that only need durable claim/complete/fail behavior:
 
@@ -225,7 +227,8 @@ make work-queue-tick SYNARCH_WORK_QUEUE_NAME=reminders
 of being executed speculatively.
 The `/app` workspace includes a work-queue panel that reads these same records through the Next
 state-service proxy, displays per-status counts, and can enqueue safe `log` items for operator
-smoke checks.
+smoke checks. The same panel can retry dead-lettered/failed items and dead-letter queued/running
+items.
 
 Run one connector-job batch with:
 

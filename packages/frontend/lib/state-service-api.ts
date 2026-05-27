@@ -104,6 +104,14 @@ export type WorkQueueItemCreateRequest = {
   run_after_at?: string | null;
 };
 
+export type WorkQueueReviewDecision = {
+  action: "retry" | "dead_letter";
+  reviewed_by_type: ConnectorActorType;
+  reviewed_by_id: string;
+  reason: string;
+  retry_after_at?: string | null;
+};
+
 export type ServiceDefinition = {
   id: string;
   name: string;
@@ -279,5 +287,25 @@ export async function createWorkQueueItem(
     },
     body: JSON.stringify(item)
   });
+  return parseJsonResponse<WorkQueueItem>(response);
+}
+
+export async function reviewWorkQueueItem(
+  itemId: string,
+  decision: WorkQueueReviewDecision
+): Promise<WorkQueueItem> {
+  const response = await fetch(
+    `/api/state-service/work-queue/items/${encodeURIComponent(itemId)}/review-decisions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": decision.reviewed_by_type,
+        "X-Synarch-Actor-Id": decision.reviewed_by_id,
+        "X-Synarch-Trace-Id": `trace_frontend_work_queue_review_${Date.now()}`
+      },
+      body: JSON.stringify(decision)
+    }
+  );
   return parseJsonResponse<WorkQueueItem>(response);
 }
