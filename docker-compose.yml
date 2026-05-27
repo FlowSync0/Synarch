@@ -59,11 +59,14 @@ services:
       WEB_EXTRACT_PLAYWRIGHT_TIMEOUT_SECONDS: ${WEB_EXTRACT_PLAYWRIGHT_TIMEOUT_SECONDS:-30}
       WEB_EXTRACT_PLAYWRIGHT_WAIT_UNTIL: ${WEB_EXTRACT_PLAYWRIGHT_WAIT_UNTIL:-domcontentloaded}
       WEB_EXTRACT_REVIEW_EVIDENCE_MAX_BYTES: ${WEB_EXTRACT_REVIEW_EVIDENCE_MAX_BYTES:-4096}
+      SECRET_VAULT_DIR: /app/.synarch/secrets
       BROWSERBASE_API_KEY: ${BROWSERBASE_API_KEY:-}
       BROWSERLESS_API_KEY: ${BROWSERLESS_API_KEY:-}
       BRIGHTDATA_API_KEY: ${BRIGHTDATA_API_KEY:-}
     ports:
       - "8000:8000"
+    volumes:
+      - synarch_secrets:/app/.synarch/secrets
     depends_on:
       - control-plane
       - state-service
@@ -339,3 +342,4 @@ services:
 volumes:
   postgres_data:
   grafana_data:
+  synarch_secrets:

@@ -130,8 +130,9 @@ requests, and blocked connector jobs into one project-focused queue.
 Connector setup now goes through Gateway `POST /connectors/{service_id}/connections`. API keys are
 written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
 fingerprint. The default local vault path is `.synarch/secrets`; override it with `SECRET_VAULT_DIR`.
-The path is git-ignored. Production deployments should replace the local file vault with Vault/KMS or
-the platform secret manager behind the same `secret_ref` contract.
+The path is git-ignored. Docker mounts this path through the `synarch_secrets` volume so connector
+keys survive container recreation. Production deployments should replace the local file vault with
+Vault/KMS or the platform secret manager behind the same `secret_ref` contract.
 
 Manual configuration that commonly matters before unattended use:
 
