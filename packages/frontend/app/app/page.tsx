@@ -212,6 +212,42 @@ function isConnectableService(service: ServiceDefinition): boolean {
   return service.enabled && ["external", "ai_provider", "tool_provider"].includes(service.kind);
 }
 
+function connectorServicePriority(
+  service: ServiceDefinition,
+  connection: ConnectorConnectionRecord | null
+): number {
+  if (connection?.status === "active") {
+    return 0;
+  }
+  if (connection?.status === "needs_oauth") {
+    return 1;
+  }
+  if (
+    metadataString(service, "web_provider") !== null ||
+    manualConnectionUrl(service) !== null ||
+    hasOAuthAuthorizationLink(service)
+  ) {
+    return 2;
+  }
+  if (service.credential_scopes.length > 0) {
+    return 3;
+  }
+  return 4;
+}
+
+function compareConnectorServices(
+  left: ServiceDefinition,
+  right: ServiceDefinition,
+  connectionsByService: Map<string, ConnectorConnectionRecord>
+): number {
+  const leftPriority = connectorServicePriority(left, connectionsByService.get(left.id) ?? null);
+  const rightPriority = connectorServicePriority(right, connectionsByService.get(right.id) ?? null);
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+  return left.name.localeCompare(right.name);
+}
+
 function metadataBoolean(service: ServiceDefinition | null, key: string): boolean {
   return service?.metadata[key] === true;
 }
@@ -333,6 +369,7 @@ export default function SynarchAppPage() {
   const [firstNextAction, setFirstNextAction] = useState("");
   const [projectReminderAt, setProjectReminderAt] = useState("");
   const [projectSubmitNotice, setProjectSubmitNotice] = useState<string | null>(null);
+  const [projectSearch, setProjectSearch] = useState("");
   const [priority, setPriority] = useState<GoalPriority>("medium");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
@@ -396,12 +433,35 @@ export default function SynarchAppPage() {
     refetchInterval: 15_000
   });
 
+  const orderedProjects = useMemo(
+    () =>
+      [...(projectsQuery.data ?? [])].sort((left, right) => {
+        const createdDelta = right.created_at.localeCompare(left.created_at);
+        if (createdDelta !== 0) {
+          return createdDelta;
+        }
+        return left.title.localeCompare(right.title);
+      }),
+    [projectsQuery.data]
+  );
+  const visibleProjects = useMemo(() => {
+    const query = projectSearch.trim().toLocaleLowerCase("fr-FR");
+    if (query.length === 0) {
+      return orderedProjects;
+    }
+    return orderedProjects.filter((project) =>
+      [project.title, project.goal, project.id, project.owner_agent_id]
+        .join(" ")
+        .toLocaleLowerCase("fr-FR")
+        .includes(query)
+    );
+  }, [orderedProjects, projectSearch]);
   const selectedProject =
-    projectsQuery.data?.find((project) => project.id === selectedProjectId) ??
-    projectsQuery.data?.[0] ??
+    orderedProjects.find((project) => project.id === selectedProjectId) ??
+    visibleProjects[0] ??
+    orderedProjects[0] ??
     null;
   const effectiveProjectId = selectedProject?.id ?? null;
-
   const briefsQuery = useQuery({
     queryKey: ["app-project-briefs", effectiveProjectId],
     queryFn: () => listProjectBriefs(effectiveProjectId ?? undefined),
@@ -419,21 +479,27 @@ export default function SynarchAppPage() {
     enabled: effectiveProjectId !== null,
     refetchInterval: 15_000
   });
-
   const connectorServices = useMemo(
     () => (servicesQuery.data ?? []).filter(isConnectableService),
     [servicesQuery.data]
   );
+  const connectionsByService = connectionByService(connectionsQuery.data ?? []);
+  const orderedConnectorServices = useMemo(
+    () =>
+      [...connectorServices].sort((left, right) =>
+        compareConnectorServices(left, right, connectionsByService)
+      ),
+    [connectorServices, connectionsByService]
+  );
   const selectedService =
-    connectorServices.find((service) => service.id === selectedServiceId) ??
-    connectorServices[0] ??
+    orderedConnectorServices.find((service) => service.id === selectedServiceId) ??
+    orderedConnectorServices[0] ??
     null;
   const serviceScopes = selectedService?.credential_scopes ?? [];
   const selectedScopes = selectedService
     ? (scopeSelectionsByService[selectedService.id] ?? serviceScopes)
     : [];
   const selectedScopesSet = selectedScopeSet(selectedScopes);
-  const connectionsByService = connectionByService(connectionsQuery.data ?? []);
   const selectedConnection = selectedService
     ? connectionsByService.get(selectedService.id) ?? null
     : null;
@@ -975,15 +1041,26 @@ export default function SynarchAppPage() {
             <section className="rounded-md border border-border bg-panel shadow-soft">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
                 <h2 className="text-sm font-semibold">Projets</h2>
-                <span className="text-xs text-muted">{projectsQuery.data?.length ?? 0}</span>
+                <span className="text-xs text-muted">{visibleProjects.length}</span>
+              </div>
+              <div className="border-b border-border px-4 py-3">
+                <input
+                  aria-label="Rechercher un projet"
+                  className="h-9 w-full rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                  value={projectSearch}
+                  onChange={(event) => setProjectSearch(event.target.value)}
+                  placeholder="Rechercher projet, objectif, agent"
+                />
               </div>
               <div className="max-h-[520px] overflow-auto">
                 {projectsQuery.isLoading ? (
                   <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
-                ) : (projectsQuery.data ?? []).length === 0 ? (
+                ) : orderedProjects.length === 0 ? (
                   <p className="px-4 py-3 text-sm text-muted">Aucun projet.</p>
+                ) : visibleProjects.length === 0 ? (
+                  <p className="px-4 py-3 text-sm text-muted">Aucun résultat.</p>
                 ) : (
-                  (projectsQuery.data ?? []).map((project) => (
+                  visibleProjects.map((project) => (
                     <ProjectRow
                       key={project.id}
                       project={project}
@@ -1082,7 +1159,7 @@ export default function SynarchAppPage() {
               </div>
               <ConnectorConnectionOverview
                 connections={connectionsQuery.data ?? []}
-                services={connectorServices}
+                services={orderedConnectorServices}
                 loading={connectionsQuery.isLoading || servicesQuery.isLoading}
                 selectedServiceId={selectedService?.id ?? null}
                 onSelectService={handleConnectorServiceSelect}
@@ -1093,7 +1170,7 @@ export default function SynarchAppPage() {
                   value={selectedService?.id ?? ""}
                   onChange={(event) => handleConnectorServiceSelect(event.target.value)}
                 >
-                  {connectorServices.map((service) => (
+                  {orderedConnectorServices.map((service) => (
                     <option key={service.id} value={service.id}>
                       {service.name}
                     </option>
@@ -1291,7 +1368,7 @@ export default function SynarchAppPage() {
 
             <WebProviderPanel
               providers={webProvidersQuery.data ?? []}
-              services={connectorServices}
+              services={orderedConnectorServices}
               connections={connectionsQuery.data ?? []}
               loading={webProvidersQuery.isLoading || servicesQuery.isLoading}
               selectedServiceId={selectedService?.id ?? null}
