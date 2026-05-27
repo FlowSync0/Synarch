@@ -39,6 +39,7 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0030_work_queue_items.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0031_connector_oauth_flow.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0032_worker_heartbeats.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0033_connector_manual_setup_links.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

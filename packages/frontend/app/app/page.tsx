@@ -122,12 +122,23 @@ function metadataString(service: ServiceDefinition | null, key: string): string 
   return typeof value === "string" ? value : null;
 }
 
-function hasConnectorAuthorizationLink(service: ServiceDefinition): boolean {
+function hasOAuthAuthorizationLink(service: ServiceDefinition): boolean {
   return (
     metadataString(service, "oauth_authorization_url") !== null ||
-    metadataString(service, "connect_url") !== null ||
-    metadataString(service, "manual_connection_url") !== null
+    metadataString(service, "connect_url") !== null
   );
+}
+
+function manualConnectionUrl(service: ServiceDefinition | null): string | null {
+  return metadataString(service, "manual_connection_url");
+}
+
+function connectionSetupLabel(service: ServiceDefinition | null): string {
+  return metadataString(service, "connection_setup_label") ?? "Préparer la connexion";
+}
+
+function connectionSetupInstructions(service: ServiceDefinition | null): string | null {
+  return metadataString(service, "connection_setup_instructions");
 }
 
 function connectorModesForService(service: ServiceDefinition): ConnectorConnectionMode[] {
@@ -138,7 +149,7 @@ function connectorModesForService(service: ServiceDefinition): ConnectorConnecti
   if (!metadataBoolean(service, "requires_api_key")) {
     modes.push("no_key");
   }
-  if (hasConnectorAuthorizationLink(service)) {
+  if (hasOAuthAuthorizationLink(service)) {
     modes.push("oauth");
   }
   return modes.length > 0 ? modes : ["no_key"];
@@ -852,6 +863,24 @@ export default function SynarchAppPage() {
                         </span>
                       ))}
                     </div>
+                    {manualConnectionUrl(selectedService) ? (
+                      <div className="mt-3 rounded-md border border-border bg-white p-2">
+                        {connectionSetupInstructions(selectedService) ? (
+                          <p className="mb-2 text-[11px] text-muted">
+                            {connectionSetupInstructions(selectedService)}
+                          </p>
+                        ) : null}
+                        <a
+                          href={manualConnectionUrl(selectedService) ?? "#"}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex h-8 items-center gap-2 rounded-md border border-border px-2 text-xs font-semibold text-ink hover:bg-slate-50"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          <span>{connectionSetupLabel(selectedService)}</span>
+                        </a>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
 

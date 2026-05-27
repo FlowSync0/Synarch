@@ -7841,6 +7841,43 @@ def test_connect_service_rejects_api_key_when_encryption_is_required(
     assert list((tmp_path / "connectors").glob("*/*.json")) == []
 
 
+def test_connect_service_oauth_rejects_manual_key_setup_link() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-api-key-only",
+            name="API Key Only",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["provider:api_key"],
+            metadata={
+                "requires_api_key": True,
+                "manual_connection_url": "https://provider.example.com/api-keys",
+            },
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-api-key-only/connections",
+            json={
+                "mode": "oauth",
+                "rationale": "Try to start OAuth from a manual API key setup link.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "oauth_authorization_url" in response.text
+    assert "manual_connection_url" not in response.text
+    assert state_client.connector_connections == []
+    assert secret_vault.stored == []
+
+
 def test_connect_service_oauth_returns_setup_link_without_secret() -> None:
     state_client = FakeStateClient()
     state_client.services.append(

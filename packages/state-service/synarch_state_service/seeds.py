@@ -440,7 +440,14 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
         capabilities=["git.read", "git.write"],
         credential_scopes=["github:contents:read", "github:contents:write"],
         allowed_divisions=["dev"],
-        metadata={"connector_type": "source_control"},
+        metadata={
+            "connector_type": "source_control",
+            "manual_connection_url": "https://github.com/settings/personal-access-tokens/new",
+            "connection_setup_label": "Créer un token GitHub",
+            "connection_setup_instructions": (
+                "Créer un token finement limité au dépôt nécessaire, puis coller le token ici."
+            ),
+        },
     ),
     ServiceDefinition(
         id="connector-spreadsheets",
@@ -502,6 +509,11 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
             "web_provider": "firecrawl",
             "requires_api_key": True,
             "api_key_env_var": "FIRECRAWL_API_KEY",
+            "manual_connection_url": "https://www.firecrawl.dev",
+            "connection_setup_label": "Ouvrir Firecrawl",
+            "connection_setup_instructions": (
+                "Créer ou copier une clé API Firecrawl depuis le dashboard, puis la coller ici."
+            ),
         },
     ),
     ServiceDefinition(
@@ -517,6 +529,11 @@ DEFAULT_SERVICES: tuple[ServiceDefinition, ...] = (
             "requires_api_key": True,
             "api_key_env_var": "BROWSERLESS_API_KEY",
             "requires_human_approval": True,
+            "manual_connection_url": "https://account.browserless.io",
+            "connection_setup_label": "Ouvrir Browserless",
+            "connection_setup_instructions": (
+                "Créer ou copier le token Browserless depuis le dashboard, puis le coller ici."
+            ),
         },
     ),
     ServiceDefinition(

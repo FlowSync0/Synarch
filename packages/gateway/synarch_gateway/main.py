@@ -737,14 +737,12 @@ def connector_oauth_setup_url(
     setup_url = (
         metadata_string(service, "oauth_authorization_url")
         or metadata_string(service, "connect_url")
-        or metadata_string(service, "manual_connection_url")
     )
     if setup_url is None:
         raise HTTPException(
             status_code=400,
             detail=(
-                "OAuth connector requires service metadata oauth_authorization_url, "
-                "connect_url, or manual_connection_url"
+                "OAuth connector requires service metadata oauth_authorization_url or connect_url"
             ),
         )
     return url_with_query_params(
