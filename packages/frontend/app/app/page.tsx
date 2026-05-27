@@ -162,6 +162,20 @@ function canReencryptSecretVault(item: SystemReadinessItem): boolean {
   );
 }
 
+function secretVaultBadges(item: SystemReadinessItem): string[] {
+  if (item.id !== "secret_vault") {
+    return [];
+  }
+  const encrypted = evidenceBoolean(item, "encryption_enabled");
+  const strict = evidenceBoolean(item, "encryption_required");
+  const plaintextCount = evidenceNumber(item, "plaintext_secret_count");
+  return [
+    strict ? "mode strict" : "mode dev",
+    encrypted ? "chiffré" : "non chiffré",
+    plaintextCount > 0 ? `${plaintextCount} plaintext` : "0 plaintext"
+  ];
+}
+
 export default function SynarchAppPage() {
   const queryClient = useQueryClient();
   const [goal, setGoal] = useState("");
@@ -878,6 +892,18 @@ export default function SynarchAppPage() {
                         <p className="mt-1 line-clamp-2 text-xs text-muted">
                           {item.manual_action}
                         </p>
+                      ) : null}
+                      {secretVaultBadges(item).length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {secretVaultBadges(item).map((badge) => (
+                            <span
+                              key={badge}
+                              className="rounded-md bg-slate-50 px-2 py-1 text-[11px] font-semibold text-muted ring-1 ring-border"
+                            >
+                              {badge}
+                            </span>
+                          ))}
+                        </div>
                       ) : null}
                       {item.id === "secret_vault" && reencryptSecretVaultMutation.isError ? (
                         <p className="mt-1 text-xs text-risk">

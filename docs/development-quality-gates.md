@@ -246,6 +246,9 @@ Connector connection lifecycle gates:
 
 - `POST /connectors/{service_id}/connections` stores API keys in SecretVault and sends only
   `secret_ref` plus fingerprint to state-service.
+- `SECRET_VAULT_REQUIRE_ENCRYPTION=true` makes Gateway readiness block and makes connector secret
+  storage fail before state mutation unless `SECRET_VAULT_KEY` enables encryption and legacy
+  plaintext entries have been re-encrypted.
 - `POST /connector-connections/{connection_id}/disable` deletes the referenced local SecretVault
   secret when present, marks the connection `disabled`, clears the active `secret_ref`, and writes
   `connector_connection.disabled` event/audit records without exposing the secret value.

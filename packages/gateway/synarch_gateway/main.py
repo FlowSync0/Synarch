@@ -163,9 +163,16 @@ class SecretVault(Protocol):
 
 
 class LocalFileSecretVault:
-    def __init__(self, root: str, encryption_key: str | None = None) -> None:
+    def __init__(
+        self,
+        root: str,
+        encryption_key: str | None = None,
+        *,
+        require_encryption: bool = False,
+    ) -> None:
         self.root = Path(root)
         self.encryption_key = encryption_key
+        self.require_encryption = require_encryption
 
     @property
     def encryption_enabled(self) -> bool:
@@ -180,6 +187,25 @@ class LocalFileSecretVault:
     ) -> SecretReference:
         if not secret_value:
             raise HTTPException(status_code=400, detail="Secret value cannot be empty")
+        if self.require_encryption and not self.encryption_enabled:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "SECRET_VAULT_KEY is required before storing connector secrets when "
+                    "SECRET_VAULT_REQUIRE_ENCRYPTION is enabled"
+                ),
+            )
+        if self.require_encryption and self.status().get("plaintext_secret_count", 0) not in {
+            0,
+            None,
+        }:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Re-encrypt legacy plaintext connector secrets before storing new "
+                    "production secrets"
+                ),
+            )
         fingerprint = hashlib.sha256(secret_value.encode("utf-8")).hexdigest()[:16]
         safe_service_id = "".join(
             character if character.isalnum() or character in {"-", "_"} else "_"
@@ -305,6 +331,7 @@ class LocalFileSecretVault:
             "backend": "local_file",
             "storage_path": str(self.root),
             "writable": writable,
+            "encryption_required": self.require_encryption,
             "encryption_enabled": self.encryption_enabled,
             "secret_count": total_count,
             "encrypted_secret_count": encrypted_count,
@@ -592,6 +619,7 @@ class Settings(BaseSettings):
     service_health_timeout_seconds: float = 3.0
     secret_vault_dir: str = ".synarch/secrets"
     secret_vault_key_env_var: str = "SECRET_VAULT_KEY"
+    secret_vault_require_encryption: bool = False
     gateway_public_url: str | None = None
     work_queue_worker_queue_name: str = "reminders"
     work_queue_worker_stale_after_seconds: int = 120
@@ -629,6 +657,7 @@ def get_secret_vault() -> SecretVault:
     return LocalFileSecretVault(
         settings.secret_vault_dir,
         encryption_key=os.getenv(settings.secret_vault_key_env_var),
+        require_encryption=settings.secret_vault_require_encryption,
     )
 
 
@@ -3125,6 +3154,7 @@ def ai_runtime_readiness_item(state_client: StateClient) -> SystemReadinessItem:
 
 def secret_vault_readiness_item() -> SystemReadinessItem:
     status = secret_vault_status_payload()
+    encryption_required = status.get("encryption_required") is True
     if status.get("writable") is not True:
         return readiness_item(
             "secret_vault",
@@ -3136,6 +3166,19 @@ def secret_vault_readiness_item() -> SystemReadinessItem:
             status,
         )
     if status.get("encryption_enabled") is not True:
+        if encryption_required:
+            return readiness_item(
+                "secret_vault",
+                "security",
+                "SecretVault",
+                "blocked",
+                "SecretVault production mode requires encryption before storing secrets.",
+                (
+                    f"Set {settings.secret_vault_key_env_var} or disable "
+                    "SECRET_VAULT_REQUIRE_ENCRYPTION only for local development."
+                ),
+                status,
+            )
         return readiness_item(
             "secret_vault",
             "security",
@@ -3149,6 +3192,19 @@ def secret_vault_readiness_item() -> SystemReadinessItem:
             status,
         )
     if status.get("plaintext_secret_count", 0) not in {0, None}:
+        if encryption_required:
+            return readiness_item(
+                "secret_vault",
+                "security",
+                "SecretVault",
+                "blocked",
+                "SecretVault production mode found legacy plaintext local secrets.",
+                (
+                    "Run /secret-vault/reencrypt or the /app SecretVault action before "
+                    "using production credentials."
+                ),
+                status,
+            )
         return readiness_item(
             "secret_vault",
             "security",

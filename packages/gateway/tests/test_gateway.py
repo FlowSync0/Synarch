@@ -152,6 +152,52 @@ def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: P
     assert status["plaintext_secret_count"] == 0
 
 
+def test_local_file_secret_vault_rejects_plaintext_when_encryption_required(
+    tmp_path: Path,
+) -> None:
+    vault = LocalFileSecretVault(str(tmp_path), require_encryption=True)
+
+    with pytest.raises(HTTPException) as error:
+        vault.store_connector_secret(
+            service_id="connector-firecrawl",
+            secret_value="fc-production-secret",
+            actor_id="local-user",
+        )
+
+    assert error.value.status_code == 409
+    assert "SECRET_VAULT_KEY" in error.value.detail
+    assert "fc-production-secret" not in error.value.detail
+    assert list((tmp_path / "connectors").glob("*/*.json")) == []
+    assert vault.status()["encryption_required"] is True
+
+
+def test_local_file_secret_vault_rejects_new_secret_when_legacy_plaintext_exists(
+    tmp_path: Path,
+) -> None:
+    LocalFileSecretVault(str(tmp_path)).store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-legacy-secret",
+        actor_id="local-user",
+    )
+    vault = LocalFileSecretVault(
+        str(tmp_path),
+        encryption_key="test-vault-key",
+        require_encryption=True,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        vault.store_connector_secret(
+            service_id="connector-browserless",
+            secret_value="browserless-production-secret",
+            actor_id="local-user",
+        )
+
+    assert error.value.status_code == 409
+    assert "re-encrypt" in error.value.detail.lower()
+    assert "browserless-production-secret" not in error.value.detail
+    assert not (tmp_path / "connectors" / "connector-browserless").exists()
+
+
 def test_local_file_secret_vault_deletes_connector_secret(tmp_path: Path) -> None:
     vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
     reference = vault.store_connector_secret(
@@ -2994,6 +3040,44 @@ def test_system_readiness_reports_manual_configuration_and_actions(
         "human_request_count": 1,
         "blocked_connector_job_count": 0,
     }
+
+
+def test_system_readiness_blocks_when_secret_vault_encryption_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("SECRET_VAULT_KEY", raising=False)
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_dir", str(tmp_path))
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_require_encryption", True)
+
+    item = gateway_main.secret_vault_readiness_item()
+
+    assert item.status == "blocked"
+    assert "SECRET_VAULT_KEY" in (item.manual_action or "")
+    assert item.evidence["encryption_required"] is True
+    assert item.evidence["encryption_enabled"] is False
+
+
+def test_system_readiness_blocks_plaintext_secrets_when_encryption_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    LocalFileSecretVault(str(tmp_path)).store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-legacy-secret",
+        actor_id="local-user",
+    )
+    monkeypatch.setenv("SECRET_VAULT_KEY", "test-vault-key")
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_dir", str(tmp_path))
+    monkeypatch.setattr(gateway_main.settings, "secret_vault_require_encryption", True)
+
+    item = gateway_main.secret_vault_readiness_item()
+
+    assert item.status == "blocked"
+    assert "reencrypt" in (item.manual_action or "")
+    assert item.evidence["encryption_required"] is True
+    assert item.evidence["encryption_enabled"] is True
+    assert item.evidence["plaintext_secret_count"] == 1
 
 
 def test_work_queue_worker_readiness_reports_recent_heartbeat() -> None:
@@ -7628,6 +7712,48 @@ def test_connect_service_stores_secret_in_vault_and_sends_only_secret_ref() -> N
         "fake://connectors/connector-firecrawl/fp_test"
     )
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_connect"
+
+
+def test_connect_service_rejects_api_key_when_encryption_is_required(
+    tmp_path: Path,
+) -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            metadata={"requires_api_key": True},
+        )
+    )
+    secret_vault = LocalFileSecretVault(str(tmp_path), require_encryption=True)
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-firecrawl/connections",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+            },
+            json={
+                "mode": "api_key",
+                "api_key": "fc-production-secret",
+                "credential_scopes": ["firecrawl:api_key"],
+                "rationale": "Connect production Firecrawl.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 409
+    assert "SECRET_VAULT_KEY" in response.text
+    assert "fc-production-secret" not in response.text
+    assert state_client.connector_connections == []
+    assert list((tmp_path / "connectors").glob("*/*.json")) == []
 
 
 def test_connect_service_oauth_returns_setup_link_without_secret() -> None:

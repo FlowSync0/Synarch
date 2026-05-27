@@ -140,9 +140,11 @@ keys survive container recreation. Set `SECRET_VAULT_KEY` before storing product
 new local vault entries are encrypted at rest; without it, Gateway reports a SecretVault readiness
 warning and stores local development secrets as chmod `0600` JSON. Production deployments can still
 replace the local file vault with Vault/KMS or the platform secret manager behind the same
-`secret_ref` contract. If `SECRET_VAULT_KEY` is added after plaintext local entries already exist,
-run Gateway `POST /secret-vault/reencrypt` or the `/app` SecretVault action to rewrite those entries
-without exposing the secret values.
+`secret_ref` contract. Set `SECRET_VAULT_REQUIRE_ENCRYPTION=true` for production-like runs: Gateway
+then blocks readiness and refuses new API-key/OAuth secret storage until `SECRET_VAULT_KEY` is
+configured and any legacy plaintext entries have been re-encrypted. If `SECRET_VAULT_KEY` is added
+after plaintext local entries already exist, run Gateway `POST /secret-vault/reencrypt` or the
+`/app` SecretVault action to rewrite those entries without exposing the secret values.
 Connector deactivation goes through Gateway
 `POST /connector-connections/{connection_id}/disable`. Gateway deletes the referenced local
 SecretVault file when one exists, then state-service marks the connection `disabled`, clears the

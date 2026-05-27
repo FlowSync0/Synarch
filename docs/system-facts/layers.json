@@ -138,6 +138,7 @@
       "SecretVault-backed connector connection setup stores only secret references in state-service",
       "Connector deactivation clears active secret references and deletes local SecretVault files when possible",
       "Local SecretVault can encrypt new connector secrets when SECRET_VAULT_KEY is configured",
+      "SecretVault strict mode blocks readiness and rejects new connector secrets until encryption is configured and plaintext entries are re-encrypted",
       "Gateway can re-encrypt legacy plaintext local SecretVault entries through an audited operation",
       "Firecrawl and Browserless runtime adapters can use active connector secrets from SecretVault",
       "OAuth/manual-link connector setup creates setup URLs and stores callback codes in SecretVault",
