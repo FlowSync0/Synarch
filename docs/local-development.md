@@ -136,15 +136,18 @@ Connector setup now goes through Gateway `POST /connectors/{service_id}/connecti
 written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
 fingerprint. The default local vault path is `.synarch/secrets`; override it with `SECRET_VAULT_DIR`.
 The path is git-ignored. Docker mounts this path through the `synarch_secrets` volume so connector
-keys survive container recreation. Set `SECRET_VAULT_KEY` before storing production credentials so
-new local vault entries are encrypted at rest; without it, Gateway reports a SecretVault readiness
-warning and stores local development secrets as chmod `0600` JSON. Production deployments can still
-replace the local file vault with Vault/KMS or the platform secret manager behind the same
-`secret_ref` contract. Set `SECRET_VAULT_REQUIRE_ENCRYPTION=true` for production-like runs: Gateway
-then blocks readiness and refuses new API-key/OAuth secret storage until `SECRET_VAULT_KEY` is
-configured and any legacy plaintext entries have been re-encrypted. If `SECRET_VAULT_KEY` is added
-after plaintext local entries already exist, run Gateway `POST /secret-vault/reencrypt` or the
-`/app` SecretVault action to rewrite those entries without exposing the secret values.
+keys survive container recreation. Docker also mounts `synarch_secret_keys` at
+`/run/secrets/synarch` so `SECRET_VAULT_KEY_FILE=/run/secrets/synarch/secret-vault.key` can be used
+without putting the key value directly in `.env`. Set `SECRET_VAULT_KEY` or
+`SECRET_VAULT_KEY_FILE` before storing production credentials so new local vault entries are
+encrypted at rest; without either one, Gateway reports a SecretVault readiness warning and stores
+local development secrets as chmod `0600` JSON. Production deployments can still replace the local
+file vault with Vault/KMS or the platform secret manager behind the same `secret_ref` contract. Set
+`SECRET_VAULT_REQUIRE_ENCRYPTION=true` for production-like runs: Gateway then blocks readiness and
+refuses new API-key/OAuth secret storage until encryption is configured and any legacy plaintext
+entries have been re-encrypted. If encryption is added after plaintext local entries already exist,
+run Gateway `POST /secret-vault/reencrypt` or the `/app` SecretVault action to rewrite those entries
+without exposing the secret values.
 Connector deactivation goes through Gateway
 `POST /connector-connections/{connection_id}/disable`. Gateway deletes the referenced local
 SecretVault file when one exists, then state-service marks the connection `disabled`, clears the

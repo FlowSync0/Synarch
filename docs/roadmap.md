@@ -324,9 +324,10 @@ Progress:
 - Done: Gateway connector deactivation deletes the referenced local SecretVault file when possible,
   clears the active `secret_ref`, and records `connector_connection.disabled` event/audit evidence;
   `/app` exposes the action for connected services.
-- Done: Local SecretVault can encrypt new connector secrets when `SECRET_VAULT_KEY` is set, reports
-  readiness in Gateway `/readiness`, and `web.extract` can use active Firecrawl/Browserless
-  connector secrets instead of requiring provider keys in environment variables.
+- Done: Local SecretVault can encrypt new connector secrets when `SECRET_VAULT_KEY` or
+  `SECRET_VAULT_KEY_FILE` is set, reports readiness in Gateway `/readiness`, and `web.extract` can
+  use active Firecrawl/Browserless connector secrets instead of requiring provider keys in
+  environment variables.
 - Done: Production-like SecretVault strict mode (`SECRET_VAULT_REQUIRE_ENCRYPTION=true`) blocks
   readiness and rejects new connector secret storage until encryption is configured and legacy
   plaintext entries are re-encrypted.

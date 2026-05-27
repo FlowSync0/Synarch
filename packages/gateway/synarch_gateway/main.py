@@ -208,8 +208,8 @@ class LocalFileSecretVault:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "SECRET_VAULT_KEY is required before storing connector secrets when "
-                    "SECRET_VAULT_REQUIRE_ENCRYPTION is enabled"
+                    "SECRET_VAULT_KEY or SECRET_VAULT_KEY_FILE is required before storing "
+                    "connector secrets when SECRET_VAULT_REQUIRE_ENCRYPTION is enabled"
                 ),
             )
         if self.require_encryption and self.status().get("plaintext_secret_count", 0) not in {
@@ -366,7 +366,10 @@ class LocalFileSecretVault:
         if not self.encryption_enabled:
             raise HTTPException(
                 status_code=400,
-                detail="SECRET_VAULT_KEY is required to re-encrypt local connector secrets",
+                detail=(
+                    "SECRET_VAULT_KEY or SECRET_VAULT_KEY_FILE is required to re-encrypt "
+                    "local connector secrets"
+                ),
             )
 
         scanned_count = 0

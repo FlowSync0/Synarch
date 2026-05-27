@@ -73,6 +73,7 @@ services:
       - "8000:8000"
     volumes:
       - synarch_secrets:/app/.synarch/secrets
+      - synarch_secret_keys:/run/secrets/synarch
     depends_on:
       - control-plane
       - state-service
@@ -377,3 +378,4 @@ volumes:
   postgres_data:
   grafana_data:
   synarch_secrets:
+  synarch_secret_keys:

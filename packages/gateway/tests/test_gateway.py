@@ -211,6 +211,7 @@ def test_local_file_secret_vault_rejects_plaintext_when_encryption_required(
 
     assert error.value.status_code == 409
     assert "SECRET_VAULT_KEY" in error.value.detail
+    assert "SECRET_VAULT_KEY_FILE" in error.value.detail
     assert "fc-production-secret" not in error.value.detail
     assert list((tmp_path / "connectors").glob("*/*.json")) == []
     assert vault.status()["encryption_required"] is True
@@ -335,6 +336,7 @@ def test_reencrypt_secret_vault_requires_configured_key(tmp_path: Path) -> None:
 
     assert error.value.status_code == 400
     assert "SECRET_VAULT_KEY" in error.value.detail
+    assert "SECRET_VAULT_KEY_FILE" in error.value.detail
 
 
 class FakeStateClient:
@@ -7881,6 +7883,7 @@ def test_connect_service_rejects_api_key_when_encryption_is_required(
 
     assert response.status_code == 409
     assert "SECRET_VAULT_KEY" in response.text
+    assert "SECRET_VAULT_KEY_FILE" in response.text
     assert "fc-production-secret" not in response.text
     assert state_client.connector_connections == []
     assert list((tmp_path / "connectors").glob("*/*.json")) == []

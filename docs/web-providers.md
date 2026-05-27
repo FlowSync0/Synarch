@@ -21,13 +21,14 @@ permission, credential, event, and audit gates.
   status, risk level, and whether human approval is required before use.
 - Gateway `POST /connectors/{service_id}/connections` stores provider API keys in the configured
   SecretVault and writes only `secret_ref` plus a short fingerprint into state-service. The default
-  local vault is `.synarch/secrets`; set `SECRET_VAULT_KEY` to encrypt new local vault entries at
-  rest. Set `SECRET_VAULT_REQUIRE_ENCRYPTION=true` in production-like runs so Gateway blocks
-  readiness and refuses to store new connector secrets until encryption is active and legacy
-  plaintext entries have been re-encrypted. If the key is added after plaintext local entries already
-  exist, Gateway `POST /secret-vault/reencrypt` and the `/app` SecretVault action can rewrite those
-  entries without returning secret values. Production can also swap the vault behind the same
-  contract for a platform secret manager.
+  local vault is `.synarch/secrets`; set `SECRET_VAULT_KEY` or `SECRET_VAULT_KEY_FILE` to encrypt
+  new local vault entries at rest. The local compose stack mounts `synarch_secret_keys` at
+  `/run/secrets/synarch` for file-based keys. Set `SECRET_VAULT_REQUIRE_ENCRYPTION=true` in
+  production-like runs so Gateway blocks readiness and refuses to store new connector secrets until
+  encryption is active and legacy plaintext entries have been re-encrypted. If the key is added
+  after plaintext local entries already exist, Gateway `POST /secret-vault/reencrypt` and the `/app`
+  SecretVault action can rewrite those entries without returning secret values. Production can also
+  swap the vault behind the same contract for a platform secret manager.
 - Gateway `POST /connector-connections/{connection_id}/disable` deactivates a provider connection,
   deletes the referenced local SecretVault file when possible, clears the active `secret_ref`, and
   retains only non-secret fingerprint/event/audit evidence.
