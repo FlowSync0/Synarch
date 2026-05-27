@@ -99,6 +99,7 @@ GoalEnvelope
   -> Frontend project detail surfaces the Gateway project brief as the operational project guide
   -> Frontend project detail surfaces project-scoped human assistance evidence and can answer/dismiss requests
   -> `/app` operator workspace can approve/reject credential requests, apply grants to candidate services, and answer/dismiss human-assistance gates without exposing secrets
+  -> `/app` reads Gateway cost records and summaries through same-origin proxies for live AI spend visibility without exposing provider secrets
   -> Frontend project detail can launch the selected project's next ready task through `/tasks/run-ready`
   -> Frontend project brief next-action control routes to run, review, connector, assistance, or planning flows
   -> Gateway `/readiness` returns actionable ready/warning/blocked items without mutating state

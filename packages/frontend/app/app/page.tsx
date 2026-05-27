@@ -28,9 +28,11 @@ import {
   decideTaskReview,
   decideCredentialAccessRequest,
   disableConnectorConnection,
+  getCostSummary,
   resumeConnectorJob,
   getSystemReadiness,
   getProjectTimeline,
+  listCostRecords,
   listCredentialAccessRequests,
   listConnectorConnections,
   listHumanAssistanceRequests,
@@ -47,6 +49,9 @@ import {
   type ConnectorJobActionResult,
   type ConnectorConnectionMode,
   type ConnectorConnectionRecord,
+  type CostRecord,
+  type CostSummary,
+  type CostSummaryGroup,
   type CredentialAccessRequest,
   type GoalPriority,
   type HumanAssistanceRequest,
@@ -553,6 +558,22 @@ export default function SynarchAppPage() {
     [orderedProjects]
   );
   const effectiveProjectId = selectedProject?.id ?? null;
+  const costRecordsQuery = useQuery({
+    queryKey: ["app-cost-records"],
+    queryFn: () => listCostRecords(),
+    refetchInterval: 15_000
+  });
+  const providerCostSummaryQuery = useQuery({
+    queryKey: ["app-cost-summary", "provider"],
+    queryFn: () => getCostSummary({ groupBy: "provider" }),
+    refetchInterval: 15_000
+  });
+  const projectCostSummaryQuery = useQuery({
+    queryKey: ["app-cost-summary", "project-model", effectiveProjectId],
+    queryFn: () => getCostSummary({ groupBy: "model", projectId: effectiveProjectId }),
+    enabled: effectiveProjectId !== null,
+    refetchInterval: 15_000
+  });
   const briefsQuery = useQuery({
     queryKey: ["app-project-briefs", effectiveProjectId],
     queryFn: () => listProjectBriefs(effectiveProjectId ?? undefined),
@@ -1510,6 +1531,23 @@ export default function SynarchAppPage() {
               loading={webProvidersQuery.isLoading || servicesQuery.isLoading}
               selectedServiceId={selectedService?.id ?? null}
               onSelectProvider={handleWebProviderSelect}
+            />
+
+            <CostDashboardPanel
+              records={costRecordsQuery.data ?? []}
+              providerSummary={providerCostSummaryQuery.data ?? null}
+              projectSummary={projectCostSummaryQuery.data ?? null}
+              selectedProject={selectedProject}
+              loading={
+                costRecordsQuery.isLoading ||
+                providerCostSummaryQuery.isLoading ||
+                projectCostSummaryQuery.isLoading
+              }
+              error={
+                costRecordsQuery.error ??
+                providerCostSummaryQuery.error ??
+                projectCostSummaryQuery.error
+              }
             />
 
             <ConnectorJobsPanel
@@ -3193,6 +3231,168 @@ function OperatorQueuePanel({
           {humanError instanceof Error ? humanError.message : "Réponse humaine impossible."}
         </p>
       ) : null}
+    </section>
+  );
+}
+
+function topCostGroups(summary: CostSummary | null, limit: number): CostSummaryGroup[] {
+  return [...(summary?.groups ?? [])]
+    .sort((left, right) => {
+      if (right.total_cost !== left.total_cost) {
+        return right.total_cost - left.total_cost;
+      }
+      return right.record_count - left.record_count;
+    })
+    .slice(0, limit);
+}
+
+function latestCostRecords(records: CostRecord[], limit: number): CostRecord[] {
+  return [...records]
+    .sort((left, right) => costRecordedAt(right).localeCompare(costRecordedAt(left)))
+    .slice(0, limit);
+}
+
+function CostDashboardPanel({
+  records,
+  providerSummary,
+  projectSummary,
+  selectedProject,
+  loading,
+  error
+}: {
+  records: CostRecord[];
+  providerSummary: CostSummary | null;
+  projectSummary: CostSummary | null;
+  selectedProject: ProjectRecord | null;
+  loading: boolean;
+  error: unknown;
+}) {
+  const latestRecords = latestCostRecords(records, 5);
+  const topProviders = topCostGroups(providerSummary, 4);
+  const projectModels = topCostGroups(projectSummary, 4);
+  const currency = providerSummary?.currency ?? projectSummary?.currency ?? "USD";
+  const projectCurrency = projectSummary?.currency ?? currency;
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Coûts IA live</h2>
+          <p className="truncate text-xs text-muted">
+            Ledger gateway/state-service, sans secret ni clé provider.
+          </p>
+        </div>
+        <Activity className="h-4 w-4 shrink-0 text-accent" />
+      </div>
+
+      {loading ? (
+        <p className="px-4 py-3 text-sm text-muted">Chargement coûts...</p>
+      ) : error ? (
+        <p className="px-4 py-3 text-sm text-risk">
+          {error instanceof Error ? error.message : "Coûts indisponibles."}
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 border-b border-border">
+            <div className="border-r border-border px-3 py-3">
+              <p className="text-xs text-muted">Total</p>
+              <p className="mt-1 truncate text-sm font-semibold">
+                {formatCurrency(providerSummary?.total_cost ?? 0, currency)}
+              </p>
+            </div>
+            <div className="border-r border-border px-3 py-3">
+              <p className="text-xs text-muted">Appels</p>
+              <p className="mt-1 text-sm font-semibold">{providerSummary?.record_count ?? 0}</p>
+            </div>
+            <div className="px-3 py-3">
+              <p className="text-xs text-muted">Tokens</p>
+              <p className="mt-1 text-sm font-semibold">
+                {(providerSummary?.input_tokens ?? 0) + (providerSummary?.output_tokens ?? 0)}
+              </p>
+            </div>
+          </div>
+
+          <div className="border-b border-border px-4 py-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase text-muted">Projet sélectionné</p>
+              <span className="text-xs text-muted">{projectSummary?.record_count ?? 0} appels</span>
+            </div>
+            <p className="truncate text-sm font-medium">
+              {selectedProject?.title ?? "Aucun projet sélectionné"}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {formatCurrency(projectSummary?.total_cost ?? 0, projectCurrency)}
+            </p>
+            {projectModels.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {projectModels.map((group) => (
+                  <span
+                    key={group.group_key}
+                    className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border"
+                  >
+                    {group.group_key}: {formatCurrency(group.total_cost, group.currency)}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="border-b border-border px-4 py-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase text-muted">Providers</p>
+              <span className="text-xs text-muted">{topProviders.length}</span>
+            </div>
+            <div className="grid gap-2">
+              {topProviders.length === 0 ? (
+                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-muted">
+                  Aucun coût enregistré.
+                </p>
+              ) : (
+                topProviders.map((group) => (
+                  <div
+                    key={group.group_key}
+                    className="flex items-center justify-between gap-2 rounded-md border border-border bg-white px-3 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{group.group_key}</p>
+                      <p className="text-xs text-muted">{group.record_count} appels</p>
+                    </div>
+                    <span className="shrink-0 text-xs font-semibold">
+                      {formatCurrency(group.total_cost, group.currency)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="divide-y divide-border">
+            <div className="px-4 py-2">
+              <p className="text-xs font-semibold uppercase text-muted">Derniers coûts</p>
+            </div>
+            {latestRecords.length === 0 ? (
+              <p className="px-4 py-3 text-sm text-muted">Aucun coût récent.</p>
+            ) : (
+              latestRecords.map((record) => (
+                <article key={record.id} className="px-4 py-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="truncate text-sm font-medium">{record.model_id}</p>
+                    <span className="shrink-0 text-xs font-semibold">
+                      {formatCurrency(record.total_cost, record.currency)}
+                    </span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-muted">
+                    {record.project_id ?? "sans projet"} / {formatDate(costRecordedAt(record))}
+                  </p>
+                  <p className="mt-1 truncate text-[11px] text-muted">
+                    {record.provider_id} / in {record.input_tokens} / out {record.output_tokens}
+                  </p>
+                </article>
+              ))
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

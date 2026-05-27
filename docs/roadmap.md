@@ -26,9 +26,9 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
   configuration/operator actions needed before unattended use.
 - `make PYTHON=.venv\Scripts\python.exe verify` passes locally on Windows.
 
-The product is therefore testable through code, APIs, and the first live UI slices. It is not yet a
-complete live interface because cost, health, and goal submission flows are not yet fully wired
-through the dashboard.
+The product is therefore testable through code, APIs, and live UI slices. It is not yet a complete
+live interface because some lifecycle and connector-specific flows remain operator-grade rather
+than product-grade.
 
 ## Status Legend
 
@@ -42,7 +42,7 @@ through the dashboard.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface plus `/app` operator workspace with live goal creation, project list, project brief, operator actions, credential approvals/grants, human-assistance answers, readiness with durable-worker stale/failure checks, service health probes, worker heartbeats, per-queue work-queue summary/controls, connector job controls, and connector connection setup/deactivation. The detailed dashboard still exposes agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector history. | No live cost dashboard yet. | Create goal from `/app`, run ready tasks, connect a provider, run a service health probe, answer a human-assistance gate, then inspect timeline/audit trace. |
+| A. Interface | Partial | Next.js control surface plus `/app` operator workspace with live goal creation, project list, project brief, operator actions, credential approvals/grants, human-assistance answers, readiness with durable-worker stale/failure checks, service health probes, worker heartbeats, per-queue work-queue summary/controls, connector job controls, connector connection setup/deactivation, and a lightweight live AI cost dashboard. The detailed dashboard still exposes agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector history. | Lifecycle authoring and provider-specific connector setup still need product-grade flows. | Create goal from `/app`, run ready tasks, connect a provider, run a service health probe, answer a human-assistance gate, then inspect timeline/audit trace. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, exposes an opt-in scheduler worker, and state-service has a generic durable `work_queue_items` table plus safe worker for non-task workers and project reminders. | Routing is keyword-based only and the generic work queue worker supports only safe bounded payload actions, not arbitrary tools. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode, interim OpenRouter execution, and model-gateway-backed execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, and no sandboxed tool execution inside the runtime. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
@@ -50,7 +50,7 @@ through the dashboard.
 | F. Memory & Context | Partial | PostgreSQL-backed memory items, scoped context assembly, explicit workspace bridge project isolation, bounded graph expansion through `related_memory_ids`, reviewable memory relation proposals, dashboard relation-proposal apply controls, optional query-embedding cosine ranking, OpenRouter task query embeddings, embedded memory candidates, bounded embedding backfill, deterministic fallback ranking, 1536D embedding validation, reusable vector-ranking E2E, live OpenRouter embedding E2E, live embedding-backfill E2E, live bridge/graph E2E, token budget enforcement, proposed memory candidates, gateway approval/rejection, dashboard review controls, live approved/rejected-memory validation, deterministic compaction with structured source provenance, threshold-based compaction policy, duplicate suppression, project-wide compaction planning, Gateway planning restricted to active project workspaces, reusable active/inactive workspace compaction E2E, compaction worker path, and live compacted-memory validation exist. | No hierarchical context database yet. | Start model-gateway extraction before adding heavier memory/agent autonomy. |
 | G. Execution & Tooling | Partial | `ToolCallRequest`, `ToolResult`, gateway permission gate, `event.emit`/`web.fetch`/`web.extract` adapters, `local_fetch`, `local_playwright`, Firecrawl, and Browserless provider selection, task-scoped credential gates, service health checks, encrypted local SecretVault support, SecretVault-backed connector connections, connector deactivation with local secret deletion, OAuth/manual-link setup callback, durable connector job lifecycle records, and bounded connector workers exist. | No sandbox execution and no provider-specific OAuth token exchange modules yet. | Connector job executes a real adapter only after permission, service, credential, and SecretVault reference gates pass. |
 | H. Data / Knowledge | Partial | Conceptual docs plus structured Synarch layer-status facts that can be seeded into memory. | No external connectors, ingestion jobs, document provenance, or loaders. | Seed system facts into memory and verify they appear in context assembly with source metadata. |
-| I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, and chronological event API responses exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation, no Langfuse, and no live cost dashboard. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
+| I. Observability & Governance | Partial | Event, audit, cost, trace fields, model-call events, chronological event API responses, and `/app` live AI cost visibility exist. Docker includes OTEL/Grafana stack. | No OTEL instrumentation or Langfuse trace UI yet. | One request has same trace ID across gateway, state, runtime, event, cost, memory, and audit. |
 
 ## Build Strategy
 
@@ -286,6 +286,8 @@ Progress:
   task result recording, events, and audit logs.
 - Done: every deterministic runner execution records a mock `CostRecord`, emits
   `cost.recorded`, and makes the run queryable by project, agent, model, provider, and trace ID.
+- Done: `/app` reads Gateway cost records and summaries through same-origin proxies and shows
+  global, selected-project, provider, model, and recent-call cost visibility.
 - Done: runner executions now emit `model_call.started` and `model_call.completed`; runtime
   failures emit `model_call.failed` before the dependency error is returned.
 - Done: every `/tasks/run-ready` bounded scheduler batch records a `scheduler.tick` event and audit

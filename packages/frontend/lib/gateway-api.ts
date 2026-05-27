@@ -226,6 +226,27 @@ export type CostRecord = {
   created_at?: string | null;
 };
 
+export type CostSummaryGroupBy = "project" | "agent" | "model" | "provider";
+
+export type CostSummaryGroup = {
+  group_key: string;
+  record_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  currency: string;
+};
+
+export type CostSummary = {
+  group_by: string;
+  groups: CostSummaryGroup[];
+  record_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost: number;
+  currency: string;
+};
+
 export type MemoryStatus = "proposed" | "approved" | "rejected";
 
 export type MemoryItem = {
@@ -783,6 +804,73 @@ export async function listWebProviders(): Promise<WebProviderStatus[]> {
     cache: "no-store"
   });
   return parseJsonResponse<WebProviderStatus[]>(response);
+}
+
+export async function listCostRecords(filters: {
+  projectId?: string | null;
+  agentId?: string | null;
+  providerId?: string | null;
+  modelId?: string | null;
+  traceId?: string | null;
+} = {}): Promise<CostRecord[]> {
+  const params = new URLSearchParams();
+  if (filters.projectId) {
+    params.set("project_id", filters.projectId);
+  }
+  if (filters.agentId) {
+    params.set("agent_id", filters.agentId);
+  }
+  if (filters.providerId) {
+    params.set("provider_id", filters.providerId);
+  }
+  if (filters.modelId) {
+    params.set("model_id", filters.modelId);
+  }
+  if (filters.traceId) {
+    params.set("trace_id", filters.traceId);
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/gateway/cost-records${query ? `?${query}` : ""}`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<CostRecord[]>(response);
+}
+
+export async function getCostSummary({
+  groupBy,
+  projectId,
+  agentId,
+  providerId,
+  modelId,
+  traceId
+}: {
+  groupBy: CostSummaryGroupBy;
+  projectId?: string | null;
+  agentId?: string | null;
+  providerId?: string | null;
+  modelId?: string | null;
+  traceId?: string | null;
+}): Promise<CostSummary> {
+  const params = new URLSearchParams({ group_by: groupBy });
+  if (projectId) {
+    params.set("project_id", projectId);
+  }
+  if (agentId) {
+    params.set("agent_id", agentId);
+  }
+  if (providerId) {
+    params.set("provider_id", providerId);
+  }
+  if (modelId) {
+    params.set("model_id", modelId);
+  }
+  if (traceId) {
+    params.set("trace_id", traceId);
+  }
+  const response = await fetch(`/api/gateway/cost-records/summary?${params.toString()}`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<CostSummary>(response);
 }
 
 export async function connectConnectorService({
