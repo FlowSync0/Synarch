@@ -25,6 +25,7 @@ import { type FormEvent, type ReactNode, useMemo, useState } from "react";
 import {
   applyCredentialAccessGrant,
   connectConnectorService,
+  decideTaskReview,
   decideCredentialAccessRequest,
   disableConnectorConnection,
   getSystemReadiness,
@@ -515,6 +516,11 @@ export default function SynarchAppPage() {
     onSuccess: invalidateOperatorState
   });
 
+  const taskReviewMutation = useMutation({
+    mutationFn: decideTaskReview,
+    onSuccess: invalidateOperatorState
+  });
+
   const credentialGrantMutation = useMutation({
     mutationFn: applyCredentialAccessGrant,
     onSuccess: invalidateOperatorState
@@ -583,6 +589,23 @@ export default function SynarchAppPage() {
     status: "approved" | "rejected"
   ) => {
     credentialDecisionMutation.mutate({ requestId, status });
+  };
+
+  const handleTaskReviewDecision = (
+    action: OperatorAction,
+    reviewAction: "retry" | "cancel"
+  ) => {
+    const taskId = action.task_id ?? action.target_id;
+    taskReviewMutation.mutate({
+      taskId,
+      decision: {
+        action: reviewAction,
+        reason:
+          reviewAction === "retry"
+            ? "Retry requested from Synarch app action center."
+            : "Cancel requested from Synarch app action center."
+      }
+    });
   };
 
   const handleCredentialGrant = (requestId: string, serviceId: string) => {
@@ -775,7 +798,14 @@ export default function SynarchAppPage() {
             </div>
             <div className="grid gap-4 border-t border-border p-4 lg:grid-cols-2">
               <BriefPanel brief={selectedBrief} loading={briefsQuery.isLoading} />
-              <ActionPanel actions={activeActions} loading={actionsQuery.isLoading} />
+              <ActionPanel
+                actions={activeActions}
+                loading={actionsQuery.isLoading}
+                taskReviewPending={taskReviewMutation.isPending}
+                taskReviewVariables={taskReviewMutation.variables}
+                taskReviewError={taskReviewMutation.error}
+                onTaskReviewDecision={handleTaskReviewDecision}
+              />
             </div>
             <OperatorQueuePanel
               credentialRequests={visibleCredentialRequests}
@@ -1191,7 +1221,21 @@ function BriefPanel({ brief, loading }: { brief: ProjectBrief | null; loading: b
   );
 }
 
-function ActionPanel({ actions, loading }: { actions: OperatorAction[]; loading: boolean }) {
+function ActionPanel({
+  actions,
+  loading,
+  taskReviewPending,
+  taskReviewVariables,
+  taskReviewError,
+  onTaskReviewDecision
+}: {
+  actions: OperatorAction[];
+  loading: boolean;
+  taskReviewPending: boolean;
+  taskReviewVariables?: { taskId: string; decision: { action: "retry" | "cancel" | "update" } };
+  taskReviewError: unknown;
+  onTaskReviewDecision: (action: OperatorAction, reviewAction: "retry" | "cancel") => void;
+}) {
   if (loading) {
     return <PanelEmpty icon={<AlertTriangle className="h-4 w-4" />} text="Chargement actions..." />;
   }
@@ -1213,9 +1257,50 @@ function ActionPanel({ actions, loading }: { actions: OperatorAction[]; loading:
               </span>
             </div>
             <p className="mt-1 line-clamp-2 text-xs text-muted">{action.recommended_action}</p>
+            {action.kind === "task_review" ? (
+              <div className="mt-3 flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs font-medium text-ink disabled:opacity-50"
+                  disabled={taskReviewPending}
+                  onClick={() => onTaskReviewDecision(action, "retry")}
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                  <span>
+                    {taskReviewPending &&
+                    taskReviewVariables?.taskId === (action.task_id ?? action.target_id) &&
+                    taskReviewVariables.decision.action === "retry"
+                      ? "Retry"
+                      : "Réessayer"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-risk/30 px-2 text-xs font-medium text-risk disabled:opacity-50"
+                  disabled={taskReviewPending}
+                  onClick={() => onTaskReviewDecision(action, "cancel")}
+                >
+                  <X className="h-3.5 w-3.5" />
+                  <span>
+                    {taskReviewPending &&
+                    taskReviewVariables?.taskId === (action.task_id ?? action.target_id) &&
+                    taskReviewVariables.decision.action === "cancel"
+                      ? "Annulation"
+                      : "Annuler"}
+                  </span>
+                </button>
+              </div>
+            ) : null}
           </div>
         ))}
       </div>
+      {taskReviewError ? (
+        <p className="border-t border-border px-3 py-2 text-xs text-risk">
+          {taskReviewError instanceof Error
+            ? taskReviewError.message
+            : "Décision de review impossible."}
+        </p>
+      ) : null}
     </div>
   );
 }
