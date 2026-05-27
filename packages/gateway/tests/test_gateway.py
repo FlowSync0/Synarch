@@ -4,6 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import synarch_gateway.main as gateway_main
@@ -142,6 +143,84 @@ def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: P
     assert status["encryption_enabled"] is True
     assert status["encrypted_secret_count"] == 1
     assert status["plaintext_secret_count"] == 0
+
+
+def test_local_file_secret_vault_reencrypts_plaintext_connector_secret(
+    tmp_path: Path,
+) -> None:
+    plaintext_vault = LocalFileSecretVault(str(tmp_path))
+    reference = plaintext_vault.store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-legacy-secret",
+        actor_id="local-user",
+    )
+    assert plaintext_vault.status()["plaintext_secret_count"] == 1
+
+    encrypted_vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
+    result = encrypted_vault.reencrypt_plaintext_connector_secrets(actor_id="hugo")
+
+    secret_files = list((tmp_path / "connectors" / "connector-firecrawl").glob("*.json"))
+    assert len(secret_files) == 1
+    stored_payload = secret_files[0].read_text(encoding="utf-8")
+    assert "fc-legacy-secret" not in stored_payload
+    assert '"ciphertext"' in stored_payload
+    assert encrypted_vault.load_connector_secret(reference.ref) == "fc-legacy-secret"
+    assert result["scanned_secret_count"] == 1
+    assert result["reencrypted_secret_count"] == 1
+    assert result["failed_secret_count"] == 0
+    status_after = result["status_after"]
+    assert isinstance(status_after, dict)
+    assert status_after["encrypted_secret_count"] == 1
+    assert status_after["plaintext_secret_count"] == 0
+
+
+def test_reencrypt_secret_vault_endpoint_records_audit_without_secret(
+    tmp_path: Path,
+) -> None:
+    plaintext_vault = LocalFileSecretVault(str(tmp_path))
+    plaintext_vault.store_connector_secret(
+        service_id="connector-firecrawl",
+        secret_value="fc-endpoint-secret",
+        actor_id="local-user",
+    )
+    encrypted_vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
+    state_client = FakeStateClient()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: encrypted_vault
+
+    try:
+        response = TestClient(app).post(
+            "/secret-vault/reencrypt",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_secret_vault_reencrypt",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reencrypted_secret_count"] == 1
+    assert payload["failed_secret_count"] == 0
+    assert payload["audit_error"] is None
+    assert "fc-endpoint-secret" not in response.text
+    assert state_client.audit_logs[0].action == "secret_vault.reencrypted"
+    assert state_client.audit_logs[0].actor_id == "hugo"
+    assert state_client.audit_logs[0].trace_id == "trace_secret_vault_reencrypt"
+    assert "fc-endpoint-secret" not in str(state_client.audit_logs[0].payload)
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_secret_vault_reencrypt"
+
+
+def test_reencrypt_secret_vault_requires_configured_key(tmp_path: Path) -> None:
+    vault = LocalFileSecretVault(str(tmp_path))
+
+    with pytest.raises(HTTPException) as error:
+        vault.reencrypt_plaintext_connector_secrets(actor_id="hugo")
+
+    assert error.value.status_code == 400
+    assert "SECRET_VAULT_KEY" in error.value.detail
 
 
 class FakeStateClient:

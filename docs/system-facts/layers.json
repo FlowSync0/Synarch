@@ -136,6 +136,7 @@
       "Service health checks",
       "SecretVault-backed connector connection setup stores only secret references in state-service",
       "Local SecretVault can encrypt new connector secrets when SECRET_VAULT_KEY is configured",
+      "Gateway can re-encrypt legacy plaintext local SecretVault entries through an audited operation",
       "Firecrawl and Browserless runtime adapters can use active connector secrets from SecretVault",
       "OAuth/manual-link connector setup creates setup URLs and stores callback codes in SecretVault",
       "web.extract supports local_fetch, local_playwright, Firecrawl, and Browserless provider selection",

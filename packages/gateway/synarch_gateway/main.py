@@ -300,6 +300,73 @@ class LocalFileSecretVault:
             "error": error,
         }
 
+    def reencrypt_plaintext_connector_secrets(self, *, actor_id: str) -> dict[str, object]:
+        if not self.encryption_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail="SECRET_VAULT_KEY is required to re-encrypt local connector secrets",
+            )
+
+        scanned_count = 0
+        reencrypted_count = 0
+        already_encrypted_count = 0
+        failed_count = 0
+        fernet = self.fernet()
+        reencrypted_at = datetime.now(UTC).isoformat()
+        connector_root = self.root / "connectors"
+        if connector_root.exists():
+            for path in sorted(connector_root.glob("*/*.json")):
+                scanned_count += 1
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    failed_count += 1
+                    continue
+                if not isinstance(payload, dict):
+                    failed_count += 1
+                    continue
+                if payload.get("encoding") == "fernet":
+                    already_encrypted_count += 1
+                    continue
+                secret_value = payload.get("secret_value")
+                if not isinstance(secret_value, str) or not secret_value:
+                    failed_count += 1
+                    continue
+
+                next_payload = {
+                    key: value for key, value in payload.items() if key != "secret_value"
+                }
+                next_payload.update(
+                    {
+                        "encoding": "fernet",
+                        "ciphertext": fernet.encrypt(secret_value.encode("utf-8")).decode(
+                            "utf-8"
+                        ),
+                        "reencrypted_at": reencrypted_at,
+                        "reencrypted_by": actor_id,
+                    }
+                )
+                tmp_path = path.with_name(f".{path.name}.tmp")
+                try:
+                    tmp_path.write_text(json.dumps(next_payload), encoding="utf-8")
+                    tmp_path.chmod(0o600)
+                    tmp_path.replace(path)
+                except OSError:
+                    tmp_path.unlink(missing_ok=True)
+                    failed_count += 1
+                    continue
+                reencrypted_count += 1
+
+        return {
+            "backend": "local_file",
+            "encryption_enabled": True,
+            "scanned_secret_count": scanned_count,
+            "reencrypted_secret_count": reencrypted_count,
+            "already_encrypted_secret_count": already_encrypted_count,
+            "failed_secret_count": failed_count,
+            "status_after": self.status(),
+        }
+
 
 def safe_secret_path_component(value: str) -> str:
     if not value or any(character in value for character in {"/", "\\", ".", "\x00"}):
@@ -558,6 +625,32 @@ def secret_vault_status_payload() -> dict[str, object]:
         payload["encryption_key_env_var"] = settings.secret_vault_key_env_var
         return payload
     return {"backend": "custom", "writable": None, "encryption_enabled": None}
+
+
+def secret_vault_reencrypt_audit(
+    *,
+    actor_type: ActorType,
+    actor_id: str,
+    result: dict[str, object],
+    trace_id: str,
+) -> AuditLogRecord:
+    return AuditLogRecord(
+        actor_type=actor_type,
+        actor_id=actor_id,
+        action="secret_vault.reencrypted",
+        target_type="secret_vault",
+        target_id=str(result.get("backend", "unknown")),
+        payload={
+            "backend": result.get("backend"),
+            "encryption_enabled": result.get("encryption_enabled"),
+            "scanned_secret_count": result.get("scanned_secret_count"),
+            "reencrypted_secret_count": result.get("reencrypted_secret_count"),
+            "already_encrypted_secret_count": result.get("already_encrypted_secret_count"),
+            "failed_secret_count": result.get("failed_secret_count"),
+            "status_after": result.get("status_after"),
+        },
+        trace_id=trace_id,
+    )
 
 
 def metadata_string(service: ServiceDefinition, key: str) -> str | None:
@@ -1156,6 +1249,52 @@ def list_web_providers() -> list[dict[str, object]]:
 @app.get("/secret-vault/status")
 def get_secret_vault_status() -> dict[str, object]:
     return secret_vault_status_payload()
+
+
+@app.post("/secret-vault/reencrypt")
+def reencrypt_secret_vault(
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+    secret_vault: SecretVault = Depends(get_secret_vault),
+) -> dict[str, object]:
+    if not isinstance(secret_vault, LocalFileSecretVault):
+        raise HTTPException(
+            status_code=400,
+            detail="SecretVault re-encryption is only supported by the local_file backend",
+        )
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    actor_type_raw = request.headers.get("x-synarch-actor-type", ActorType.user.value)
+    actor_id = request.headers.get("x-synarch-actor-id", "local-user")
+    try:
+        actor_type = ActorType(actor_type_raw)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown actor type: {actor_type_raw}",
+        ) from error
+
+    result = secret_vault.reencrypt_plaintext_connector_secrets(actor_id=actor_id)
+    audit_log: AuditLogRecord | None = None
+    audit_error: str | None = None
+    try:
+        audit_log = state_client.create_audit_log(
+            secret_vault_reencrypt_audit(
+                actor_type=actor_type,
+                actor_id=actor_id,
+                result=result,
+                trace_id=trace_id,
+            ),
+            headers=service_headers(trace_id),
+        )
+    except StateServiceRequestError as error:
+        audit_error = str(error.detail)
+    except StateServiceUnavailable:
+        audit_error = "State service unavailable"
+    return {
+        **result,
+        "audit_log": audit_log.model_dump(mode="json") if audit_log is not None else None,
+        "audit_error": audit_error,
+    }
 
 
 @app.post(
@@ -2946,7 +3085,7 @@ def secret_vault_readiness_item() -> SystemReadinessItem:
             "SecretVault",
             "warning",
             "SecretVault encryption is enabled but older plaintext entries still exist.",
-            "Rotate or reconnect those provider credentials so future entries are encrypted.",
+            "Use /secret-vault/reencrypt or the /app SecretVault action to encrypt legacy entries.",
             status,
         )
     return readiness_item(

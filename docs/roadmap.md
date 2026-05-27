@@ -316,6 +316,9 @@ Progress:
 - Done: Local SecretVault can encrypt new connector secrets when `SECRET_VAULT_KEY` is set, reports
   readiness in Gateway `/readiness`, and `web.extract` can use active Firecrawl/Browserless
   connector secrets instead of requiring provider keys in environment variables.
+- Done: Gateway can re-encrypt legacy plaintext local SecretVault entries through an auditable
+  `/secret-vault/reencrypt` operation, and `/app` exposes the action only when encryption is enabled
+  and plaintext entries remain.
 - Done: Gateway connector setup can create OAuth/manual-link setup URLs, receive callbacks, store
   the received code in SecretVault, and mark the connector connection active without putting raw
   credentials in state-service.

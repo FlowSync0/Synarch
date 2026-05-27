@@ -22,7 +22,10 @@ permission, credential, event, and audit gates.
 - Gateway `POST /connectors/{service_id}/connections` stores provider API keys in the configured
   SecretVault and writes only `secret_ref` plus a short fingerprint into state-service. The default
   local vault is `.synarch/secrets`; set `SECRET_VAULT_KEY` to encrypt new local vault entries at
-  rest, or swap the vault behind the same contract for a platform secret manager.
+  rest. If the key is added after plaintext local entries already exist, Gateway
+  `POST /secret-vault/reencrypt` and the `/app` SecretVault action can rewrite those entries without
+  returning secret values. Production can also swap the vault behind the same contract for a
+  platform secret manager.
 - Local development needs the Python `playwright` package and Chromium browser bundle. Synarch pins
   Playwright in `packages/gateway/pyproject.toml` so the Python package and browser bundle stay
   reproducible. Docker installs Chromium automatically for the gateway image; outside Docker run

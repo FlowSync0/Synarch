@@ -31,6 +31,7 @@ import {
   listHumanAssistanceRequests,
   listOperatorActions,
   listProjectBriefs,
+  reencryptSecretVault,
   resolveHumanAssistanceRequest,
   runReadyTasks,
   submitGoal,
@@ -41,6 +42,7 @@ import {
   type HumanAssistanceRequest,
   type OperatorAction,
   type ProjectBrief,
+  type SystemReadinessItem,
   type SystemReadinessStatus
 } from "../../lib/gateway-api";
 import {
@@ -137,6 +139,23 @@ function connectorModesForService(service: ServiceDefinition): ConnectorConnecti
 
 function selectedScopeSet(scopes: string[]): Set<string> {
   return new Set(scopes.filter(Boolean));
+}
+
+function evidenceBoolean(item: SystemReadinessItem, key: string): boolean {
+  return item.evidence[key] === true;
+}
+
+function evidenceNumber(item: SystemReadinessItem, key: string): number {
+  const value = item.evidence[key];
+  return typeof value === "number" ? value : 0;
+}
+
+function canReencryptSecretVault(item: SystemReadinessItem): boolean {
+  return (
+    item.id === "secret_vault" &&
+    evidenceBoolean(item, "encryption_enabled") &&
+    evidenceNumber(item, "plaintext_secret_count") > 0
+  );
 }
 
 export default function SynarchAppPage() {
@@ -363,6 +382,13 @@ export default function SynarchAppPage() {
         return next;
       });
       invalidateOperatorState();
+    }
+  });
+
+  const reencryptSecretVaultMutation = useMutation({
+    mutationFn: reencryptSecretVault,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
     }
   });
 
@@ -756,13 +782,41 @@ export default function SynarchAppPage() {
                   <div key={item.id} className="flex items-start gap-3 px-4 py-3">
                     {item.status === "ready" ? (
                       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
+                    ) : item.status === "blocked" ? (
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-risk" />
                     ) : (
                       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
                     )}
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium">{item.title}</p>
                       <p className="line-clamp-2 text-xs text-muted">{item.detail}</p>
+                      {item.manual_action ? (
+                        <p className="mt-1 line-clamp-2 text-xs text-muted">
+                          {item.manual_action}
+                        </p>
+                      ) : null}
+                      {item.id === "secret_vault" && reencryptSecretVaultMutation.isError ? (
+                        <p className="mt-1 text-xs text-risk">
+                          {reencryptSecretVaultMutation.error instanceof Error
+                            ? reencryptSecretVaultMutation.error.message
+                            : "Action impossible."}
+                        </p>
+                      ) : null}
                     </div>
+                    {canReencryptSecretVault(item) ? (
+                      <button
+                        type="button"
+                        className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-border bg-white px-2 text-xs font-semibold hover:bg-slate-50 disabled:opacity-60"
+                        disabled={reencryptSecretVaultMutation.isPending}
+                        onClick={() => reencryptSecretVaultMutation.mutate()}
+                        title="Chiffrer les anciens secrets locaux"
+                      >
+                        <KeyRound className="h-3.5 w-3.5" />
+                        <span>
+                          {reencryptSecretVaultMutation.isPending ? "Chiffrement" : "Chiffrer"}
+                        </span>
+                      </button>
+                    ) : null}
                   </div>
                 ))}
                 {readinessQuery.isLoading ? (

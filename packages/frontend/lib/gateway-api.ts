@@ -174,6 +174,18 @@ export type SystemReadinessReport = {
   generated_at: string;
 };
 
+export type SecretVaultReencryptResult = {
+  backend: string;
+  encryption_enabled: boolean;
+  scanned_secret_count: number;
+  reencrypted_secret_count: number;
+  already_encrypted_secret_count: number;
+  failed_secret_count: number;
+  status_after: Record<string, unknown>;
+  audit_log?: unknown | null;
+  audit_error?: string | null;
+};
+
 export type OperatorActionKind =
   | "human_assistance"
   | "task_review"
@@ -723,6 +735,18 @@ export async function getSystemReadiness(): Promise<SystemReadinessReport> {
     cache: "no-store"
   });
   return parseJsonResponse<SystemReadinessReport>(response);
+}
+
+export async function reencryptSecretVault(): Promise<SecretVaultReencryptResult> {
+  const response = await fetch("/api/gateway/secret-vault/reencrypt", {
+    method: "POST",
+    headers: {
+      "X-Synarch-Actor-Type": "user",
+      "X-Synarch-Actor-Id": "local-user",
+      "X-Synarch-Trace-Id": `trace_frontend_secret_vault_reencrypt_${Date.now()}`
+    }
+  });
+  return parseJsonResponse<SecretVaultReencryptResult>(response);
 }
 
 export async function listConnectorConnections(): Promise<ConnectorConnectionRecord[]> {
