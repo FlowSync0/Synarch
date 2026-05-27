@@ -63,6 +63,7 @@ import {
   type ProjectRecord,
   type ServiceDefinition,
   type WorkerHeartbeatRecord,
+  type WorkerHeartbeatStatus,
   type WorkQueueItem,
   type WorkQueueRecoveryResult,
   type WorkQueueStatus,
@@ -85,6 +86,14 @@ const workQueueStatusRank: Record<WorkQueueStatus, number> = {
   queued: 3,
   completed: 4
 };
+const workerStatusOptions: WorkerHeartbeatStatus[] = [
+  "failed",
+  "stopped",
+  "running",
+  "idle",
+  "completed",
+  "starting"
+];
 const connectorModeDetails: Record<
   ConnectorConnectionMode,
   { label: string; description: string; submitLabel: string }
@@ -107,6 +116,7 @@ const connectorModeDetails: Record<
 };
 type WorkQueueAction = "project_reminder" | "log";
 type WorkQueueStatusFilter = WorkQueueStatus | "all";
+type WorkerHealthFilter = WorkerHeartbeatStatus | "all" | "problem" | "stale";
 type TaskReviewMutationVariables = {
   taskId: string;
   decision: { action: "retry" | "cancel" | "update" };
@@ -409,6 +419,7 @@ export default function SynarchAppPage() {
   const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
   const [workQueueStatusFilter, setWorkQueueStatusFilter] =
     useState<WorkQueueStatusFilter>("all");
+  const [workerHealthFilter, setWorkerHealthFilter] = useState<WorkerHealthFilter>("all");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
   const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
   const [workQueueRecoveryResult, setWorkQueueRecoveryResult] =
@@ -1473,7 +1484,9 @@ export default function SynarchAppPage() {
             <WorkerPanel
               heartbeats={workerHeartbeatsQuery.data ?? []}
               loading={workerHeartbeatsQuery.isLoading}
+              healthFilter={workerHealthFilter}
               staleAfterSeconds={workerStaleAfterSeconds}
+              onHealthFilterChange={setWorkerHealthFilter}
             />
 
             <WorkQueuePanel
@@ -2856,40 +2869,98 @@ function WebProviderPanel({
   );
 }
 
+type WorkerDisplayStatus = WorkerHeartbeatStatus | "stale";
+
+function workerDisplayStatus(
+  heartbeat: WorkerHeartbeatRecord,
+  staleAfterSeconds: number
+): WorkerDisplayStatus {
+  if (heartbeat.status === "failed" || heartbeat.status === "stopped") {
+    return heartbeat.status;
+  }
+  const ageSeconds = secondsSince(heartbeat.last_seen_at);
+  if (ageSeconds !== null && ageSeconds > staleAfterSeconds) {
+    return "stale";
+  }
+  return heartbeat.status;
+}
+
+function workerDisplayRank(status: WorkerDisplayStatus): number {
+  return {
+    failed: 0,
+    stopped: 1,
+    stale: 2,
+    running: 3,
+    starting: 4,
+    idle: 5,
+    completed: 6
+  }[status];
+}
+
+function compareWorkerHeartbeats(
+  left: WorkerHeartbeatRecord,
+  right: WorkerHeartbeatRecord,
+  staleAfterSeconds: number
+): number {
+  const rankDelta =
+    workerDisplayRank(workerDisplayStatus(left, staleAfterSeconds)) -
+    workerDisplayRank(workerDisplayStatus(right, staleAfterSeconds));
+  if (rankDelta !== 0) {
+    return rankDelta;
+  }
+  return right.last_seen_at.localeCompare(left.last_seen_at);
+}
+
+function workerMatchesFilter(
+  heartbeat: WorkerHeartbeatRecord,
+  filter: WorkerHealthFilter,
+  staleAfterSeconds: number
+): boolean {
+  if (filter === "all") {
+    return true;
+  }
+  const displayStatus = workerDisplayStatus(heartbeat, staleAfterSeconds);
+  if (filter === "problem") {
+    return ["failed", "stopped", "stale"].includes(displayStatus);
+  }
+  if (filter === "stale") {
+    return displayStatus === "stale";
+  }
+  return heartbeat.status === filter;
+}
+
 function WorkerPanel({
   heartbeats,
   loading,
-  staleAfterSeconds
+  healthFilter,
+  staleAfterSeconds,
+  onHealthFilterChange
 }: {
   heartbeats: WorkerHeartbeatRecord[];
   loading: boolean;
+  healthFilter: WorkerHealthFilter;
   staleAfterSeconds: number;
+  onHealthFilterChange: (filter: WorkerHealthFilter) => void;
 }) {
-  const recentHeartbeats = [...heartbeats]
-    .sort((left, right) => right.last_seen_at.localeCompare(left.last_seen_at))
-    .slice(0, 5);
   const statusCounts = heartbeats.reduce<Record<string, number>>((counts, heartbeat) => {
     counts[heartbeat.status] = (counts[heartbeat.status] ?? 0) + 1;
     return counts;
   }, {});
-  const staleCount = heartbeats.filter((heartbeat) => {
-    const age = secondsSince(heartbeat.last_seen_at);
-    return (
-      !["failed", "stopped"].includes(heartbeat.status) &&
-      age !== null &&
-      age > staleAfterSeconds
-    );
-  }).length;
+  const staleCount = heartbeats.filter(
+    (heartbeat) => workerDisplayStatus(heartbeat, staleAfterSeconds) === "stale"
+  ).length;
   const failedCount = heartbeats.filter((heartbeat) =>
     ["failed", "stopped"].includes(heartbeat.status)
   ).length;
   const healthyCount = heartbeats.filter((heartbeat) => {
-    const age = secondsSince(heartbeat.last_seen_at);
-    return (
-      !["failed", "stopped"].includes(heartbeat.status) &&
-      (age === null || age <= staleAfterSeconds)
-    );
+    const displayStatus = workerDisplayStatus(heartbeat, staleAfterSeconds);
+    return !["failed", "stopped", "stale"].includes(displayStatus);
   }).length;
+  const problemCount = failedCount + staleCount;
+  const visibleHeartbeats = [...heartbeats]
+    .filter((heartbeat) => workerMatchesFilter(heartbeat, healthFilter, staleAfterSeconds))
+    .sort((left, right) => compareWorkerHeartbeats(left, right, staleAfterSeconds))
+    .slice(0, 10);
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
@@ -2903,38 +2974,56 @@ function WorkerPanel({
         <Activity className="h-4 w-4 shrink-0 text-accent" />
       </div>
       <div className="border-b border-border px-4 py-3">
-        <div className="flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-wrap gap-2">
           <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(failedCount > 0 ? "failed" : "healthy")}`}>
-            actifs: {healthyCount}
+            problèmes: {problemCount}
           </span>
           <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(staleCount > 0 ? "stale" : "healthy")}`}>
             stale: {staleCount}
           </span>
-          {["completed", "failed", "running", "idle", "stopped"].map((status) => (
-            <span
-              key={status}
-              className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(status)}`}
-            >
-              {status}: {statusCounts[status] ?? 0}
-            </span>
-          ))}
+          <span className={`rounded-md px-2 py-1 text-xs ring-1 ${statusClass(healthyCount > 0 ? "healthy" : "draft")}`}>
+            ok: {healthyCount}
+          </span>
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {(["all", "problem", "stale", ...workerStatusOptions] as WorkerHealthFilter[]).map((filter) => {
+            const selected = healthFilter === filter;
+            const count =
+              filter === "all"
+                ? heartbeats.length
+                : filter === "problem"
+                  ? problemCount
+                  : filter === "stale"
+                    ? staleCount
+                    : (statusCounts[filter] ?? 0);
+            return (
+              <button
+                key={filter}
+                type="button"
+                className={`h-8 shrink-0 rounded-md border px-2 text-xs font-semibold ${
+                  selected
+                    ? "border-accent bg-accent-soft text-accent"
+                    : "border-border bg-white text-muted hover:bg-slate-50"
+                }`}
+                onClick={() => onHealthFilterChange(filter)}
+              >
+                {filter}: {count}
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="divide-y divide-border">
         {loading ? (
           <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
-        ) : recentHeartbeats.length === 0 ? (
-          <p className="px-4 py-3 text-sm text-muted">Aucun worker signalé.</p>
+        ) : visibleHeartbeats.length === 0 ? (
+          <p className="px-4 py-3 text-sm text-muted">
+            {healthFilter === "all" ? "Aucun worker signalé." : "Aucun worker pour ce filtre."}
+          </p>
         ) : (
-          recentHeartbeats.map((heartbeat) => {
+          visibleHeartbeats.map((heartbeat) => {
             const ageSeconds = secondsSince(heartbeat.last_seen_at);
-            const isStale = ageSeconds !== null && ageSeconds > staleAfterSeconds;
-            const statusLabel =
-              heartbeat.status === "failed" || heartbeat.status === "stopped"
-                ? heartbeat.status
-                : isStale
-                  ? "stale"
-                  : heartbeat.status;
+            const statusLabel = workerDisplayStatus(heartbeat, staleAfterSeconds);
             const tickSummary = workerTickSummary(heartbeat.last_tick_result);
             return (
               <div key={heartbeat.id} className="px-4 py-3">
@@ -2955,7 +3044,7 @@ function WorkerPanel({
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1">
                   <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
-                    #{heartbeat.heartbeat_count}
+                    heartbeat #{heartbeat.heartbeat_count}
                   </span>
                   {tickSummary.map((item) => (
                     <span
@@ -2967,11 +3056,21 @@ function WorkerPanel({
                   ))}
                 </div>
                 {heartbeat.last_error ? (
-                  <p className="mt-1 line-clamp-2 text-xs text-risk">{heartbeat.last_error}</p>
+                  <p className="mt-2 line-clamp-2 rounded-md bg-risk-soft px-2 py-1 text-xs text-risk">
+                    {heartbeat.last_error}
+                  </p>
                 ) : null}
-                <p className="mt-1 text-[11px] text-muted">
-                  {formatDate(heartbeat.last_seen_at)}
-                </p>
+                <details className="mt-2 rounded-md border border-border bg-slate-50 px-2 py-2 text-xs text-muted">
+                  <summary className="cursor-pointer font-semibold text-ink">
+                    Dernier tick
+                  </summary>
+                  <div className="mt-2 space-y-1">
+                    <p>démarré: {formatDate(heartbeat.started_at)}</p>
+                    <p>dernier signal: {formatDate(heartbeat.last_seen_at)}</p>
+                    <p>mis à jour: {formatDate(heartbeat.updated_at)}</p>
+                    <p>résultat: {payloadPreview(heartbeat.last_tick_result)}</p>
+                  </div>
+                </details>
               </div>
             );
           })
