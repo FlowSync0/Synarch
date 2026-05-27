@@ -9,6 +9,9 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentResult,
     AuditLogRecord,
+    ConnectorConnectionRecord,
+    ConnectorConnectionRequest,
+    ConnectorConnectionResult,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
     ConnectorJobResumeRequest,
@@ -274,6 +277,22 @@ class StateClient(Protocol):
         project_id: str | None = None,
         active: bool | None = None,
     ) -> list[CredentialGrant]: ...
+
+    def create_connector_connection(
+        self,
+        connection: ConnectorConnectionRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult: ...
+
+    def list_connector_connections(
+        self,
+        *,
+        service_id: str | None = None,
+        status: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[ConnectorConnectionRecord]: ...
 
     def get_connector_job(self, job_id: str) -> ConnectorJobRecord: ...
 
@@ -729,6 +748,39 @@ class HttpStateClient:
             params["active"] = str(active).lower()
         response = self._get("/credential-grants", params=params)
         return [CredentialGrant.model_validate(grant) for grant in response.json()]
+
+    def create_connector_connection(
+        self,
+        connection: ConnectorConnectionRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        response = self._post(
+            "/connector-connections",
+            connection.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorConnectionResult.model_validate(response.json())
+
+    def list_connector_connections(
+        self,
+        *,
+        service_id: str | None = None,
+        status: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[ConnectorConnectionRecord]:
+        params = compact_params(
+            service_id=service_id,
+            status=status,
+            project_id=project_id,
+            agent_id=agent_id,
+        )
+        response = self._get("/connector-connections", params=params)
+        return [
+            ConnectorConnectionRecord.model_validate(connection)
+            for connection in response.json()
+        ]
 
     def get_connector_job(self, job_id: str) -> ConnectorJobRecord:
         response = self._get(f"/connector-jobs/{job_id}")

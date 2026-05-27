@@ -5,6 +5,8 @@ from synarch_models import (
     AgentSoul,
     AiProviderType,
     AuditLogRecord,
+    ConnectorConnectionRecord,
+    ConnectorConnectionRequest,
     CostRecord,
     CredentialAccessDecision,
     CredentialAccessRequest,
@@ -241,6 +243,36 @@ def test_credential_grant_application_captures_scope_grant() -> None:
 
     assert grant.model_dump(mode="json")["scopes"] == ["browser:authenticated_fetch"]
     assert application.model_dump(mode="json")["service_id"] == "connector-supplier-web"
+
+
+def test_connector_connection_uses_secret_reference_not_secret_value() -> None:
+    request = ConnectorConnectionRequest(
+        service_id="connector-firecrawl",
+        mode="api_key",
+        credential_scopes=["firecrawl:api_key"],
+        secret_ref="local://connector/connector-firecrawl/fp_123",
+        secret_fingerprint="fp_123",
+        connected_by_type=ActorType.user,
+        connected_by_id="local-user",
+        rationale="Connect Firecrawl for markdown extraction.",
+    )
+    record = ConnectorConnectionRecord(
+        service_id=request.service_id,
+        mode=request.mode,
+        credential_scopes=request.credential_scopes,
+        secret_ref=request.secret_ref,
+        secret_fingerprint=request.secret_fingerprint,
+        connected_by_type=request.connected_by_type,
+        connected_by_id=request.connected_by_id,
+        rationale=request.rationale,
+    )
+
+    payload = record.model_dump(mode="json")
+
+    assert payload["service_id"] == "connector-firecrawl"
+    assert payload["secret_ref"] == "local://connector/connector-firecrawl/fp_123"
+    assert "api_key" not in payload
+    assert "secret_value" not in payload
 
 
 def test_agent_soul_captures_persistent_identity() -> None:

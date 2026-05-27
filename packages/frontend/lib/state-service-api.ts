@@ -12,6 +12,7 @@ export type ConnectorJobKind = "cron" | "webhook";
 export type ConnectorJobStatus = "active" | "stopped";
 export type ConnectorJobRunStatus = "completed" | "failed" | "blocked" | "skipped";
 export type ConnectorActorType = "user" | "agent" | "system" | "service";
+export type ServiceKind = "internal" | "external" | "ai_provider" | "tool_provider";
 
 export type ProjectRecord = {
   id: string;
@@ -68,6 +69,22 @@ export type ConnectorJobRunRecord = {
   error?: string | null;
   started_at: string;
   completed_at: string;
+};
+
+export type ServiceDefinition = {
+  id: string;
+  name: string;
+  kind: ServiceKind;
+  base_url?: string | null;
+  health_endpoint?: string | null;
+  capabilities: string[];
+  credential_scopes: string[];
+  owner_agent_id?: string | null;
+  allowed_agent_ids: string[];
+  allowed_divisions: string[];
+  audit_required: boolean;
+  metadata: Record<string, unknown>;
+  enabled: boolean;
 };
 
 export type AuditLogRecord = {
@@ -145,6 +162,13 @@ export async function listProjects(): Promise<ProjectRecord[]> {
     cache: "no-store"
   });
   return parseJsonResponse<ProjectRecord[]>(response);
+}
+
+export async function listServices(): Promise<ServiceDefinition[]> {
+  const response = await fetch("/api/state-service/services", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ServiceDefinition[]>(response);
 }
 
 export async function listEvents(): Promise<EventRecord[]> {

@@ -144,6 +144,9 @@ Implemented baseline:
 
 - Gateway `/tools/call` checks `LocalWorldView.permissions` and `available_services` before any tool execution.
 - Gateway `/web/providers` exposes the web provider catalog and whether API-key providers are configured.
+- Gateway `/connectors/{service_id}/connections` writes API keys into SecretVault and gives
+  state-service only a `secret_ref` plus fingerprint, so agents and UI reads never receive raw
+  secrets.
 - `web.extract` supports no-key `local_fetch`, no-key `local_playwright`, optional Firecrawl
   extraction through `FIRECRAWL_API_KEY`, and optional Browserless `/content` extraction through
   `BROWSERLESS_API_KEY`.
@@ -208,6 +211,10 @@ Implemented baseline:
 - State-service and gateway expose `/tasks/review-queue` and `/tasks/{task_id}/review-decisions`,
   so a human reviewer can retry, cancel, or update a dead-lettered task with `task.reviewed` event
   and audit records.
+- State-service exposes generic durable `work_queue_items` endpoints for non-task workers:
+  create/list, conditional claim with lease, complete, fail/requeue/dead-letter, and expired lease
+  recovery. This is the base for reminders, ingestion, webhook delivery, and maintenance jobs that
+  should survive process restarts without becoming project tasks.
 - `scripts/scheduler_tick.py` and `synarch_gateway.scheduler_worker` can run one bounded scheduler
   tick or a controlled server loop against `/tasks/run-ready`, making cron-style execution possible
   without hiding autonomous behavior.

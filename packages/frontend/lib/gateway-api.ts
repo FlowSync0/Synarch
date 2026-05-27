@@ -2,7 +2,8 @@ import type {
   ConnectorJobRecord,
   ConnectorJobRunRecord,
   EventRecord,
-  ProjectRecord
+  ProjectRecord,
+  ServiceDefinition
 } from "./state-service-api";
 import type { AgentLifecycleRequest } from "./control-plane-api";
 
@@ -330,6 +331,7 @@ export type CredentialGrant = {
   granted_by_type: "user" | "agent" | "system" | "service";
   granted_by_id: string;
   rationale: string;
+  secret_ref?: string | null;
   active: boolean;
   created_at: string;
 };
@@ -339,9 +341,51 @@ export type CredentialGrantApplication = {
   service_id: string;
   access_request: CredentialAccessRequest;
   grant: CredentialGrant;
-  service: unknown;
+  service: ServiceDefinition;
   events_emitted: unknown[];
   applied_at: string;
+};
+
+export type ConnectorConnectionMode = "no_key" | "api_key" | "oauth";
+
+export type SecretReference = {
+  ref: string;
+  vault: string;
+  fingerprint: string;
+  created_at: string;
+};
+
+export type ConnectorConnectRequest = {
+  mode: ConnectorConnectionMode;
+  api_key?: string;
+  credential_scopes: string[];
+  project_id?: string | null;
+  agent_id?: string | null;
+  rationale?: string;
+};
+
+export type ConnectorConnectionRecord = {
+  id: string;
+  service_id: string;
+  mode: ConnectorConnectionMode;
+  status: "active" | "needs_oauth" | "disabled";
+  credential_scopes: string[];
+  secret_ref?: string | null;
+  secret_fingerprint?: string | null;
+  connected_by_type: "user" | "agent" | "system" | "service";
+  connected_by_id: string;
+  project_id?: string | null;
+  agent_id?: string | null;
+  rationale: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ConnectorConnectionResult = {
+  connection: ConnectorConnectionRecord;
+  service: ServiceDefinition;
+  event: unknown;
+  audit_log?: unknown | null;
 };
 
 export type HumanAssistanceKind =
@@ -676,6 +720,36 @@ export async function getSystemReadiness(): Promise<SystemReadinessReport> {
     cache: "no-store"
   });
   return parseJsonResponse<SystemReadinessReport>(response);
+}
+
+export async function listConnectorConnections(): Promise<ConnectorConnectionRecord[]> {
+  const response = await fetch("/api/gateway/connector-connections", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ConnectorConnectionRecord[]>(response);
+}
+
+export async function connectConnectorService({
+  serviceId,
+  request
+}: {
+  serviceId: string;
+  request: ConnectorConnectRequest;
+}): Promise<ConnectorConnectionResult> {
+  const response = await fetch(
+    `/api/gateway/connectors/${encodeURIComponent(serviceId)}/connections`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_connector_connect_${Date.now()}`
+      },
+      body: JSON.stringify(request)
+    }
+  );
+  return parseJsonResponse<ConnectorConnectionResult>(response);
 }
 
 export async function listCredentialAccessRequests(): Promise<CredentialAccessRequest[]> {

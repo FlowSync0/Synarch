@@ -8,6 +8,7 @@
       "Live reads for projects, agents, lifecycle approvals, timeline events, review queue, connector job controls, and connector job history",
       "Project detail shows project-scoped human assistance requests with evidence, trace focus, answer, and dismiss actions",
       "Project detail can launch the next ready task for the selected project through the ready-batch runner",
+      "/app operator workspace creates goals, selects projects, shows project brief, shows operator actions, shows readiness, and configures connector connections",
       "Project brief next-action control routes the user into run, review, connector, assistance, or planning flows",
       "Readiness panel shows manual configuration and operator actions from Gateway /readiness",
       "Action center shows open task review, credential, human assistance, and blocked connector actions from Gateway /operator-actions",
@@ -71,9 +72,10 @@
       "Connector job next_run_at cooldown before repeat execution",
       "Connector job self-stop policies from run output and max_runs",
       "Connector job failure backoff and max_failures stop policy",
-      "Task review queue and retry/cancel/update decisions"
+      "Task review queue and retry/cancel/update decisions",
+      "Generic durable work_queue_items endpoints support create, claim with lease, complete, fail, dead-letter, and expired lease recovery"
     ],
-    "main_gap": "No durable worker queue or frontend review UI for dead-lettered tasks.",
+    "main_gap": "No dedicated UI for generic work-queue items or dead-lettered generic jobs.",
     "next_validation": "Agent result updates task status/result and can be replayed through chronological events.",
     "source": "docs/roadmap.md"
   },
@@ -129,13 +131,14 @@
       "Gateway permission gate",
       "Task-scoped credential gates",
       "Service health checks",
+      "SecretVault-backed connector connection setup stores only secret references in state-service",
       "web.extract supports local_fetch, local_playwright, Firecrawl, and Browserless provider selection",
       "Gateway automatically creates durable human assistance requests for authorized tool results that require human review",
       "scripts/live_web_extract_blocked_openrouter_e2e.sh verifies blocked browser extraction, automatic human assistance, human answer, task requeue, timeline events, audits, and costs",
       "Connector job runs distinguish blocked from failed and stop blocked jobs for human review",
       "Durable connector job lifecycle and bounded runner"
     ],
-    "main_gap": "No sandbox execution and no authenticated account connectors yet.",
+    "main_gap": "No sandbox execution and no OAuth account connector flow yet.",
     "next_validation": "Connector job executes a real adapter only after permission, service, and credential gates pass.",
     "source": "docs/roadmap.md"
   },

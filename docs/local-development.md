@@ -108,6 +108,9 @@ $env:STATE_SERVICE_URL = "http://127.0.0.1:8020"
 npm run dev
 ```
 
+The production-oriented operator surface is available at `http://127.0.0.1:3000/app`. The existing
+root dashboard remains useful for detailed development traces.
+
 ## Operational Readiness
 
 The Gateway exposes a non-mutating readiness report:
@@ -123,6 +126,12 @@ human review is required.
 The dashboard action center reads `GET /api/gateway/operator-actions`, backed by Gateway
 `/operator-actions`. It aggregates open task reviews, credential requests, human assistance
 requests, and blocked connector jobs into one project-focused queue.
+
+Connector setup now goes through Gateway `POST /connectors/{service_id}/connections`. API keys are
+written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
+fingerprint. The default local vault path is `.synarch/secrets`; override it with `SECRET_VAULT_DIR`.
+The path is git-ignored. Production deployments should replace the local file vault with Vault/KMS or
+the platform secret manager behind the same `secret_ref` contract.
 
 Manual configuration that commonly matters before unattended use:
 

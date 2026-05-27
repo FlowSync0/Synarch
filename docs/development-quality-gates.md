@@ -197,6 +197,22 @@ elapsed, so a crash loop is visible instead of burning repeated model calls.
 Reviewers can inspect `/tasks/review-queue` and apply `/tasks/{task_id}/review-decisions`; every
 decision emits `task.reviewed` and writes an audit log.
 
+State-service also exposes a generic durable PostgreSQL work queue for maintenance and integration
+jobs that should not be modeled as project tasks yet:
+
+```bash
+curl -X POST http://localhost:8020/work-queue/claim \
+  -H 'Content-Type: application/json' \
+  -d '{"queue_name":"reminders","worker_id":"worker-reminders","limit":1}'
+```
+
+`/work-queue/items` persists JSON payloads, priority, run-after time, attempt count, max attempts,
+lease owner, lease expiry, result, and last error. `/work-queue/claim` atomically moves ready items
+to `running` with a lease through conditional state updates. `/work-queue/items/{id}/complete` clears
+the lease and stores the result. `/work-queue/items/{id}/fail` requeues or dead-letters depending on
+attempt count. `/work-queue/recover-expired-leases` requeues expired running items or dead-letters
+exhausted ones. Every queue mutation writes an audit log.
+
 Run one connector-job batch with:
 
 ```bash

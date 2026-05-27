@@ -35,6 +35,8 @@ def test_default_migration_directory_contains_initial_schema() -> None:
     assert (DEFAULT_MIGRATIONS_DIR / "0026_browserless_provider.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0027_human_assistance_requests.sql").exists()
     assert (DEFAULT_MIGRATIONS_DIR / "0028_human_assistance_tool_access.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0029_connector_connections.sql").exists()
+    assert (DEFAULT_MIGRATIONS_DIR / "0030_work_queue_items.sql").exists()
 
 
 def test_migration_files_are_sorted(tmp_path: Path) -> None:

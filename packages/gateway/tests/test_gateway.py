@@ -9,6 +9,7 @@ from synarch_gateway.main import (
     app,
     get_control_plane_client,
     get_memory_client,
+    get_secret_vault,
     get_state_client,
     get_task_runner,
 )
@@ -29,6 +30,9 @@ from synarch_models import (
     AgentTaskRequest,
     AiProviderType,
     AuditLogRecord,
+    ConnectorConnectionRecord,
+    ConnectorConnectionRequest,
+    ConnectorConnectionResult,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
     ConnectorJobResumeRequest,
@@ -70,6 +74,7 @@ from synarch_models import (
     ProjectSplitApplication,
     ProjectSplitRequest,
     ProjectWorkspace,
+    SecretReference,
     ServiceDefinition,
     TaskDraft,
     TaskLeaseRecoveryResult,
@@ -80,6 +85,31 @@ from synarch_models import (
     ToolCallRequest,
     ToolResult,
 )
+
+
+class FakeSecretVault:
+    def __init__(self) -> None:
+        self.stored: list[dict[str, str]] = []
+
+    def store_connector_secret(
+        self,
+        *,
+        service_id: str,
+        secret_value: str,
+        actor_id: str,
+    ) -> SecretReference:
+        self.stored.append(
+            {
+                "service_id": service_id,
+                "secret_value": secret_value,
+                "actor_id": actor_id,
+            }
+        )
+        return SecretReference(
+            ref=f"fake://connectors/{service_id}/fp_test",
+            vault="fake",
+            fingerprint="fp_test",
+        )
 
 
 class FakeStateClient:
@@ -94,6 +124,7 @@ class FakeStateClient:
         self.model_policies: list[ModelPolicy] = []
         self.connector_jobs: list[ConnectorJobRecord] = []
         self.connector_job_runs: list[ConnectorJobRunRecord] = []
+        self.connector_connections: list[ConnectorConnectionRecord] = []
         self.events: list[EventRecord] = []
         self.costs: list[CostRecord] = []
         self.audit_logs: list[AuditLogRecord] = []
@@ -776,6 +807,98 @@ class FakeStateClient:
         if active is not None:
             grants = [grant for grant in grants if grant.active == active]
         return grants
+
+    def create_connector_connection(
+        self,
+        connection: ConnectorConnectionRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        self.headers.append(headers)
+        service = next(service for service in self.services if service.id == connection.service_id)
+        record = ConnectorConnectionRecord(
+            service_id=connection.service_id,
+            mode=connection.mode,
+            status="needs_oauth" if connection.mode == "oauth" else "active",
+            credential_scopes=list(connection.credential_scopes),
+            secret_ref=connection.secret_ref,
+            secret_fingerprint=connection.secret_fingerprint,
+            connected_by_type=connection.connected_by_type,
+            connected_by_id=connection.connected_by_id,
+            project_id=connection.project_id,
+            agent_id=connection.agent_id,
+            rationale=connection.rationale,
+        )
+        self.connector_connections.append(record)
+        updated_service = service.model_copy(
+            update={
+                "credential_scopes": list(
+                    dict.fromkeys([*service.credential_scopes, *record.credential_scopes])
+                ),
+                "metadata": {
+                    **service.metadata,
+                    "configured": record.status == "active",
+                    "connector_connection_id": record.id,
+                    "secret_ref": record.secret_ref,
+                    "secret_fingerprint": record.secret_fingerprint,
+                },
+            }
+        )
+        self.services[self.services.index(service)] = updated_service
+        event = EventRecord(
+            type=EventType.connector_connection_created,
+            target=connection.service_id,
+            payload={
+                "connector_connection_id": record.id,
+                "service_id": connection.service_id,
+                "secret_ref_configured": record.secret_ref is not None,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        audit = AuditLogRecord(
+            actor_type=connection.connected_by_type,
+            actor_id=connection.connected_by_id,
+            action="connector_connection.created",
+            target_type="service",
+            target_id=connection.service_id,
+            trace_id=headers.get("x-synarch-trace-id"),
+            payload={"secret_ref_configured": record.secret_ref is not None},
+        )
+        self.audit_logs.append(audit)
+        return ConnectorConnectionResult(
+            connection=record,
+            service=updated_service,
+            event=event,
+            audit_log=audit,
+        )
+
+    def list_connector_connections(
+        self,
+        *,
+        service_id: str | None = None,
+        status: str | None = None,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> list[ConnectorConnectionRecord]:
+        connections = self.connector_connections
+        if service_id is not None:
+            connections = [
+                connection for connection in connections if connection.service_id == service_id
+            ]
+        if status is not None:
+            connections = [
+                connection for connection in connections if connection.status == status
+            ]
+        if project_id is not None:
+            connections = [
+                connection for connection in connections if connection.project_id == project_id
+            ]
+        if agent_id is not None:
+            connections = [
+                connection for connection in connections if connection.agent_id == agent_id
+            ]
+        return connections
 
     def get_connector_job(self, job_id: str) -> ConnectorJobRecord:
         for job in self.connector_jobs:
@@ -6968,6 +7091,57 @@ def test_apply_credential_access_grant_forwards_application() -> None:
     assert state_client.headers[-1]["x-synarch-trace-id"] == (
         "trace_credential_gateway_grant"
     )
+
+
+def test_connect_service_stores_secret_in_vault_and_sends_only_secret_ref() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-firecrawl",
+            name="Firecrawl",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["firecrawl:api_key"],
+            metadata={"requires_api_key": True},
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-firecrawl/connections",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_connector_connect",
+            },
+            json={
+                "mode": "api_key",
+                "api_key": "fc-test-secret",
+                "rationale": "Connect Firecrawl for web extraction.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert secret_vault.stored == [
+        {
+            "service_id": "connector-firecrawl",
+            "secret_value": "fc-test-secret",
+            "actor_id": "hugo",
+        }
+    ]
+    assert payload["connection"]["secret_ref"] == "fake://connectors/connector-firecrawl/fp_test"
+    assert payload["connection"]["secret_fingerprint"] == "fp_test"
+    assert "fc-test-secret" not in str(payload)
+    assert state_client.connector_connections[0].secret_ref == (
+        "fake://connectors/connector-firecrawl/fp_test"
+    )
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_connect"
 
 
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:

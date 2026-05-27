@@ -10,12 +10,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Literal, Protocol
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 
 from synarch_models import (
@@ -23,6 +25,9 @@ from synarch_models import (
     AgentProjectAssignment,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorConnectionRecord,
+    ConnectorConnectionRequest,
+    ConnectorConnectionResult,
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
@@ -76,6 +81,7 @@ from synarch_models import (
     ProjectTimeline,
     ProjectWorkspace,
     RoutingDecision,
+    SecretReference,
     ServiceDefinition,
     ServiceHealthCheck,
     ServiceHealthReport,
@@ -133,6 +139,61 @@ class ToolAdapter(Protocol):
         headers: dict[str, str],
         trace_id: str,
     ) -> dict[str, object]: ...
+
+
+class SecretVault(Protocol):
+    def store_connector_secret(
+        self,
+        *,
+        service_id: str,
+        secret_value: str,
+        actor_id: str,
+    ) -> SecretReference: ...
+
+
+class LocalFileSecretVault:
+    def __init__(self, root: str) -> None:
+        self.root = Path(root)
+
+    def store_connector_secret(
+        self,
+        *,
+        service_id: str,
+        secret_value: str,
+        actor_id: str,
+    ) -> SecretReference:
+        if not secret_value:
+            raise HTTPException(status_code=400, detail="Secret value cannot be empty")
+        fingerprint = hashlib.sha256(secret_value.encode("utf-8")).hexdigest()[:16]
+        safe_service_id = "".join(
+            character if character.isalnum() or character in {"-", "_"} else "_"
+            for character in service_id
+        )
+        directory = self.root / "connectors" / safe_service_id
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / f"{fingerprint}.json"
+        payload = {
+            "service_id": service_id,
+            "secret_value": secret_value,
+            "created_by": actor_id,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+        return SecretReference(
+            ref=f"local-file://connectors/{safe_service_id}/{fingerprint}",
+            vault="local_file",
+            fingerprint=fingerprint,
+        )
+
+
+class ConnectorConnectRequest(BaseModel):
+    mode: Literal["no_key", "api_key", "oauth"] = "api_key"
+    api_key: str | None = Field(default=None, repr=False)
+    credential_scopes: list[str] = Field(default_factory=list)
+    project_id: str | None = None
+    agent_id: str | None = None
+    rationale: str = "Connect service through Synarch connector setup."
 
 
 @dataclass(frozen=True)
@@ -257,6 +318,7 @@ class Settings(BaseSettings):
     web_extract_playwright_wait_until: str = "domcontentloaded"
     web_extract_review_evidence_max_bytes: int = 4_096
     service_health_timeout_seconds: float = 3.0
+    secret_vault_dir: str = ".synarch/secrets"
 
 
 settings = Settings()
@@ -285,6 +347,10 @@ def get_state_client() -> StateClient:
         settings.state_service_url,
         timeout_seconds=settings.state_service_timeout_seconds,
     )
+
+
+def get_secret_vault() -> SecretVault:
+    return LocalFileSecretVault(settings.secret_vault_dir)
 
 
 def get_task_runner() -> TaskRunner:
@@ -1260,6 +1326,83 @@ def list_credential_grants(
         raise HTTPException(status_code=error.status_code, detail=error.detail) from error
     except StateServiceUnavailable as error:
         raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.post("/connectors/{service_id}/connections", response_model=ConnectorConnectionResult)
+def connect_service(
+    service_id: str,
+    connection: ConnectorConnectRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+    secret_vault: SecretVault = Depends(get_secret_vault),
+) -> ConnectorConnectionResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    actor_type = request.headers.get("x-synarch-actor-type", ActorType.user.value)
+    actor_id = request.headers.get("x-synarch-actor-id", "local-user")
+    try:
+        service = service_definition_by_id(state_client, service_id)
+        secret_ref: SecretReference | None = None
+        if connection.mode == "api_key":
+            if not connection.api_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="api_key is required for api_key connector connections",
+                )
+            secret_ref = secret_vault.store_connector_secret(
+                service_id=service_id,
+                secret_value=connection.api_key,
+                actor_id=actor_id,
+            )
+        request_payload = ConnectorConnectionRequest(
+            service_id=service_id,
+            mode=connection.mode,
+            credential_scopes=connection.credential_scopes or service.credential_scopes,
+            secret_ref=secret_ref.ref if secret_ref else None,
+            secret_fingerprint=secret_ref.fingerprint if secret_ref else None,
+            connected_by_type=ActorType(actor_type),
+            connected_by_id=actor_id,
+            project_id=connection.project_id,
+            agent_id=connection.agent_id,
+            rationale=connection.rationale,
+        )
+        return state_client.create_connector_connection(
+            request_payload,
+            headers=service_headers(trace_id),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"Unknown actor type: {actor_type}") from error
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+@app.get("/connector-connections", response_model=list[ConnectorConnectionRecord])
+def list_connector_connections(
+    service_id: str | None = None,
+    status: str | None = None,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    state_client: StateClient = Depends(get_state_client),
+) -> list[ConnectorConnectionRecord]:
+    try:
+        return state_client.list_connector_connections(
+            service_id=service_id,
+            status=status,
+            project_id=project_id,
+            agent_id=agent_id,
+        )
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+def service_definition_by_id(state_client: StateClient, service_id: str) -> ServiceDefinition:
+    for service in state_client.list_services():
+        if service.id == service_id:
+            return service
+    raise StateServiceRequestError(404, f"Unknown service: {service_id}")
 
 
 class GatewayToolRunner:

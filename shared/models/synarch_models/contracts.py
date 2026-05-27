@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
@@ -307,8 +309,33 @@ class CredentialGrant(SynarchModel):
     granted_by_type: ActorType
     granted_by_id: str
     rationale: str
+    secret_ref: str | None = None
     active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SecretReference(SynarchModel):
+    ref: str
+    vault: str
+    fingerprint: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorConnectionRecord(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("connector_connection"))
+    service_id: str
+    mode: Literal["no_key", "api_key", "oauth"]
+    status: Literal["active", "needs_oauth", "disabled"] = "active"
+    credential_scopes: list[str] = Field(default_factory=list)
+    secret_ref: str | None = None
+    secret_fingerprint: str | None = None
+    connected_by_type: ActorType
+    connected_by_id: str
+    project_id: str | None = None
+    agent_id: str | None = None
+    rationale: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ConnectorJobRecord(SynarchModel):
@@ -356,6 +383,56 @@ class ConnectorJobRunRecord(SynarchModel):
     error: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class WorkQueueItem(SynarchModel):
+    id: str = Field(default_factory=lambda: new_id("work_queue_item"))
+    queue_name: str = Field(min_length=1)
+    status: Literal["queued", "running", "completed", "failed", "dead_lettered"] = "queued"
+    payload: dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=100, ge=0, le=1000)
+    run_after_at: datetime | None = None
+    lease_owner_id: str | None = None
+    lease_expires_at: datetime | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, ge=1)
+    result: dict[str, Any] | None = None
+    last_error: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+
+
+class WorkQueueClaimRequest(SynarchModel):
+    queue_name: str
+    worker_id: str
+    limit: int = Field(default=1, ge=1, le=50)
+    lease_seconds: int = Field(default=300, ge=1, le=3600)
+
+
+class WorkQueueClaimResult(SynarchModel):
+    queue_name: str
+    worker_id: str
+    claimed_items: list[WorkQueueItem] = Field(default_factory=list)
+    claimed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class WorkQueueCompletionRequest(SynarchModel):
+    worker_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkQueueFailureRequest(SynarchModel):
+    worker_id: str
+    error: str
+    retry_after_at: datetime | None = None
+    dead_letter: bool = False
+
+
+class WorkQueueRecoveryResult(SynarchModel):
+    recovered_item_ids: list[str] = Field(default_factory=list)
+    dead_lettered_item_ids: list[str] = Field(default_factory=list)
+    inspected_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ConnectorJobStopRequest(SynarchModel):
@@ -621,6 +698,7 @@ class CredentialGrantApplicationRequest(SynarchModel):
     applied_by_type: ActorType
     applied_by_id: str
     rationale: str
+    secret_ref: str | None = None
 
 
 class CredentialGrantApplication(SynarchModel):
@@ -631,6 +709,26 @@ class CredentialGrantApplication(SynarchModel):
     service: ServiceDefinition
     events_emitted: list[EventRecord] = Field(default_factory=list)
     applied_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ConnectorConnectionRequest(SynarchModel):
+    service_id: str
+    mode: Literal["no_key", "api_key", "oauth"]
+    credential_scopes: list[str] = Field(default_factory=list)
+    secret_ref: str | None = None
+    secret_fingerprint: str | None = None
+    connected_by_type: ActorType = ActorType.user
+    connected_by_id: str = "local-user"
+    project_id: str | None = None
+    agent_id: str | None = None
+    rationale: str = ""
+
+
+class ConnectorConnectionResult(SynarchModel):
+    connection: ConnectorConnectionRecord
+    service: ServiceDefinition
+    event: EventRecord
+    audit_log: AuditLogRecord | None = None
 
 
 class SkillDefinition(SynarchModel):

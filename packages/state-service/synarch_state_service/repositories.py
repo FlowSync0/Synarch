@@ -9,6 +9,7 @@ from synarch_models import (
     AgentProjectAssignment,
     AgentSoul,
     AuditLogRecord,
+    ConnectorConnectionRecord,
     ConnectorJobRecord,
     ConnectorJobRunRecord,
     CostRecord,
@@ -27,6 +28,7 @@ from synarch_models import (
     ServiceDefinition,
     SkillDefinition,
     TaskRecord,
+    WorkQueueItem,
 )
 
 
@@ -109,8 +111,10 @@ class StateRepositories:
     credential_access_requests: RecordRepository[CredentialAccessRequest]
     human_assistance_requests: RecordRepository[HumanAssistanceRequest]
     credential_grants: RecordRepository[CredentialGrant]
+    connector_connections: RecordRepository[ConnectorConnectionRecord]
     connector_jobs: RecordRepository[ConnectorJobRecord]
     connector_job_runs: RecordRepository[ConnectorJobRunRecord]
+    work_queue_items: RecordRepository[WorkQueueItem]
 
     @classmethod
     def in_memory(cls) -> StateRepositories:
@@ -136,8 +140,10 @@ class StateRepositories:
             credential_access_requests=InMemoryRecordRepository(),
             human_assistance_requests=InMemoryRecordRepository(),
             credential_grants=InMemoryRecordRepository(),
+            connector_connections=InMemoryRecordRepository(),
             connector_jobs=InMemoryRecordRepository(),
             connector_job_runs=InMemoryRecordRepository(),
+            work_queue_items=InMemoryRecordRepository(),
         )
 
     @classmethod

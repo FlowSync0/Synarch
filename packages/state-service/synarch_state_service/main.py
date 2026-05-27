@@ -18,6 +18,9 @@ from synarch_models import (
     AgentStatus,
     ApprovalStatus,
     AuditLogRecord,
+    ConnectorConnectionRecord,
+    ConnectorConnectionRequest,
+    ConnectorConnectionResult,
     ConnectorJobKind,
     ConnectorJobMutationResult,
     ConnectorJobRecord,
@@ -62,6 +65,12 @@ from synarch_models import (
     TaskReviewDecision,
     TaskReviewResult,
     TaskStatus,
+    WorkQueueClaimRequest,
+    WorkQueueClaimResult,
+    WorkQueueCompletionRequest,
+    WorkQueueFailureRequest,
+    WorkQueueItem,
+    WorkQueueRecoveryResult,
 )
 from synarch_state_service.repositories import RecordRepository, StateRepositories
 
@@ -199,6 +208,17 @@ def credential_grant_application_audit_context(
     return AuditContext(
         actor_type=application.applied_by_type,
         actor_id=application.applied_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def connector_connection_audit_context(
+    connection_request: ConnectorConnectionRequest,
+    request: Request,
+) -> AuditContext:
+    return AuditContext(
+        actor_type=connection_request.connected_by_type,
+        actor_id=connection_request.connected_by_id,
         trace_id=request.headers.get("x-synarch-trace-id"),
     )
 
@@ -1725,6 +1745,247 @@ def list_task_review_queue(project_id: str | None = None) -> list[TaskRecord]:
         and (project_id is None or task.project_id == project_id)
     ]
     return sorted(tasks, key=lambda task: task.dead_lettered_at or task.created_at)
+
+
+def work_queue_audit_context(worker_id: str, request: Request) -> AuditContext:
+    audit_context = audit_context_from_request(request)
+    if audit_context is not None:
+        return audit_context
+    return AuditContext(
+        actor_type=ActorType.service,
+        actor_id=worker_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+
+
+def work_queue_ready_items(queue_name: str, now: datetime) -> list[WorkQueueItem]:
+    items = [
+        item
+        for item in REPOSITORIES.work_queue_items.list_records()
+        if item.queue_name == queue_name
+        and item.status == "queued"
+        and item.attempt_count < item.max_attempts
+        and (item.run_after_at is None or item.run_after_at <= now)
+    ]
+    return sorted(items, key=lambda item: (item.priority, item.created_at, item.id))
+
+
+@app.post("/work-queue/items", response_model=WorkQueueItem, status_code=201)
+def create_work_queue_item(item: WorkQueueItem, request: Request) -> WorkQueueItem:
+    record = create_record(REPOSITORIES.work_queue_items, item.id, item)
+    write_audit_log(
+        audit_context_from_request(request),
+        action="work_queue.item_created",
+        target_type="work_queue_item",
+        target_id=record.id,
+        payload={
+            "queue_name": record.queue_name,
+            "status": record.status,
+            "priority": record.priority,
+        },
+    )
+    return record
+
+
+@app.get("/work-queue/items", response_model=list[WorkQueueItem])
+def list_work_queue_items(
+    queue_name: str | None = None,
+    status: str | None = None,
+) -> list[WorkQueueItem]:
+    items = REPOSITORIES.work_queue_items.list_records()
+    if queue_name is not None:
+        items = [item for item in items if item.queue_name == queue_name]
+    if status is not None:
+        items = [item for item in items if item.status == status]
+    return sorted(items, key=lambda item: (item.queue_name, item.priority, item.created_at))
+
+
+@app.post("/work-queue/claim", response_model=WorkQueueClaimResult)
+def claim_work_queue_items(
+    claim: WorkQueueClaimRequest,
+    request: Request,
+) -> WorkQueueClaimResult:
+    claimed_at = datetime.now(UTC)
+    lease_expires_at = claimed_at + timedelta(seconds=claim.lease_seconds)
+    claimed_items: list[WorkQueueItem] = []
+    for item in work_queue_ready_items(claim.queue_name, claimed_at):
+        if len(claimed_items) >= claim.limit:
+            break
+        record = update_record_if(
+            REPOSITORIES.work_queue_items,
+            item.id,
+            item.model_copy(
+                update={
+                    "status": "running",
+                    "lease_owner_id": claim.worker_id,
+                    "lease_expires_at": lease_expires_at,
+                    "attempt_count": item.attempt_count + 1,
+                    "updated_at": claimed_at,
+                }
+            ),
+            {"status": "queued"},
+        )
+        if record is not None:
+            claimed_items.append(record)
+    write_audit_log(
+        work_queue_audit_context(claim.worker_id, request),
+        action="work_queue.claimed",
+        target_type="work_queue",
+        target_id=claim.queue_name,
+        payload={
+            "claimed_item_ids": [item.id for item in claimed_items],
+            "lease_expires_at": lease_expires_at.isoformat(),
+        },
+    )
+    return WorkQueueClaimResult(
+        queue_name=claim.queue_name,
+        worker_id=claim.worker_id,
+        claimed_items=claimed_items,
+        claimed_at=claimed_at,
+    )
+
+
+@app.post("/work-queue/items/{item_id}/complete", response_model=WorkQueueItem)
+def complete_work_queue_item(
+    item_id: str,
+    completion: WorkQueueCompletionRequest,
+    request: Request,
+) -> WorkQueueItem:
+    item = read_record(REPOSITORIES.work_queue_items, item_id, "work queue item")
+    if item.status != "running":
+        raise HTTPException(status_code=409, detail=f"Work item is {item.status}")
+    if item.lease_owner_id is not None and item.lease_owner_id != completion.worker_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Work item lease is owned by {item.lease_owner_id}",
+        )
+    completed_at = datetime.now(UTC)
+    record = update_record(
+        REPOSITORIES.work_queue_items,
+        item.id,
+        item.model_copy(
+            update={
+                "status": "completed",
+                "lease_owner_id": None,
+                "lease_expires_at": None,
+                "result": completion.result,
+                "last_error": None,
+                "updated_at": completed_at,
+                "completed_at": completed_at,
+            }
+        ),
+        "work queue item",
+    )
+    write_audit_log(
+        work_queue_audit_context(completion.worker_id, request),
+        action="work_queue.completed",
+        target_type="work_queue_item",
+        target_id=record.id,
+        payload={"queue_name": record.queue_name},
+    )
+    return record
+
+
+@app.post("/work-queue/items/{item_id}/fail", response_model=WorkQueueItem)
+def fail_work_queue_item(
+    item_id: str,
+    failure: WorkQueueFailureRequest,
+    request: Request,
+) -> WorkQueueItem:
+    item = read_record(REPOSITORIES.work_queue_items, item_id, "work queue item")
+    if item.status != "running":
+        raise HTTPException(status_code=409, detail=f"Work item is {item.status}")
+    if item.lease_owner_id is not None and item.lease_owner_id != failure.worker_id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Work item lease is owned by {item.lease_owner_id}",
+        )
+    failed_at = datetime.now(UTC)
+    dead_letter = failure.dead_letter or item.attempt_count >= item.max_attempts
+    record = update_record(
+        REPOSITORIES.work_queue_items,
+        item.id,
+        item.model_copy(
+            update={
+                "status": "dead_lettered" if dead_letter else "queued",
+                "lease_owner_id": None,
+                "lease_expires_at": None,
+                "run_after_at": None if dead_letter else failure.retry_after_at,
+                "last_error": failure.error,
+                "updated_at": failed_at,
+                "completed_at": failed_at if dead_letter else None,
+            }
+        ),
+        "work queue item",
+    )
+    write_audit_log(
+        work_queue_audit_context(failure.worker_id, request),
+        action="work_queue.failed" if not dead_letter else "work_queue.dead_lettered",
+        target_type="work_queue_item",
+        target_id=record.id,
+        payload={
+            "queue_name": record.queue_name,
+            "status": record.status,
+            "error": failure.error,
+        },
+    )
+    return record
+
+
+@app.post("/work-queue/recover-expired-leases", response_model=WorkQueueRecoveryResult)
+def recover_expired_work_queue_leases(request: Request) -> WorkQueueRecoveryResult:
+    inspected_at = datetime.now(UTC)
+    recovered_item_ids: list[str] = []
+    dead_lettered_item_ids: list[str] = []
+    audit_context = audit_context_from_request(request) or AuditContext(
+        actor_type=ActorType.service,
+        actor_id="work-queue-recovery",
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+    for item in REPOSITORIES.work_queue_items.list_records():
+        if (
+            item.status != "running"
+            or item.lease_expires_at is None
+            or item.lease_expires_at > inspected_at
+        ):
+            continue
+        dead_letter = item.attempt_count >= item.max_attempts
+        record = update_record_if(
+            REPOSITORIES.work_queue_items,
+            item.id,
+            item.model_copy(
+                update={
+                    "status": "dead_lettered" if dead_letter else "queued",
+                    "lease_owner_id": None,
+                    "lease_expires_at": None,
+                    "last_error": "lease_expired",
+                    "updated_at": inspected_at,
+                    "completed_at": inspected_at if dead_letter else None,
+                }
+            ),
+            {"status": "running", "lease_owner_id": item.lease_owner_id},
+        )
+        if record is None:
+            continue
+        if dead_letter:
+            dead_lettered_item_ids.append(record.id)
+        else:
+            recovered_item_ids.append(record.id)
+    write_audit_log(
+        audit_context,
+        action="work_queue.leases_recovered",
+        target_type="work_queue",
+        target_id="all",
+        payload={
+            "recovered_item_ids": recovered_item_ids,
+            "dead_lettered_item_ids": dead_lettered_item_ids,
+        },
+    )
+    return WorkQueueRecoveryResult(
+        recovered_item_ids=recovered_item_ids,
+        dead_lettered_item_ids=dead_lettered_item_ids,
+        inspected_at=inspected_at,
+    )
 
 
 @app.get("/tasks/{task_id}", response_model=TaskRecord)
@@ -3591,6 +3852,7 @@ def credential_grant_applied_event(
             "agent_id": access_request.agent_id,
             "tool_name": access_request.tool_name,
             "granted_scopes": grant.scopes,
+            "secret_ref_configured": grant.secret_ref is not None,
             "status": ApprovalStatus.applied,
         },
         trace_id=trace_id,
@@ -3651,6 +3913,7 @@ def apply_credential_access_grant(
         granted_by_type=application.applied_by_type,
         granted_by_id=application.applied_by_id,
         rationale=application.rationale,
+        secret_ref=application.secret_ref,
     )
     created_grant = create_record(REPOSITORIES.credential_grants, grant.id, grant)
     updated_service = update_record(
@@ -3688,6 +3951,7 @@ def apply_credential_access_grant(
             "service_id": application.service_id,
             "credential_grant_id": created_grant.id,
             "granted_scopes": created_grant.scopes,
+            "secret_ref_configured": created_grant.secret_ref is not None,
             "rationale": application.rationale,
         },
     )
@@ -3721,6 +3985,154 @@ def list_credential_grants(
     if active is not None:
         grants = [grant for grant in grants if grant.active == active]
     return sorted(grants, key=lambda grant: grant.created_at)
+
+
+def connector_connection_event(
+    connection: ConnectorConnectionRecord,
+    trace_id: str | None,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_connection_created,
+        target=connection.service_id,
+        payload={
+            "connector_connection_id": connection.id,
+            "service_id": connection.service_id,
+            "mode": connection.mode,
+            "status": connection.status,
+            "credential_scopes": connection.credential_scopes,
+            "secret_ref_configured": connection.secret_ref is not None,
+            "secret_fingerprint": connection.secret_fingerprint,
+            "project_id": connection.project_id,
+            "agent_id": connection.agent_id,
+        },
+        trace_id=trace_id,
+    )
+
+
+def validate_connector_connection_request(
+    connection_request: ConnectorConnectionRequest,
+    service: ServiceDefinition,
+) -> None:
+    requires_api_key = service.metadata.get("requires_api_key") is True
+    if connection_request.service_id != service.id:
+        raise HTTPException(status_code=400, detail="service_id must match an existing service")
+    if connection_request.mode == "api_key" and connection_request.secret_ref is None:
+        raise HTTPException(
+            status_code=400,
+            detail="API key connector connections require secret_ref",
+        )
+    if connection_request.mode == "no_key" and requires_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="This connector requires an API key connection",
+        )
+
+
+@app.post("/connector-connections", response_model=ConnectorConnectionResult, status_code=201)
+def create_connector_connection(
+    connection_request: ConnectorConnectionRequest,
+    request: Request,
+) -> ConnectorConnectionResult:
+    service = read_record(REPOSITORIES.services, connection_request.service_id, "service")
+    validate_connector_connection_request(connection_request, service)
+    now = datetime.now(UTC)
+    status = "needs_oauth" if connection_request.mode == "oauth" else "active"
+    connection = ConnectorConnectionRecord(
+        service_id=connection_request.service_id,
+        mode=connection_request.mode,
+        status=status,
+        credential_scopes=list(connection_request.credential_scopes),
+        secret_ref=connection_request.secret_ref,
+        secret_fingerprint=connection_request.secret_fingerprint,
+        connected_by_type=connection_request.connected_by_type,
+        connected_by_id=connection_request.connected_by_id,
+        project_id=connection_request.project_id,
+        agent_id=connection_request.agent_id,
+        rationale=connection_request.rationale,
+        created_at=now,
+        updated_at=now,
+    )
+    created_connection = create_record(
+        REPOSITORIES.connector_connections,
+        connection.id,
+        connection,
+    )
+    metadata = {
+        **service.metadata,
+        "configured": status == "active",
+        "connector_connection_id": created_connection.id,
+        "connection_mode": created_connection.mode,
+        "secret_ref": created_connection.secret_ref,
+        "secret_fingerprint": created_connection.secret_fingerprint,
+        "connected_at": created_connection.created_at.isoformat(),
+    }
+    updated_service = update_record(
+        REPOSITORIES.services,
+        service.id,
+        service.model_copy(
+            update={
+                "credential_scopes": merged_scopes(
+                    service.credential_scopes,
+                    created_connection.credential_scopes,
+                ),
+                "metadata": metadata,
+            }
+        ),
+        "service",
+    )
+    context = connector_connection_audit_context(connection_request, request)
+    event = create_domain_event(connector_connection_event(created_connection, context.trace_id))
+    audit = write_audit_log(
+        context,
+        action="connector_connection.created",
+        target_type="service",
+        target_id=service.id,
+        payload={
+            "connector_connection_id": created_connection.id,
+            "service_id": service.id,
+            "mode": created_connection.mode,
+            "status": created_connection.status,
+            "credential_scopes": created_connection.credential_scopes,
+            "secret_ref_configured": created_connection.secret_ref is not None,
+            "secret_fingerprint": created_connection.secret_fingerprint,
+            "project_id": created_connection.project_id,
+            "agent_id": created_connection.agent_id,
+            "rationale": created_connection.rationale,
+        },
+    )
+    return ConnectorConnectionResult(
+        connection=created_connection,
+        service=updated_service,
+        event=event,
+        audit_log=audit,
+    )
+
+
+@app.get("/connector-connections", response_model=list[ConnectorConnectionRecord])
+def list_connector_connections(
+    service_id: str | None = None,
+    status: str | None = None,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+) -> list[ConnectorConnectionRecord]:
+    connections = REPOSITORIES.connector_connections.list_records()
+    if service_id is not None:
+        connections = [
+            connection for connection in connections if connection.service_id == service_id
+        ]
+    if status is not None:
+        connections = [
+            connection for connection in connections if connection.status == status
+        ]
+    if project_id is not None:
+        connections = [
+            connection for connection in connections if connection.project_id == project_id
+        ]
+    if agent_id is not None:
+        connections = [
+            connection for connection in connections if connection.agent_id == agent_id
+        ]
+    return sorted(connections, key=lambda connection: connection.created_at)
 
 
 @app.post("/agent-lifecycle-requests", response_model=AgentLifecycleRequest, status_code=201)

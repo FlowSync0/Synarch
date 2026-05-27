@@ -31,6 +31,137 @@ def parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def test_work_queue_claims_and_completes_durable_item() -> None:
+    client = TestClient(app)
+    trace_id = "trace_work_queue_complete"
+
+    create_response = client.post(
+        "/work-queue/items",
+        headers={"X-Synarch-Actor-Id": "local-user", "X-Synarch-Trace-Id": trace_id},
+        json={
+            "id": "work-reminder-1",
+            "queue_name": "reminders",
+            "payload": {"project_id": "project-demo", "task": "send reminder"},
+            "priority": 10,
+        },
+    )
+    assert create_response.status_code == 201
+
+    claim_response = client.post(
+        "/work-queue/claim",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "queue_name": "reminders",
+            "worker_id": "worker-reminders",
+            "limit": 1,
+            "lease_seconds": 120,
+        },
+    )
+
+    assert claim_response.status_code == 200
+    claimed_items = claim_response.json()["claimed_items"]
+    assert [item["id"] for item in claimed_items] == ["work-reminder-1"]
+    assert claimed_items[0]["status"] == "running"
+    assert claimed_items[0]["lease_owner_id"] == "worker-reminders"
+    assert claimed_items[0]["attempt_count"] == 1
+
+    complete_response = client.post(
+        "/work-queue/items/work-reminder-1/complete",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "worker_id": "worker-reminders",
+            "result": {"sent": True},
+        },
+    )
+
+    assert complete_response.status_code == 200
+    completed_item = complete_response.json()
+    assert completed_item["status"] == "completed"
+    assert completed_item["lease_owner_id"] is None
+    assert completed_item["result"] == {"sent": True}
+    assert completed_item["completed_at"] is not None
+
+    audit_actions = [
+        audit["action"] for audit in client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    ]
+    assert audit_actions == [
+        "work_queue.item_created",
+        "work_queue.claimed",
+        "work_queue.completed",
+    ]
+
+
+def test_work_queue_failure_dead_letters_after_max_attempts() -> None:
+    client = TestClient(app)
+
+    create_response = client.post(
+        "/work-queue/items",
+        json={
+            "id": "work-pdf-1",
+            "queue_name": "pdf-ingestion",
+            "payload": {"document_id": "doc-1"},
+            "max_attempts": 1,
+        },
+    )
+    assert create_response.status_code == 201
+
+    claim_response = client.post(
+        "/work-queue/claim",
+        json={
+            "queue_name": "pdf-ingestion",
+            "worker_id": "worker-pdf",
+            "limit": 1,
+        },
+    )
+    assert claim_response.status_code == 200
+
+    fail_response = client.post(
+        "/work-queue/items/work-pdf-1/fail",
+        json={
+            "worker_id": "worker-pdf",
+            "error": "PDF encrypted; human password required.",
+        },
+    )
+
+    assert fail_response.status_code == 200
+    failed_item = fail_response.json()
+    assert failed_item["status"] == "dead_lettered"
+    assert failed_item["last_error"] == "PDF encrypted; human password required."
+    assert failed_item["completed_at"] is not None
+
+
+def test_work_queue_recover_expired_lease_requeues_item() -> None:
+    client = TestClient(app)
+    expired_at = datetime.now(UTC) - timedelta(minutes=5)
+
+    create_response = client.post(
+        "/work-queue/items",
+        json={
+            "id": "work-webhook-1",
+            "queue_name": "webhook-delivery",
+            "status": "running",
+            "payload": {"event": "supplier.reply"},
+            "lease_owner_id": "worker-webhook",
+            "lease_expires_at": expired_at.isoformat(),
+            "attempt_count": 1,
+            "max_attempts": 3,
+        },
+    )
+    assert create_response.status_code == 201
+
+    recovery_response = client.post("/work-queue/recover-expired-leases")
+
+    assert recovery_response.status_code == 200
+    assert recovery_response.json()["recovered_item_ids"] == ["work-webhook-1"]
+    recovered_item = client.get(
+        "/work-queue/items",
+        params={"queue_name": "webhook-delivery"},
+    ).json()[0]
+    assert recovered_item["status"] == "queued"
+    assert recovered_item["lease_owner_id"] is None
+    assert recovered_item["last_error"] == "lease_expired"
+
+
 def test_service_and_skill_registry_capture_access_rules() -> None:
     client = TestClient(app)
 
@@ -791,6 +922,70 @@ def test_credential_grant_application_updates_service_and_request() -> None:
     assert "credential_access_request.applied" in [
         audit["action"] for audit in audits
     ]
+
+
+def test_connector_connection_records_secret_ref_without_secret_value() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_connection"
+    service_response = client.post(
+        "/services",
+        json={
+            "id": "connector-firecrawl-test",
+            "name": "Firecrawl",
+            "kind": "tool_provider",
+            "capabilities": ["web.extract"],
+            "credential_scopes": [],
+            "allowed_divisions": ["ops-sourcing"],
+            "metadata": {
+                "connector_type": "web_extraction",
+                "requires_api_key": True,
+                "api_key_env_var": "FIRECRAWL_API_KEY",
+            },
+        },
+    )
+    assert service_response.status_code == 201
+
+    connection_response = client.post(
+        "/connector-connections",
+        headers={
+            "X-Synarch-Actor-Type": "user",
+            "X-Synarch-Actor-Id": "local-user",
+            "X-Synarch-Trace-Id": trace_id,
+        },
+        json={
+            "service_id": "connector-firecrawl-test",
+            "mode": "api_key",
+            "credential_scopes": ["firecrawl:api_key"],
+            "secret_ref": "local://connector/connector-firecrawl-test/fp_secret",
+            "secret_fingerprint": "fp_secret",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Connect Firecrawl for web extraction.",
+        },
+    )
+
+    assert connection_response.status_code == 201
+    payload = connection_response.json()
+    assert payload["connection"]["status"] == "active"
+    assert payload["connection"]["secret_ref"] == (
+        "local://connector/connector-firecrawl-test/fp_secret"
+    )
+    assert "secret_value" not in str(payload)
+    assert payload["service"]["credential_scopes"] == ["firecrawl:api_key"]
+    assert payload["service"]["metadata"]["configured"] is True
+
+    connections = client.get(
+        "/connector-connections",
+        params={"service_id": "connector-firecrawl-test"},
+    ).json()
+    assert [connection["id"] for connection in connections] == [
+        payload["connection"]["id"]
+    ]
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert events[0]["type"] == "connector_connection.created"
+    assert events[0]["payload"]["secret_ref_configured"] is True
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert audits[0]["action"] == "connector_connection.created"
 
 
 def test_connector_job_lifecycle_records_events_and_audits() -> None:
