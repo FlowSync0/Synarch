@@ -9,9 +9,10 @@
       "Project detail shows project-scoped human assistance requests with evidence, trace focus, answer, and dismiss actions",
       "Project detail can launch the next ready task for the selected project through the ready-batch runner",
       "Project brief next-action control routes the user into run, review, connector, assistance, or planning flows",
+      "Readiness panel shows manual configuration and operator actions from Gateway /readiness",
       "Sample metrics still present"
     ],
-    "main_gap": "No live cost/health dashboard.",
+    "main_gap": "No live cost dashboard.",
     "next_validation": "Dashboard follows one live operation across runs, events, audits, and payloads by trace ID.",
     "source": "docs/roadmap.md"
   },

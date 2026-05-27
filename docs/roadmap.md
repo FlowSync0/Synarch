@@ -22,6 +22,8 @@ Synarch is currently a clean executable skeleton, not yet a durable AI company r
 - A Next.js 16 / Tailwind CSS 4 dashboard exists. Projects, agents, lifecycle approvals, and
   timeline events now read backend APIs through TanStack Query and Next API proxies, with sample
   fallbacks when services are offline.
+- The Gateway exposes `/readiness` and the dashboard surfaces manual configuration/operator
+  actions needed before unattended use.
 - `make PYTHON=.venv\Scripts\python.exe verify` passes locally on Windows.
 
 The product is therefore testable through code, APIs, and the first live UI slices. It is not yet a
@@ -40,7 +42,7 @@ through the dashboard.
 
 | Layer | Status | What Exists Now | Main Gap | Next Validation |
 | --- | --- | --- | --- | --- |
-| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, review queue, project-scoped human assistance handling, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost/health dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
+| A. Interface | Partial | Next.js control surface with live projects, agents, lifecycle approvals, timeline events, readiness/manual-action report, review queue, project-scoped human assistance handling, connector job controls, and connector job history drilldown, plus sample metrics. | No live cost dashboard yet. | Dashboard follows one live operation across runs, events, audits, and payloads by trace ID. |
 | B. Orchestration | Partial | Gateway accepts `GoalEnvelope`, persists goals through `/goals/submit`, runs one ready task through `/tasks/run-next`, recovers expired leases before bounded `/tasks/run-ready` batches, respects retry backoff, records scheduler ticks, skips task claim conflicts, and exposes an opt-in scheduler worker. | Routing is keyword-based only and there is no durable worker queue yet. | Submit goal -> run scheduler tick -> persisted result timeline. |
 | C. Control Plane | Partial | State-backed agents, lifecycle create/update requests, active `AgentSoul`, soul replacement, services, policies, and deterministic `LocalWorldView`. | No frontend form to author lifecycle requests yet and no LLM belongs inside this layer. | Create a lifecycle request from the dashboard, approve it, then verify control-plane world view. |
 | D. Domain Agents | Partial | Agent runtime supports deterministic stub mode, interim OpenRouter execution, and model-gateway-backed execution through typed `AgentTaskRequest`/`AgentResult`. | No persistent worker process, no Hermes wrapper, and no sandboxed tool execution inside the runtime. | Narrow division workflow returns typed output, event, cost, and memory candidate. |
@@ -183,6 +185,8 @@ Progress:
   the same traceable ready-batch runner.
 - Done: frontend project brief exposes a concrete next-action button that routes to run, review,
   connector review, assistance answer, or planning.
+- Done: Gateway `/readiness` and the dashboard readiness panel expose state, seed, AI runtime,
+  web provider, worker, and operator-action readiness with manual actions.
 - Done: goal submission creates a debuggable task chain with acceptance criteria instead of one broad
   execution task.
 - Done: goal submission creates a project workspace and active project assignments for routed

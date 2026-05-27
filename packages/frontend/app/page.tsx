@@ -55,6 +55,7 @@ import {
   decideCredentialAccessRequest,
   decideTaskReview,
   getProjectTimeline,
+  getSystemReadiness,
   listCredentialAccessRequests,
   listHumanAssistanceRequests,
   listProjectBriefs,
@@ -78,6 +79,7 @@ import {
   type MemoryStatus,
   type ProjectBrief,
   type ProjectTimeline,
+  type SystemReadinessStatus,
   type TaskSkipRecord,
   type TaskRunBatchResult,
   type TaskRunResult,
@@ -905,6 +907,16 @@ function projectBriefActionButtonLabel(kind: ProjectBrief["next_action"]["kind"]
   return "Plan next";
 }
 
+function readinessTone(status: SystemReadinessStatus): Tone {
+  if (status === "ready") {
+    return "ok";
+  }
+  if (status === "blocked") {
+    return "risk";
+  }
+  return "warn";
+}
+
 function projectRow(project: ProjectRecord): ProjectViewModel {
   return {
     id: project.id,
@@ -1618,6 +1630,11 @@ export default function DashboardPage() {
     queryKey: ["connector-job-runs"],
     queryFn: listConnectorJobRuns,
     refetchInterval: 10_000
+  });
+  const readinessQuery = useQuery({
+    queryKey: ["system-readiness"],
+    queryFn: getSystemReadiness,
+    refetchInterval: 30_000
   });
   const goalMutation = useMutation({
     mutationFn: submitGoal,
@@ -2851,6 +2868,14 @@ export default function DashboardPage() {
       response: draft.response.trim() || `${status} from Synarch dashboard.`
     });
   };
+  const readinessItems = readinessQuery.data?.items ?? [];
+  const readinessStatus: SystemReadinessStatus =
+    readinessQuery.data?.status ?? (readinessQuery.isError ? "blocked" : "warning");
+  const readinessCounts = {
+    ready: readinessItems.filter((item) => item.status === "ready").length,
+    warning: readinessItems.filter((item) => item.status === "warning").length,
+    blocked: readinessItems.filter((item) => item.status === "blocked").length
+  };
 
   return (
     <main className="min-h-screen bg-app text-ink">
@@ -3074,6 +3099,94 @@ export default function DashboardPage() {
                 <p className="mt-1 truncate text-xs text-muted">{metric.detail}</p>
               </motion.article>
             ))}
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Readiness" title="Architecture utilisable" />
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${toneSurface[readinessTone(readinessStatus)]}`}
+                  >
+                    {readinessStatus}
+                  </span>
+                  <span className="text-xs text-muted">
+                    {readinessCounts.ready} ready / {readinessCounts.warning} warning /{" "}
+                    {readinessCounts.blocked} blocked
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-xs text-muted">
+                  {readinessQuery.isLoading
+                    ? "Readiness en chargement..."
+                    : readinessQuery.data?.generated_at
+                      ? `Dernier check ${formatLifecycleAge(readinessQuery.data.generated_at)}`
+                      : "Gateway readiness indisponible"}
+                </p>
+              </div>
+              <button
+                className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-muted transition enabled:hover:border-accent/40 enabled:hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={readinessQuery.isFetching}
+                type="button"
+                onClick={() => {
+                  void readinessQuery.refetch();
+                }}
+              >
+                <RotateCcw size={13} />
+                <span>{readinessQuery.isFetching ? "Checking" : "Refresh"}</span>
+              </button>
+            </div>
+            {readinessQuery.isError ? (
+              <div className="px-4 py-3 text-xs font-medium text-risk">
+                {readinessQuery.error instanceof Error
+                  ? readinessQuery.error.message
+                  : "Gateway readiness failed."}
+              </div>
+            ) : null}
+            {readinessItems.length > 0 ? (
+              <div className="grid gap-2 px-4 py-3 md:grid-cols-2">
+                {readinessItems.map((item) => (
+                  <article
+                    key={item.id}
+                    className="min-w-0 rounded-md border border-border bg-white p-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase text-muted">
+                          {item.category}
+                        </p>
+                        <h3 className="mt-1 truncate text-sm font-semibold text-ink">
+                          {item.title}
+                        </h3>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${toneSurface[readinessTone(item.status)]}`}
+                      >
+                        {item.status}
+                      </span>
+                    </div>
+                    <p className="mt-2 break-words text-xs text-muted">{item.detail}</p>
+                    {item.manual_action ? (
+                      <p className="mt-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-ink ring-1 ring-border">
+                        {item.manual_action}
+                      </p>
+                    ) : null}
+                    {Object.keys(item.evidence).length > 0 ? (
+                      <details className="mt-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-muted ring-1 ring-border">
+                        <summary className="cursor-pointer text-[11px] font-semibold uppercase">
+                          Evidence
+                        </summary>
+                        <pre className="mt-2 max-h-32 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] leading-5 text-slate-100">
+                          {formatPayload(item.evidence)}
+                        </pre>
+                      </details>
+                    ) : null}
+                  </article>
+                ))}
+              </div>
+            ) : readinessQuery.isLoading ? (
+              <div className="px-4 py-3 text-xs text-muted">Lecture readiness...</div>
+            ) : null}
           </section>
 
           <section className="rounded-md border border-border bg-panel">

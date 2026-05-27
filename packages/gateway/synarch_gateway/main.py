@@ -6,6 +6,7 @@ import json
 import os
 import socket
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
@@ -77,6 +78,8 @@ from synarch_models import (
     ServiceHealthCheck,
     ServiceHealthReport,
     ServiceHealthStatus,
+    SystemReadinessItem,
+    SystemReadinessReport,
     TaskDraft,
     TaskRecord,
     TaskReviewDecision,
@@ -116,6 +119,7 @@ CostSummaryGroupBy = Literal["project", "agent", "model", "provider"]
 ToolRiskLevel = Literal["low", "medium", "high"]
 ToolCredentialState = Literal["not_required", "ready", "missing_scopes"]
 WebExtractionProvider = Literal["local_fetch", "local_playwright", "firecrawl", "browserless"]
+ReadinessStatus = Literal["ready", "warning", "blocked"]
 
 
 class ToolAdapter(Protocol):
@@ -631,6 +635,13 @@ def goal_submission_events(
 @app.get("/healthz", response_model=HealthResponse)
 def healthz() -> HealthResponse:
     return HealthResponse(service="gateway")
+
+
+@app.get("/readiness", response_model=SystemReadinessReport)
+def system_readiness(
+    state_client: StateClient = Depends(get_state_client),
+) -> SystemReadinessReport:
+    return build_system_readiness_report(state_client)
 
 
 @app.get("/")
@@ -2190,6 +2201,363 @@ def service_health_audit(report: ServiceHealthReport) -> AuditLogRecord:
         target_id=report.agent_id or "services",
         payload=service_health_payload(report),
         trace_id=report.trace_id,
+    )
+
+
+def build_system_readiness_report(state_client: StateClient) -> SystemReadinessReport:
+    try:
+        services = state_client.list_services(enabled=True)
+        projects = state_client.list_projects()
+        review_tasks = state_client.list_task_review_queue()
+        credential_requests = state_client.list_credential_access_requests(
+            status=ApprovalStatus.requested.value,
+        )
+        human_requests = state_client.list_human_assistance_requests(
+            status=HumanAssistanceStatus.requested.value,
+        )
+        blocked_connector_jobs = state_client.list_connector_jobs(
+            last_run_status=ConnectorJobRunStatus.blocked.value,
+        )
+        scheduler_ticks = state_client.list_events(event_type=EventType.scheduler_tick.value)
+        connector_ticks = state_client.list_events(event_type=EventType.connector_job_tick.value)
+    except StateServiceRequestError as error:
+        return readiness_report(
+            [
+                readiness_item(
+                    "state_service",
+                    "core",
+                    "State service API",
+                    "blocked",
+                    f"State service returned {error.status_code}: {error.detail}",
+                    "Inspect state-service logs, run migrations, then retry /readiness.",
+                )
+            ]
+        )
+    except StateServiceUnavailable:
+        return readiness_report(
+            [
+                readiness_item(
+                    "state_service",
+                    "core",
+                    "State service API",
+                    "blocked",
+                    "Gateway cannot reach the state-service.",
+                    "Start the backend stack with make dev-backend or docker compose up.",
+                    {"state_service_url": settings.state_service_url},
+                )
+            ]
+        )
+
+    items = [
+        readiness_item(
+            "state_service",
+            "core",
+            "State service API",
+            "ready",
+            (
+                f"State is reachable with {len(projects)} project(s) and "
+                f"{len(services)} enabled service(s)."
+            ),
+            evidence={
+                "state_service_url": settings.state_service_url,
+                "project_count": len(projects),
+                "enabled_service_count": len(services),
+            },
+        ),
+        seed_services_readiness_item(services),
+        ai_runtime_readiness_item(state_client),
+        web_provider_readiness_item(),
+        worker_readiness_item(
+            scheduler_tick_count=len(scheduler_ticks),
+            connector_tick_count=len(connector_ticks),
+        ),
+        operator_action_readiness_item(
+            review_task_count=len(review_tasks),
+            credential_request_count=len(credential_requests),
+            human_request_count=len(human_requests),
+            blocked_connector_job_count=len(blocked_connector_jobs),
+        ),
+    ]
+    return readiness_report(items)
+
+
+def readiness_report(items: list[SystemReadinessItem]) -> SystemReadinessReport:
+    status: ReadinessStatus = "ready"
+    if any(item.status == "blocked" for item in items):
+        status = "blocked"
+    elif any(item.status == "warning" for item in items):
+        status = "warning"
+    return SystemReadinessReport(status=status, items=items)
+
+
+def readiness_item(
+    item_id: str,
+    category: str,
+    title: str,
+    status: ReadinessStatus,
+    detail: str,
+    manual_action: str | None = None,
+    evidence: Mapping[str, object] | None = None,
+) -> SystemReadinessItem:
+    return SystemReadinessItem(
+        id=item_id,
+        category=category,
+        title=title,
+        status=status,
+        detail=detail,
+        manual_action=manual_action,
+        evidence=dict(evidence or {}),
+    )
+
+
+def seed_services_readiness_item(services: list[ServiceDefinition]) -> SystemReadinessItem:
+    service_ids = {service.id for service in services}
+    required_service_ids = {
+        "service-event-log",
+        "connector-supplier-web",
+        "connector-web-local",
+    }
+    missing_service_ids = sorted(required_service_ids - service_ids)
+    if missing_service_ids:
+        return readiness_item(
+            "seed_services",
+            "core",
+            "Seeded services",
+            "blocked",
+            f"Missing required seeded service(s): {', '.join(missing_service_ids)}.",
+            "Run make seed-state against the configured DATABASE_URL.",
+            {
+                "missing_service_ids": missing_service_ids,
+                "present_service_ids": sorted(service_ids),
+            },
+        )
+    return readiness_item(
+        "seed_services",
+        "core",
+        "Seeded services",
+        "ready",
+        "Required internal and web service definitions are present.",
+        evidence={"required_service_ids": sorted(required_service_ids)},
+    )
+
+
+def ai_runtime_readiness_item(state_client: StateClient) -> SystemReadinessItem:
+    provider_id = settings.task_runner_provider_id
+    model_id = settings.task_runner_model_id
+    try:
+        provider = state_client.get_model_provider(provider_id)
+        model = state_client.get_model_definition(model_id)
+    except StateServiceRequestError as error:
+        return readiness_item(
+            "ai_runtime",
+            "runtime",
+            "AI runtime route",
+            "blocked",
+            f"Configured provider/model is not seeded in state: {error.detail}",
+            (
+                "Run make seed-state, then configure TASK_RUNNER_PROVIDER_ID and "
+                "TASK_RUNNER_MODEL_ID to existing state records."
+            ),
+            {"provider_id": provider_id, "model_id": model_id},
+        )
+
+    api_key_env_var = provider.api_key_env_var
+    api_key_configured = bool(api_key_env_var and os.getenv(api_key_env_var))
+    evidence = {
+        "provider_id": provider.id,
+        "model_id": model.id,
+        "provider_type": provider.provider_type,
+        "api_key_env_var": api_key_env_var,
+        "api_key_configured": api_key_configured if api_key_env_var else None,
+        "agent_runtime_url": settings.agent_runtime_url,
+    }
+    if provider_id == LOCAL_RUNTIME_PROVIDER_ID or model_id == LOCAL_RUNTIME_MODEL_ID:
+        return readiness_item(
+            "ai_runtime",
+            "runtime",
+            "AI runtime route",
+            "warning",
+            "Task runner is using the deterministic local stub route.",
+            (
+                "For real AI employees, set AGENT_RUNTIME_MODE=model_gateway, "
+                "MODEL_GATEWAY_MODE=openrouter, "
+                "TASK_RUNNER_PROVIDER_ID=provider-openrouter, "
+                "TASK_RUNNER_MODEL_ID=deepseek/deepseek-v4-flash, and "
+                "OPENROUTER_API_KEY."
+            ),
+            evidence,
+        )
+    if api_key_env_var and not api_key_configured:
+        return readiness_item(
+            "ai_runtime",
+            "runtime",
+            "AI runtime route",
+            "blocked",
+            f"{api_key_env_var} is required for provider {provider_id}.",
+            f"Set {api_key_env_var} in the backend environment and restart the affected services.",
+            evidence,
+        )
+    return readiness_item(
+        "ai_runtime",
+        "runtime",
+        "AI runtime route",
+        "ready",
+        f"Task runner is configured for {provider_id} / {model_id}.",
+        evidence=evidence,
+    )
+
+
+def web_provider_readiness_item() -> SystemReadinessItem:
+    default_provider = settings.web_extract_default_provider
+    supported_provider_ids = {"local_fetch", "local_playwright", "firecrawl", "browserless"}
+    if default_provider not in supported_provider_ids:
+        return readiness_item(
+            "web_providers",
+            "tools",
+            "Web extraction providers",
+            "blocked",
+            f"WEB_EXTRACT_DEFAULT_PROVIDER={default_provider} is not executable by web.extract.",
+            (
+                "Set WEB_EXTRACT_DEFAULT_PROVIDER to local_fetch, local_playwright, "
+                "firecrawl, or browserless."
+            ),
+            {
+                "default_provider": default_provider,
+                "supported_provider_ids": sorted(supported_provider_ids),
+            },
+        )
+    default_manifest = WEB_PROVIDER_MANIFESTS[default_provider]
+    default_provider_status = default_manifest.as_response()
+    configured_provider_ids: list[str] = []
+    for manifest in WEB_PROVIDER_MANIFESTS.values():
+        provider = manifest.as_response()
+        provider_id = provider["provider_id"]
+        if (
+            isinstance(provider_id, str)
+            and provider["implemented"] is True
+            and provider["configured"] is True
+        ):
+            configured_provider_ids.append(provider_id)
+    evidence = {
+        "default_provider": default_provider,
+        "configured_provider_ids": sorted(configured_provider_ids),
+    }
+    if not default_provider_status["configured"]:
+        return readiness_item(
+            "web_providers",
+            "tools",
+            "Web extraction providers",
+            "blocked",
+            f"Default web.extract provider {default_provider} is not fully configured.",
+            (
+                "Use WEB_EXTRACT_DEFAULT_PROVIDER=local_fetch or configure the "
+                "required provider key/dependency."
+            ),
+            evidence,
+        )
+    paid_provider_configured = any(
+        provider_id in configured_provider_ids
+        for provider_id in {"firecrawl", "browserless"}
+    )
+    local_browser_configured = "local_playwright" in configured_provider_ids
+    if not paid_provider_configured and not local_browser_configured:
+        return readiness_item(
+            "web_providers",
+            "tools",
+            "Web extraction providers",
+            "warning",
+            (
+                "Only the no-key HTTP extractor is ready; JavaScript, CAPTCHA, "
+                "and anti-bot pages may need human escalation."
+            ),
+            (
+                "Install Playwright browsers or configure "
+                "FIRECRAWL_API_KEY/BROWSERLESS_API_KEY when those flows become necessary."
+            ),
+            evidence,
+        )
+    return readiness_item(
+        "web_providers",
+        "tools",
+        "Web extraction providers",
+        "ready",
+        (
+            f"Default provider {default_provider} is configured with at least one "
+            "browser/cloud fallback."
+        ),
+        evidence=evidence,
+    )
+
+
+def worker_readiness_item(
+    *,
+    scheduler_tick_count: int,
+    connector_tick_count: int,
+) -> SystemReadinessItem:
+    if scheduler_tick_count > 0 and connector_tick_count > 0:
+        return readiness_item(
+            "worker_loops",
+            "automation",
+            "Background workers",
+            "ready",
+            "Scheduler and connector workers have recorded ticks.",
+            evidence={
+                "scheduler_tick_count": scheduler_tick_count,
+                "connector_tick_count": connector_tick_count,
+            },
+        )
+    return readiness_item(
+        "worker_loops",
+        "automation",
+        "Background workers",
+        "warning",
+        "No scheduler and connector worker tick pair is visible yet.",
+        (
+            "For 24/7 autonomous operation, start Docker with the worker profile: "
+            "docker compose --profile worker up -d."
+        ),
+        {
+            "scheduler_tick_count": scheduler_tick_count,
+            "connector_tick_count": connector_tick_count,
+        },
+    )
+
+
+def operator_action_readiness_item(
+    *,
+    review_task_count: int,
+    credential_request_count: int,
+    human_request_count: int,
+    blocked_connector_job_count: int,
+) -> SystemReadinessItem:
+    evidence = {
+        "review_task_count": review_task_count,
+        "credential_request_count": credential_request_count,
+        "human_request_count": human_request_count,
+        "blocked_connector_job_count": blocked_connector_job_count,
+    }
+    open_action_count = sum(evidence.values())
+    if open_action_count > 0:
+        return readiness_item(
+            "operator_actions",
+            "operations",
+            "Manual operator actions",
+            "warning",
+            f"{open_action_count} human/operator action(s) are currently open.",
+            (
+                "Use the dashboard review, credential, connector, and "
+                "human-assistance queues to clear blockers before expecting "
+                "unattended progress."
+            ),
+            evidence,
+        )
+    return readiness_item(
+        "operator_actions",
+        "operations",
+        "Manual operator actions",
+        "ready",
+        "No open review, credential, human-assistance, or blocked connector action is waiting.",
+        evidence=evidence,
     )
 
 

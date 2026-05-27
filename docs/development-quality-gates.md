@@ -100,6 +100,8 @@ GoalEnvelope
   -> Frontend project detail surfaces project-scoped human assistance evidence and can answer/dismiss requests
   -> Frontend project detail can launch the selected project's next ready task through `/tasks/run-ready`
   -> Frontend project brief next-action control routes to run, review, connector, assistance, or planning flows
+  -> Gateway `/readiness` returns actionable ready/warning/blocked items without mutating state
+  -> Frontend readiness panel shows manual config and operator actions from the Gateway report
   -> Event Service timeline
 ```
 

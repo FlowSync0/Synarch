@@ -107,3 +107,27 @@ $env:CONTROL_PLANE_URL = "http://127.0.0.1:8010"
 $env:STATE_SERVICE_URL = "http://127.0.0.1:8020"
 npm run dev
 ```
+
+## Operational Readiness
+
+The Gateway exposes a non-mutating readiness report:
+
+```sh
+curl http://localhost:8000/readiness
+```
+
+The dashboard reads the same report through `GET /api/gateway/readiness`. Each item is
+`ready`, `warning`, or `blocked` and includes the manual action to perform when configuration or
+human review is required.
+
+Manual configuration that commonly matters before unattended use:
+
+- `OPENROUTER_API_KEY` plus `AGENT_RUNTIME_MODE=model_gateway`,
+  `MODEL_GATEWAY_MODE=openrouter`, `TASK_RUNNER_PROVIDER_ID=provider-openrouter`, and
+  `TASK_RUNNER_MODEL_ID=deepseek/deepseek-v4-flash` for real AI execution.
+- `docker compose --profile worker up -d` when scheduler, connector, memory compaction, and
+  embedding workers must run continuously.
+- `FIRECRAWL_API_KEY` or `BROWSERLESS_API_KEY` only when local web extraction is not enough for
+  JavaScript, anti-bot, or CAPTCHA-heavy pages.
+- Dashboard review queues for credential grants, human assistance, blocked connector jobs, and
+  tasks in review.

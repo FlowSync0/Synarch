@@ -39,6 +39,8 @@ from synarch_models import (
     ServiceHealthReport,
     ServiceHealthStatus,
     ServiceKind,
+    SystemReadinessItem,
+    SystemReadinessReport,
     TaskRecord,
     TaskRunBatchResult,
     TaskRunResult,
@@ -54,6 +56,31 @@ def test_goal_envelope_defaults() -> None:
 
     assert envelope.priority == "medium"
     assert envelope.requester == "local-user"
+
+
+def test_system_readiness_report_captures_manual_action_items() -> None:
+    report = SystemReadinessReport(
+        status="warning",
+        items=[
+            SystemReadinessItem(
+                id="ai_runtime",
+                category="runtime",
+                title="AI runtime route",
+                status="warning",
+                detail="Task runner is using the deterministic local stub route.",
+                manual_action="Set OPENROUTER_API_KEY before live AI runs.",
+                evidence={"provider_id": "provider-local-runtime-stub"},
+            )
+        ],
+    )
+
+    payload = report.model_dump(mode="json")
+
+    assert payload["status"] == "warning"
+    assert payload["items"][0]["manual_action"] == (
+        "Set OPENROUTER_API_KEY before live AI runs."
+    )
+    assert payload["items"][0]["evidence"]["provider_id"] == "provider-local-runtime-stub"
 
 
 def test_memory_compaction_policy_request_defaults() -> None:

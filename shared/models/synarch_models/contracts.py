@@ -39,6 +39,22 @@ class HealthResponse(SynarchModel):
     version: str = "0.1.0"
 
 
+class SystemReadinessItem(SynarchModel):
+    id: str
+    category: str
+    title: str
+    status: Literal["ready", "warning", "blocked"]
+    detail: str
+    manual_action: str | None = None
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
+class SystemReadinessReport(SynarchModel):
+    status: Literal["ready", "warning", "blocked"]
+    items: list[SystemReadinessItem]
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class GoalEnvelope(SynarchModel):
     goal: str = Field(min_length=1)
     priority: Priority = Priority.medium

@@ -155,6 +155,24 @@ export type ServiceHealthReport = {
   checked_at: string;
 };
 
+export type SystemReadinessStatus = "ready" | "warning" | "blocked";
+
+export type SystemReadinessItem = {
+  id: string;
+  category: string;
+  title: string;
+  status: SystemReadinessStatus;
+  detail: string;
+  manual_action?: string | null;
+  evidence: Record<string, unknown>;
+};
+
+export type SystemReadinessReport = {
+  status: SystemReadinessStatus;
+  items: SystemReadinessItem[];
+  generated_at: string;
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -616,6 +634,13 @@ export async function checkServiceHealth(agentId?: string): Promise<ServiceHealt
     }
   );
   return parseJsonResponse<ServiceHealthReport>(response);
+}
+
+export async function getSystemReadiness(): Promise<SystemReadinessReport> {
+  const response = await fetch("/api/gateway/readiness", {
+    cache: "no-store"
+  });
+  return parseJsonResponse<SystemReadinessReport>(response);
 }
 
 export async function listCredentialAccessRequests(): Promise<CredentialAccessRequest[]> {

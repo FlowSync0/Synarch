@@ -13,7 +13,13 @@ from synarch_gateway.main import (
     get_task_runner,
 )
 from synarch_gateway.state_client import StateServiceRequestError, StateServiceUnavailable
-from synarch_gateway.task_runner import TaskRunner, TaskRunnerUnavailable, next_ready_task
+from synarch_gateway.task_runner import (
+    LOCAL_RUNTIME_MODEL_ID,
+    LOCAL_RUNTIME_PROVIDER_ID,
+    TaskRunner,
+    TaskRunnerUnavailable,
+    next_ready_task,
+)
 from synarch_models import (
     AgentDefinition,
     AgentLifecycleRequest,
@@ -2456,6 +2462,139 @@ def test_service_health_check_filters_agent_services_and_records_trace(
     assert state_client.events[0].type == EventType.service_health_checked
     assert state_client.audit_logs[0].actor_id == "gateway-service-health"
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_service_health"
+
+
+def test_system_readiness_reports_manual_configuration_and_actions() -> None:
+    state_client = FakeStateClient()
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_readiness_status",
+            title="Readiness status",
+            goal="Show what must be configured manually.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.services.extend(
+        [
+            ServiceDefinition(id="service-event-log", name="Event Log"),
+            ServiceDefinition(
+                id="connector-supplier-web",
+                name="Supplier Web Search",
+                capabilities=["web.fetch", "web.extract"],
+            ),
+            ServiceDefinition(
+                id="connector-web-local",
+                name="Local Web Extractor",
+                capabilities=["web.fetch", "web.extract"],
+            ),
+        ]
+    )
+    state_client.model_providers.append(
+        ModelProviderConfig(
+            id=LOCAL_RUNTIME_PROVIDER_ID,
+            name="Local Runtime Stub",
+            provider_type=AiProviderType.local,
+            default_model_id=LOCAL_RUNTIME_MODEL_ID,
+        )
+    )
+    state_client.model_definitions.append(
+        ModelDefinition(
+            id=LOCAL_RUNTIME_MODEL_ID,
+            provider_id=LOCAL_RUNTIME_PROVIDER_ID,
+            display_name="Local Runtime Stub",
+        )
+    )
+    state_client.tasks.append(
+        TaskRecord(
+            id="task_readiness_review",
+            project_id="project_readiness_status",
+            title="Review blocked work",
+            status=TaskStatus.blocked,
+            assigned_agent_id="agent-dev",
+            acceptance_criteria=["Operator can see manual actions."],
+        )
+    )
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential-readiness",
+            task_id="task_readiness_review",
+            project_id="project_readiness_status",
+            agent_id="agent-dev",
+            tool_name="git.read",
+            requested_scopes=["github:contents:read"],
+            candidate_service_ids=["connector-github"],
+            reason="GitHub access must be granted by a human.",
+        )
+    )
+    state_client.human_assistance_requests.append(
+        HumanAssistanceRequest(
+            id="human-readiness",
+            project_id="project_readiness_status",
+            task_id="task_readiness_review",
+            agent_id="agent-dev",
+            kind="manual_action",
+            title="Confirm deployment target",
+            description="A human must confirm the target environment.",
+            requested_by_id="agent-dev",
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get("/readiness")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    items = {item["id"]: item for item in payload["items"]}
+    assert payload["status"] == "warning"
+    assert items["state_service"]["status"] == "ready"
+    assert items["seed_services"]["status"] == "ready"
+    assert items["ai_runtime"]["status"] == "warning"
+    assert "OPENROUTER_API_KEY" in items["ai_runtime"]["manual_action"]
+    assert items["worker_loops"]["status"] == "warning"
+    assert "--profile worker" in items["worker_loops"]["manual_action"]
+    assert items["operator_actions"]["status"] == "warning"
+    assert items["operator_actions"]["evidence"] == {
+        "review_task_count": 1,
+        "credential_request_count": 1,
+        "human_request_count": 1,
+        "blocked_connector_job_count": 0,
+    }
+
+
+def test_system_readiness_returns_blocked_report_when_state_is_unavailable() -> None:
+    class UnavailableStateClient:
+        def list_services(
+            self,
+            *,
+            kind: str | None = None,
+            enabled: bool | None = None,
+        ) -> list[ServiceDefinition]:
+            raise StateServiceUnavailable()
+
+    app.dependency_overrides[get_state_client] = lambda: UnavailableStateClient()
+
+    try:
+        response = TestClient(app).get("/readiness")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "blocked"
+    assert payload["items"] == [
+        {
+            "id": "state_service",
+            "category": "core",
+            "title": "State service API",
+            "status": "blocked",
+            "detail": "Gateway cannot reach the state-service.",
+            "manual_action": "Start the backend stack with make dev-backend or docker compose up.",
+            "evidence": {"state_service_url": gateway_main.settings.state_service_url},
+        }
+    ]
 
 
 def test_tool_gate_authorizes_allowed_tool_and_records_logs() -> None:
