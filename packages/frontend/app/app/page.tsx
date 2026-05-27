@@ -67,6 +67,26 @@ import {
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
 const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
+const connectorModeDetails: Record<
+  ConnectorConnectionMode,
+  { label: string; description: string; submitLabel: string }
+> = {
+  api_key: {
+    label: "Clé API",
+    description: "Stockage chiffré dans SecretVault.",
+    submitLabel: "Stocker la clé"
+  },
+  no_key: {
+    label: "Sans clé",
+    description: "Activer un connecteur local ou public.",
+    submitLabel: "Activer"
+  },
+  oauth: {
+    label: "OAuth",
+    description: "Créer une demande d'autorisation externe.",
+    submitLabel: "Préparer OAuth"
+  }
+};
 type WorkQueueAction = "project_reminder" | "log";
 type TaskReviewMutationVariables = {
   taskId: string;
@@ -87,6 +107,9 @@ const projectStatusClass: Record<string, string> = {
   blocked: "bg-risk-soft text-risk ring-risk/15",
   failed: "bg-risk-soft text-risk ring-risk/15",
   dead_lettered: "bg-risk-soft text-risk ring-risk/15",
+  active: "bg-ok-soft text-ok ring-ok/15",
+  needs_oauth: "bg-warn-soft text-warn ring-warn/15",
+  disabled: "bg-risk-soft text-risk ring-risk/15",
   draft: "bg-slate-100 text-muted ring-border"
 };
 
@@ -111,6 +134,18 @@ function connectionByService(
     [...connections]
       .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
       .map((connection) => [connection.service_id, connection])
+  );
+}
+
+function connectorConnectionCounts(
+  connections: ConnectorConnectionRecord[]
+): Record<ConnectorConnectionRecord["status"], number> {
+  return connections.reduce<Record<ConnectorConnectionRecord["status"], number>>(
+    (counts, connection) => {
+      counts[connection.status] = (counts[connection.status] ?? 0) + 1;
+      return counts;
+    },
+    { active: 0, disabled: 0, needs_oauth: 0 }
   );
 }
 
@@ -303,6 +338,7 @@ export default function SynarchAppPage() {
     selectedService && lastConnectorConnection?.service_id === selectedService.id
       ? lastConnectorConnection
       : selectedConnection;
+  const connectorCounts = connectorConnectionCounts(connectionsQuery.data ?? []);
   const availableConnectorModes = selectedService
     ? connectorModesForService(selectedService)
     : connectorModes;
@@ -571,6 +607,15 @@ export default function SynarchAppPage() {
     connectMutation.mutate();
   };
 
+  const handleConnectorServiceSelect = (nextServiceId: string) => {
+    const nextService =
+      connectorServices.find((service) => service.id === nextServiceId) ?? null;
+    setSelectedServiceId(nextService?.id ?? null);
+    setConnectorMode(nextService ? connectorModesForService(nextService)[0] ?? "no_key" : "no_key");
+    setLastConnectorConnection(null);
+    setApiKey("");
+  };
+
   const handleWebProviderSelect = (provider: WebProviderStatus) => {
     const service = connectorServices.find(
       (candidate) => metadataString(candidate, "web_provider") === provider.provider_id
@@ -578,10 +623,7 @@ export default function SynarchAppPage() {
     if (!service) {
       return;
     }
-    setSelectedServiceId(service.id);
-    setConnectorMode(connectorModesForService(service)[0] ?? "no_key");
-    setLastConnectorConnection(null);
-    setApiKey("");
+    handleConnectorServiceSelect(service.id);
   };
 
   const handleWorkQueueSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -861,24 +903,26 @@ export default function SynarchAppPage() {
           <aside className="flex min-w-0 flex-col gap-4">
             <section className="rounded-md border border-border bg-panel shadow-soft">
               <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                <h2 className="text-sm font-semibold">Connecteurs</h2>
-                <PlugZap className="h-4 w-4 text-accent" />
+                <div>
+                  <h2 className="text-sm font-semibold">Connecteurs</h2>
+                  <p className="text-xs text-muted">
+                    {connectorCounts.active} actifs / {connectorCounts.needs_oauth} OAuth en attente
+                  </p>
+                </div>
+                <PlugZap className="h-4 w-4 shrink-0 text-accent" />
               </div>
+              <ConnectorConnectionOverview
+                connections={connectionsQuery.data ?? []}
+                services={connectorServices}
+                loading={connectionsQuery.isLoading || servicesQuery.isLoading}
+                selectedServiceId={selectedService?.id ?? null}
+                onSelectService={handleConnectorServiceSelect}
+              />
               <form className="flex flex-col gap-3 p-4" onSubmit={handleConnectSubmit}>
                 <select
                   className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
                   value={selectedService?.id ?? ""}
-                  onChange={(event) => {
-                    const nextServiceId = event.target.value;
-                    const nextService =
-                      connectorServices.find((service) => service.id === nextServiceId) ?? null;
-                    setSelectedServiceId(nextServiceId);
-                    setConnectorMode(
-                      nextService ? connectorModesForService(nextService)[0] ?? "no_key" : "no_key"
-                    );
-                    setLastConnectorConnection(null);
-                    setApiKey("");
-                  }}
+                  onChange={(event) => handleConnectorServiceSelect(event.target.value)}
                 >
                   {connectorServices.map((service) => (
                     <option key={service.id} value={service.id}>
@@ -937,6 +981,13 @@ export default function SynarchAppPage() {
                   </div>
                 ) : null}
 
+                <ConnectorSetupSteps
+                  service={selectedService}
+                  connection={activeConnection}
+                  mode={effectiveConnectorMode}
+                  hasApiKey={apiKey.trim().length > 0}
+                />
+
                 <div
                   className={`grid gap-2 ${
                     availableConnectorModes.length === 1
@@ -950,14 +1001,17 @@ export default function SynarchAppPage() {
                     <button
                       key={mode}
                       type="button"
-                      className={`rounded-md border px-2 py-2 text-xs font-semibold ${
+                      className={`min-h-16 rounded-md border px-2 py-2 text-left text-xs ${
                         effectiveConnectorMode === mode
                           ? "border-accent bg-accent-soft text-accent"
                           : "border-border bg-white text-muted"
                       }`}
                       onClick={() => setConnectorMode(mode)}
                     >
-                      {mode}
+                      <span className="block font-semibold">{connectorModeDetails[mode].label}</span>
+                      <span className="mt-1 block leading-snug">
+                        {connectorModeDetails[mode].description}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -968,7 +1022,7 @@ export default function SynarchAppPage() {
                     type="password"
                     value={apiKey}
                     onChange={(event) => setApiKey(event.target.value)}
-                    placeholder="Clé API"
+                    placeholder="Clé API à stocker dans SecretVault"
                     autoComplete="off"
                   />
                 ) : null}
@@ -1017,7 +1071,11 @@ export default function SynarchAppPage() {
                   }
                 >
                   <KeyRound className="h-4 w-4" />
-                  <span>{connectMutation.isPending ? "Connexion" : "Connecter"}</span>
+                  <span>
+                    {connectMutation.isPending
+                      ? "Connexion"
+                      : connectorModeDetails[effectiveConnectorMode].submitLabel}
+                  </span>
                 </button>
 
                 {activeConnection ? (
@@ -1488,6 +1546,157 @@ function ActionPanel({
             : "Décision de review impossible."}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function ConnectorConnectionOverview({
+  connections,
+  services,
+  loading,
+  selectedServiceId,
+  onSelectService
+}: {
+  connections: ConnectorConnectionRecord[];
+  services: ServiceDefinition[];
+  loading: boolean;
+  selectedServiceId: string | null;
+  onSelectService: (serviceId: string) => void;
+}) {
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+  const recentConnections = [...connections]
+    .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+    .slice(0, 4);
+
+  if (loading) {
+    return <p className="border-b border-border px-4 py-3 text-sm text-muted">Chargement...</p>;
+  }
+
+  if (recentConnections.length === 0) {
+    return (
+      <p className="border-b border-border px-4 py-3 text-sm text-muted">
+        Aucune connexion enregistrée.
+      </p>
+    );
+  }
+
+  return (
+    <div className="divide-y divide-border border-b border-border">
+      {recentConnections.map((connection) => {
+        const service = servicesById.get(connection.service_id) ?? null;
+        const selected = selectedServiceId === connection.service_id;
+        return (
+          <article key={connection.id} className="px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold">
+                  {service?.name ?? connection.service_id}
+                </p>
+                <p className="truncate text-xs text-muted">
+                  {connection.mode}
+                  {connection.secret_fingerprint ? ` / ${connection.secret_fingerprint}` : ""}
+                </p>
+              </div>
+              <span className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(connection.status)}`}>
+                {connection.status}
+              </span>
+            </div>
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              {connection.status === "needs_oauth" && connection.setup_url ? (
+                <a
+                  href={connection.setup_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-warn/30 px-2 text-xs font-semibold text-warn"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  <span>Autoriser</span>
+                </a>
+              ) : null}
+              {service ? (
+                <button
+                  type="button"
+                  className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-semibold ${
+                    selected
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-border bg-white text-ink hover:bg-slate-50"
+                  }`}
+                  onClick={() => onSelectService(connection.service_id)}
+                >
+                  <PlugZap className="h-3.5 w-3.5" />
+                  <span>{selected ? "Ouvert" : "Gérer"}</span>
+                </button>
+              ) : null}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function ConnectorSetupSteps({
+  service,
+  connection,
+  mode,
+  hasApiKey
+}: {
+  service: ServiceDefinition | null;
+  connection: ConnectorConnectionRecord | null;
+  mode: ConnectorConnectionMode;
+  hasApiKey: boolean;
+}) {
+  const secretReady =
+    mode === "no_key" || mode === "oauth" || hasApiKey || Boolean(connection?.secret_fingerprint);
+  const authorizationReady = connection?.status === "active";
+  const authorizationPending = connection?.status === "needs_oauth";
+  const steps = [
+    {
+      label: "Service",
+      detail: service?.name ?? "Sélectionner un connecteur",
+      ready: Boolean(service),
+      warning: false
+    },
+    {
+      label: "Identifiants",
+      detail:
+        mode === "api_key"
+          ? "Clé reçue puis stockée dans SecretVault"
+          : mode === "oauth"
+            ? "Autorisation externe préparée par Synarch"
+            : "Aucun secret nécessaire",
+      ready: secretReady,
+      warning: false
+    },
+    {
+      label: "État",
+      detail: authorizationPending
+        ? "Autorisation externe à finaliser"
+        : authorizationReady
+          ? "Connexion utilisable par les agents autorisés"
+          : "Connexion à créer ou mettre à jour",
+      ready: authorizationReady,
+      warning: authorizationPending
+    }
+  ];
+
+  return (
+    <div className="rounded-md border border-border bg-white">
+      {steps.map((step) => (
+        <div key={step.label} className="flex items-start gap-2 border-b border-border px-3 py-2 last:border-b-0">
+          {step.ready ? (
+            <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-ok" />
+          ) : step.warning ? (
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
+          ) : (
+            <CircleDot className="mt-0.5 h-4 w-4 shrink-0 text-muted" />
+          )}
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-ink">{step.label}</p>
+            <p className="line-clamp-1 text-xs text-muted">{step.detail}</p>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
