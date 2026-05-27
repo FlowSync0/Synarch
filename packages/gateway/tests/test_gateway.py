@@ -36,6 +36,7 @@ from synarch_models import (
     AiProviderType,
     AuditLogRecord,
     ConnectorConnectionCallbackRequest,
+    ConnectorConnectionDisableRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -97,6 +98,7 @@ from synarch_models import (
 class FakeSecretVault:
     def __init__(self) -> None:
         self.stored: list[dict[str, str]] = []
+        self.deleted: list[str] = []
 
     def store_connector_secret(
         self,
@@ -124,6 +126,10 @@ class FakeSecretVault:
                 return stored["secret_value"]
         raise AssertionError(f"Unexpected secret ref: {secret_ref}")
 
+    def delete_connector_secret(self, secret_ref: str) -> bool:
+        self.deleted.append(secret_ref)
+        return True
+
 
 def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: Path) -> None:
     vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
@@ -144,6 +150,22 @@ def test_local_file_secret_vault_encrypts_and_loads_connector_secret(tmp_path: P
     assert status["encryption_enabled"] is True
     assert status["encrypted_secret_count"] == 1
     assert status["plaintext_secret_count"] == 0
+
+
+def test_local_file_secret_vault_deletes_connector_secret(tmp_path: Path) -> None:
+    vault = LocalFileSecretVault(str(tmp_path), encryption_key="test-vault-key")
+    reference = vault.store_connector_secret(
+        service_id="connector-browserless",
+        secret_value="browserless-live-secret",
+        actor_id="hugo",
+    )
+
+    assert vault.delete_connector_secret(reference.ref) is True
+    assert vault.delete_connector_secret(reference.ref) is False
+    with pytest.raises(HTTPException) as error:
+        vault.load_connector_secret(reference.ref)
+
+    assert error.value.status_code == 404
 
 
 def test_local_file_secret_vault_reencrypts_plaintext_connector_secret(
@@ -1073,6 +1095,75 @@ class FakeStateClient:
             target_id=connection.service_id,
             trace_id=headers.get("x-synarch-trace-id"),
             payload={"secret_ref_configured": updated_connection.secret_ref is not None},
+        )
+        self.audit_logs.append(audit)
+        return ConnectorConnectionResult(
+            connection=updated_connection,
+            service=updated_service,
+            event=event,
+            audit_log=audit,
+        )
+
+    def disable_connector_connection(
+        self,
+        connection_id: str,
+        request: ConnectorConnectionDisableRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        self.headers.append(headers)
+        connection = next(
+            connection
+            for connection in self.connector_connections
+            if connection.id == connection_id
+        )
+        updated_connection = connection.model_copy(
+            update={
+                "status": "disabled",
+                "secret_ref": None,
+                "rationale": request.rationale,
+                "updated_at": datetime.now(UTC),
+            }
+        )
+        connection_index = self.connector_connections.index(connection)
+        self.connector_connections[connection_index] = updated_connection
+        service = next(service for service in self.services if service.id == connection.service_id)
+        updated_service = service.model_copy(
+            update={
+                "metadata": {
+                    **service.metadata,
+                    "configured": False,
+                    "connector_connection_id": updated_connection.id,
+                    "secret_ref": None,
+                    "secret_fingerprint": updated_connection.secret_fingerprint,
+                    "disabled_connection_id": updated_connection.id,
+                }
+            }
+        )
+        self.services[self.services.index(service)] = updated_service
+        event = EventRecord(
+            type=EventType.connector_connection_disabled,
+            target=connection.service_id,
+            payload={
+                "connector_connection_id": updated_connection.id,
+                "service_id": connection.service_id,
+                "secret_ref_configured_before": connection.secret_ref is not None,
+                "secret_deleted": request.secret_deleted,
+            },
+            trace_id=headers.get("x-synarch-trace-id"),
+        )
+        self.events.append(event)
+        audit = AuditLogRecord(
+            actor_type=request.disabled_by_type,
+            actor_id=request.disabled_by_id,
+            action="connector_connection.disabled",
+            target_type="service",
+            target_id=connection.service_id,
+            trace_id=headers.get("x-synarch-trace-id"),
+            payload={
+                "secret_ref_configured_before": connection.secret_ref is not None,
+                "secret_deleted": request.secret_deleted,
+            },
         )
         self.audit_logs.append(audit)
         return ConnectorConnectionResult(
@@ -7637,6 +7728,64 @@ def test_connector_oauth_callback_stores_code_in_vault_and_completes_connection(
     assert state_client.services[0].metadata["configured"] is True
     assert state_client.events[-1].type == EventType.connector_connection_completed
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_oauth_callback"
+
+
+def test_disable_connector_connection_deletes_secret_and_sends_only_disable_request() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-browserless",
+            name="Browserless",
+            kind="tool_provider",
+            capabilities=["web.extract"],
+            credential_scopes=["browserless:api_key"],
+            metadata={"requires_api_key": True},
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+    client = TestClient(app)
+
+    try:
+        connect_response = client.post(
+            "/connectors/connector-browserless/connections",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_connector_connect_for_disable",
+            },
+            json={
+                "mode": "api_key",
+                "api_key": "browserless-secret",
+                "rationale": "Connect Browserless.",
+            },
+        )
+        assert connect_response.status_code == 200
+        connection_id = connect_response.json()["connection"]["id"]
+        disable_response = client.post(
+            f"/connector-connections/{connection_id}/disable",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_connector_disable_gateway",
+            },
+            json={"rationale": "Rotate Browserless credentials."},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert disable_response.status_code == 200
+    payload = disable_response.json()
+    assert secret_vault.deleted == ["fake://connectors/connector-browserless/fp_test"]
+    assert payload["connection"]["status"] == "disabled"
+    assert payload["connection"]["secret_ref"] is None
+    assert payload["connection"]["secret_fingerprint"] == "fp_test"
+    assert "browserless-secret" not in str(payload)
+    assert state_client.connector_connections[0].secret_ref is None
+    assert state_client.events[-1].type == EventType.connector_connection_disabled
+    assert state_client.events[-1].payload["secret_deleted"] is True
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_disable_gateway"
 
 
 def test_run_ready_tasks_records_tool_loop_metrics() -> None:

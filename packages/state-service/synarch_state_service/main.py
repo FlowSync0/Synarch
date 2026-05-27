@@ -19,6 +19,7 @@ from synarch_models import (
     ApprovalStatus,
     AuditLogRecord,
     ConnectorConnectionCallbackRequest,
+    ConnectorConnectionDisableRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -4266,6 +4267,32 @@ def connector_connection_completed_event(
     )
 
 
+def connector_connection_disabled_event(
+    connection: ConnectorConnectionRecord,
+    *,
+    trace_id: str | None,
+    secret_ref_configured_before: bool,
+    secret_deleted: bool,
+) -> EventRecord:
+    return EventRecord(
+        type=EventType.connector_connection_disabled,
+        target=connection.service_id,
+        payload={
+            "connector_connection_id": connection.id,
+            "service_id": connection.service_id,
+            "mode": connection.mode,
+            "status": connection.status,
+            "credential_scopes": connection.credential_scopes,
+            "secret_ref_configured_before": secret_ref_configured_before,
+            "secret_fingerprint": connection.secret_fingerprint,
+            "secret_deleted": secret_deleted,
+            "project_id": connection.project_id,
+            "agent_id": connection.agent_id,
+        },
+        trace_id=trace_id,
+    )
+
+
 def validate_connector_connection_request(
     connection_request: ConnectorConnectionRequest,
     service: ServiceDefinition,
@@ -4407,6 +4434,111 @@ def list_connector_connections(
             connection for connection in connections if connection.agent_id == agent_id
         ]
     return sorted(connections, key=lambda connection: connection.created_at)
+
+
+@app.post(
+    "/connector-connections/{connection_id}/disable",
+    response_model=ConnectorConnectionResult,
+)
+def disable_connector_connection(
+    connection_id: str,
+    disable_request: ConnectorConnectionDisableRequest,
+    request: Request,
+) -> ConnectorConnectionResult:
+    connection = read_record(
+        REPOSITORIES.connector_connections,
+        connection_id,
+        "connector connection",
+    )
+    if connection.status == "disabled":
+        raise HTTPException(status_code=409, detail="Connector connection is already disabled")
+
+    now = datetime.now(UTC)
+    service = read_record(REPOSITORIES.services, connection.service_id, "service")
+    secret_ref_configured_before = connection.secret_ref is not None
+    is_current_connection = (
+        service.metadata.get("connector_connection_id") == connection.id
+        or (
+            connection.secret_ref is not None
+            and service.metadata.get("secret_ref") == connection.secret_ref
+        )
+    )
+    updated_connection = update_record(
+        REPOSITORIES.connector_connections,
+        connection.id,
+        connection.model_copy(
+            update={
+                "status": "disabled",
+                "secret_ref": None,
+                "setup_url": None,
+                "callback_url": None,
+                "external_state": None,
+                "updated_at": now,
+                "rationale": disable_request.rationale,
+            }
+        ),
+        "connector connection",
+    )
+    metadata = {
+        **service.metadata,
+        "disabled_connection_id": updated_connection.id,
+        "disabled_at": now.isoformat(),
+    }
+    if is_current_connection:
+        metadata.update(
+            {
+                "configured": False,
+                "connector_connection_id": updated_connection.id,
+                "connection_status": updated_connection.status,
+                "secret_ref": None,
+                "secret_fingerprint": updated_connection.secret_fingerprint,
+                "setup_url": None,
+                "callback_url": None,
+            }
+        )
+    updated_service = update_record(
+        REPOSITORIES.services,
+        service.id,
+        service.model_copy(update={"metadata": metadata}),
+        "service",
+    )
+    context = AuditContext(
+        actor_type=disable_request.disabled_by_type,
+        actor_id=disable_request.disabled_by_id,
+        trace_id=request.headers.get("x-synarch-trace-id"),
+    )
+    event = create_domain_event(
+        connector_connection_disabled_event(
+            updated_connection,
+            trace_id=context.trace_id,
+            secret_ref_configured_before=secret_ref_configured_before,
+            secret_deleted=disable_request.secret_deleted,
+        )
+    )
+    audit = write_audit_log(
+        context,
+        action="connector_connection.disabled",
+        target_type="service",
+        target_id=service.id,
+        payload={
+            "connector_connection_id": updated_connection.id,
+            "service_id": service.id,
+            "mode": updated_connection.mode,
+            "credential_scopes": updated_connection.credential_scopes,
+            "secret_ref_configured_before": secret_ref_configured_before,
+            "secret_fingerprint": updated_connection.secret_fingerprint,
+            "secret_deleted": disable_request.secret_deleted,
+            "project_id": updated_connection.project_id,
+            "agent_id": updated_connection.agent_id,
+            "rationale": disable_request.rationale,
+        },
+    )
+    return ConnectorConnectionResult(
+        connection=updated_connection,
+        service=updated_service,
+        event=event,
+        audit_log=audit,
+    )
 
 
 @app.post(

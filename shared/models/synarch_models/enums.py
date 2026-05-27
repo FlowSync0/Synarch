@@ -73,6 +73,7 @@ class EventType(StrEnum):
     connector_job_tick = "connector_job.tick"
     connector_connection_created = "connector_connection.created"
     connector_connection_completed = "connector_connection.completed"
+    connector_connection_disabled = "connector_connection.disabled"
     tool_called = "tool.called"
     tool_failed = "tool.failed"
     approval_requested = "approval.requested"

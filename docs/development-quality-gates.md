@@ -242,6 +242,14 @@ project reminders, and can enqueue safe `log` items for operator smoke checks. T
 retry dead-lettered/failed items and dead-letter queued/running items. `/app` also shows the latest
 worker heartbeat statuses.
 
+Connector connection lifecycle gates:
+
+- `POST /connectors/{service_id}/connections` stores API keys in SecretVault and sends only
+  `secret_ref` plus fingerprint to state-service.
+- `POST /connector-connections/{connection_id}/disable` deletes the referenced local SecretVault
+  secret when present, marks the connection `disabled`, clears the active `secret_ref`, and writes
+  `connector_connection.disabled` event/audit records without exposing the secret value.
+
 Run one connector-job batch with:
 
 ```bash

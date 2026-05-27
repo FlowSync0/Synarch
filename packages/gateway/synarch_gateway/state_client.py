@@ -10,6 +10,7 @@ from synarch_models import (
     AgentResult,
     AuditLogRecord,
     ConnectorConnectionCallbackRequest,
+    ConnectorConnectionDisableRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -291,6 +292,14 @@ class StateClient(Protocol):
         self,
         connection_id: str,
         callback: ConnectorConnectionCallbackRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult: ...
+
+    def disable_connector_connection(
+        self,
+        connection_id: str,
+        request: ConnectorConnectionDisableRequest,
         *,
         headers: dict[str, str],
     ) -> ConnectorConnectionResult: ...
@@ -789,6 +798,20 @@ class HttpStateClient:
         response = self._post(
             f"/connector-connections/{connection_id}/oauth-callback",
             callback.model_dump(mode="json"),
+            headers,
+        )
+        return ConnectorConnectionResult.model_validate(response.json())
+
+    def disable_connector_connection(
+        self,
+        connection_id: str,
+        request: ConnectorConnectionDisableRequest,
+        *,
+        headers: dict[str, str],
+    ) -> ConnectorConnectionResult:
+        response = self._post(
+            f"/connector-connections/{connection_id}/disable",
+            request.model_dump(mode="json"),
             headers,
         )
         return ConnectorConnectionResult.model_validate(response.json())

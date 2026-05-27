@@ -5,6 +5,7 @@ from synarch_models import (
     AgentSoul,
     AiProviderType,
     AuditLogRecord,
+    ConnectorConnectionDisableRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     CostRecord,
@@ -273,6 +274,21 @@ def test_connector_connection_uses_secret_reference_not_secret_value() -> None:
     assert payload["secret_ref"] == "local://connector/connector-firecrawl/fp_123"
     assert "api_key" not in payload
     assert "secret_value" not in payload
+
+
+def test_connector_connection_disable_request_records_operator_without_secret() -> None:
+    request = ConnectorConnectionDisableRequest(
+        disabled_by_type=ActorType.user,
+        disabled_by_id="local-user",
+        rationale="Rotate Browserless credentials.",
+        secret_deleted=True,
+    )
+
+    payload = request.model_dump(mode="json")
+
+    assert payload["disabled_by_id"] == "local-user"
+    assert payload["secret_deleted"] is True
+    assert "secret_value" not in str(payload)
 
 
 def test_agent_soul_captures_persistent_identity() -> None:

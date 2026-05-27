@@ -1262,6 +1262,131 @@ def test_connector_connection_records_secret_ref_without_secret_value() -> None:
     assert audits[0]["action"] == "connector_connection.created"
 
 
+def test_connector_connection_disable_clears_active_secret_reference() -> None:
+    client = TestClient(app)
+    trace_id = "trace_connector_disable"
+    assert client.post(
+        "/services",
+        json={
+            "id": "connector-browserless-disable-test",
+            "name": "Browserless",
+            "kind": "tool_provider",
+            "capabilities": ["web.extract"],
+            "credential_scopes": [],
+            "metadata": {"connector_type": "cloud_browser", "requires_api_key": True},
+        },
+    ).status_code == 201
+    connection_payload = client.post(
+        "/connector-connections",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "service_id": "connector-browserless-disable-test",
+            "mode": "api_key",
+            "credential_scopes": ["browserless:api_key"],
+            "secret_ref": "local-file://connectors/connector-browserless-disable-test/fp_secret",
+            "secret_fingerprint": "fp_secret",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Connect Browserless.",
+        },
+    ).json()
+    connection_id = connection_payload["connection"]["id"]
+
+    response = client.post(
+        f"/connector-connections/{connection_id}/disable",
+        headers={"X-Synarch-Trace-Id": trace_id},
+        json={
+            "disabled_by_type": "user",
+            "disabled_by_id": "local-user",
+            "rationale": "Rotate Browserless credentials.",
+            "secret_deleted": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["connection"]["status"] == "disabled"
+    assert payload["connection"]["secret_ref"] is None
+    assert payload["connection"]["secret_fingerprint"] == "fp_secret"
+    assert payload["service"]["metadata"]["configured"] is False
+    assert payload["service"]["metadata"]["secret_ref"] is None
+    assert payload["service"]["metadata"]["disabled_connection_id"] == connection_id
+    assert "local-file://connectors" not in str(payload["event"])
+    events = client.get("/events", params={"trace_id": trace_id}).json()
+    assert [event["type"] for event in events] == [
+        "connector_connection.created",
+        "connector_connection.disabled",
+    ]
+    assert events[-1]["payload"]["secret_ref_configured_before"] is True
+    assert events[-1]["payload"]["secret_deleted"] is True
+    audits = client.get("/audit-logs", params={"trace_id": trace_id}).json()
+    assert audits[-1]["action"] == "connector_connection.disabled"
+
+
+def test_connector_connection_disable_preserves_newer_active_connection() -> None:
+    client = TestClient(app)
+    assert client.post(
+        "/services",
+        json={
+            "id": "connector-browserless-rotation-test",
+            "name": "Browserless Rotation",
+            "kind": "tool_provider",
+            "capabilities": ["web.extract"],
+            "credential_scopes": [],
+            "metadata": {"connector_type": "cloud_browser", "requires_api_key": True},
+        },
+    ).status_code == 201
+
+    first_connection = client.post(
+        "/connector-connections",
+        json={
+            "service_id": "connector-browserless-rotation-test",
+            "mode": "api_key",
+            "credential_scopes": ["browserless:api_key"],
+            "secret_ref": "local-file://connectors/connector-browserless-rotation-test/fp_old",
+            "secret_fingerprint": "fp_old",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Connect old Browserless credential.",
+        },
+    ).json()["connection"]
+    second_connection_result = client.post(
+        "/connector-connections",
+        json={
+            "service_id": "connector-browserless-rotation-test",
+            "mode": "api_key",
+            "credential_scopes": ["browserless:api_key"],
+            "secret_ref": "local-file://connectors/connector-browserless-rotation-test/fp_new",
+            "secret_fingerprint": "fp_new",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Rotate Browserless credential.",
+        },
+    ).json()
+    second_connection = second_connection_result["connection"]
+    assert second_connection_result["service"]["metadata"]["connector_connection_id"] == (
+        second_connection["id"]
+    )
+
+    response = client.post(
+        f"/connector-connections/{first_connection['id']}/disable",
+        json={
+            "disabled_by_type": "user",
+            "disabled_by_id": "local-user",
+            "rationale": "Disable old Browserless credential after rotation.",
+            "secret_deleted": True,
+        },
+    )
+
+    assert response.status_code == 200
+    service_metadata = response.json()["service"]["metadata"]
+    assert service_metadata["configured"] is True
+    assert service_metadata["connector_connection_id"] == second_connection["id"]
+    assert service_metadata["secret_ref"] == second_connection["secret_ref"]
+    assert service_metadata["secret_fingerprint"] == "fp_new"
+    assert service_metadata["disabled_connection_id"] == first_connection["id"]
+
+
 def test_connector_oauth_connection_can_complete_from_callback() -> None:
     client = TestClient(app)
     trace_id = "trace_connector_oauth_callback"

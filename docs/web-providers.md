@@ -26,6 +26,9 @@ permission, credential, event, and audit gates.
   `POST /secret-vault/reencrypt` and the `/app` SecretVault action can rewrite those entries without
   returning secret values. Production can also swap the vault behind the same contract for a
   platform secret manager.
+- Gateway `POST /connector-connections/{connection_id}/disable` deactivates a provider connection,
+  deletes the referenced local SecretVault file when possible, clears the active `secret_ref`, and
+  retains only non-secret fingerprint/event/audit evidence.
 - Local development needs the Python `playwright` package and Chromium browser bundle. Synarch pins
   Playwright in `packages/gateway/pyproject.toml` so the Python package and browser bundle stay
   reproducible. Docker installs Chromium automatically for the gateway image; outside Docker run

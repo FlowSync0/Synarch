@@ -30,6 +30,7 @@ from synarch_models import (
     ApprovalStatus,
     AuditLogRecord,
     ConnectorConnectionCallbackRequest,
+    ConnectorConnectionDisableRequest,
     ConnectorConnectionRecord,
     ConnectorConnectionRequest,
     ConnectorConnectionResult,
@@ -158,6 +159,8 @@ class SecretVault(Protocol):
 
     def load_connector_secret(self, secret_ref: str) -> str: ...
 
+    def delete_connector_secret(self, secret_ref: str) -> bool: ...
+
 
 class LocalFileSecretVault:
     def __init__(self, root: str, encryption_key: str | None = None) -> None:
@@ -240,6 +243,14 @@ class LocalFileSecretVault:
         if isinstance(secret_value, str) and secret_value:
             return secret_value
         raise HTTPException(status_code=500, detail="Secret reference payload has no secret value")
+
+    def delete_connector_secret(self, secret_ref: str) -> bool:
+        path = self.path_from_ref(secret_ref)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def path_from_ref(self, secret_ref: str) -> Path:
         parsed = urlparse(secret_ref)
@@ -1901,11 +1912,62 @@ def list_connector_connections(
         raise HTTPException(status_code=502, detail="State service unavailable") from error
 
 
+@app.post(
+    "/connector-connections/{connection_id}/disable",
+    response_model=ConnectorConnectionResult,
+)
+def disable_connector_connection(
+    connection_id: str,
+    disable_request: ConnectorConnectionDisableRequest,
+    request: Request,
+    state_client: StateClient = Depends(get_state_client),
+    secret_vault: SecretVault = Depends(get_secret_vault),
+) -> ConnectorConnectionResult:
+    trace_id = request.headers.get("x-synarch-trace-id", f"trace_{uuid4().hex[:12]}")
+    actor_type = request.headers.get(
+        "x-synarch-actor-type",
+        str(disable_request.disabled_by_type),
+    )
+    actor_id = request.headers.get("x-synarch-actor-id", disable_request.disabled_by_id)
+    try:
+        connection = connector_connection_by_id(state_client, connection_id)
+        secret_deleted = False
+        if connection.secret_ref is not None:
+            secret_deleted = secret_vault.delete_connector_secret(connection.secret_ref)
+        request_payload = ConnectorConnectionDisableRequest(
+            disabled_by_type=ActorType(actor_type),
+            disabled_by_id=actor_id,
+            rationale=disable_request.rationale,
+            secret_deleted=secret_deleted,
+        )
+        return state_client.disable_connector_connection(
+            connection_id,
+            request_payload,
+            headers=service_headers(trace_id),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"Unknown actor type: {actor_type}") from error
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
 def service_definition_by_id(state_client: StateClient, service_id: str) -> ServiceDefinition:
     for service in state_client.list_services():
         if service.id == service_id:
             return service
     raise StateServiceRequestError(404, f"Unknown service: {service_id}")
+
+
+def connector_connection_by_id(
+    state_client: StateClient,
+    connection_id: str,
+) -> ConnectorConnectionRecord:
+    for connection in state_client.list_connector_connections():
+        if connection.id == connection_id:
+            return connection
+    raise StateServiceRequestError(404, f"Unknown connector connection: {connection_id}")
 
 
 class GatewayToolRunner:

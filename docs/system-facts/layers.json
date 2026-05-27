@@ -136,6 +136,7 @@
       "Task-scoped credential gates",
       "Service health checks",
       "SecretVault-backed connector connection setup stores only secret references in state-service",
+      "Connector deactivation clears active secret references and deletes local SecretVault files when possible",
       "Local SecretVault can encrypt new connector secrets when SECRET_VAULT_KEY is configured",
       "Gateway can re-encrypt legacy plaintext local SecretVault entries through an audited operation",
       "Firecrawl and Browserless runtime adapters can use active connector secrets from SecretVault",

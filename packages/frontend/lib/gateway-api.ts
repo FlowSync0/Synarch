@@ -403,6 +403,10 @@ export type ConnectorConnectionResult = {
   audit_log?: unknown | null;
 };
 
+export type ConnectorConnectionDisableRequest = {
+  rationale: string;
+};
+
 export type HumanAssistanceKind =
   | "captcha"
   | "pdf_review"
@@ -772,6 +776,29 @@ export async function connectConnectorService({
         "X-Synarch-Actor-Type": "user",
         "X-Synarch-Actor-Id": "local-user",
         "X-Synarch-Trace-Id": `trace_frontend_connector_connect_${Date.now()}`
+      },
+      body: JSON.stringify(request)
+    }
+  );
+  return parseJsonResponse<ConnectorConnectionResult>(response);
+}
+
+export async function disableConnectorConnection({
+  connectionId,
+  request
+}: {
+  connectionId: string;
+  request: ConnectorConnectionDisableRequest;
+}): Promise<ConnectorConnectionResult> {
+  const response = await fetch(
+    `/api/gateway/connector-connections/${encodeURIComponent(connectionId)}/disable`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Synarch-Actor-Type": "user",
+        "X-Synarch-Actor-Id": "local-user",
+        "X-Synarch-Trace-Id": `trace_frontend_connector_disable_${Date.now()}`
       },
       body: JSON.stringify(request)
     }

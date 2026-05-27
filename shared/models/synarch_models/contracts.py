@@ -795,6 +795,13 @@ class ConnectorConnectionCallbackRequest(SynarchModel):
     rationale: str = "OAuth callback completed."
 
 
+class ConnectorConnectionDisableRequest(SynarchModel):
+    disabled_by_type: ActorType = ActorType.user
+    disabled_by_id: str = "local-user"
+    rationale: str = Field(default="Disable connector connection.", min_length=1)
+    secret_deleted: bool = False
+
+
 class ConnectorConnectionResult(SynarchModel):
     connection: ConnectorConnectionRecord
     service: ServiceDefinition

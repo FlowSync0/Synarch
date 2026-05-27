@@ -143,6 +143,11 @@ replace the local file vault with Vault/KMS or the platform secret manager behin
 `secret_ref` contract. If `SECRET_VAULT_KEY` is added after plaintext local entries already exist,
 run Gateway `POST /secret-vault/reencrypt` or the `/app` SecretVault action to rewrite those entries
 without exposing the secret values.
+Connector deactivation goes through Gateway
+`POST /connector-connections/{connection_id}/disable`. Gateway deletes the referenced local
+SecretVault file when one exists, then state-service marks the connection `disabled`, clears the
+active `secret_ref`, updates connector metadata, and writes `connector_connection.disabled`
+event/audit records without exposing the secret value.
 OAuth/manual-link connectors can publish `oauth_authorization_url`, `connect_url`, or
 `manual_connection_url` in service metadata. Gateway generates a `setup_url` with `state` and
 `redirect_uri`, receives `/connectors/{service_id}/oauth/callback`, stores the received code in

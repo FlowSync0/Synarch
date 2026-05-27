@@ -25,6 +25,7 @@ import {
   applyCredentialAccessGrant,
   connectConnectorService,
   decideCredentialAccessRequest,
+  disableConnectorConnection,
   getSystemReadiness,
   listCredentialAccessRequests,
   listConnectorConnections,
@@ -341,6 +342,26 @@ export default function SynarchAppPage() {
     onSuccess: (result) => {
       setLastConnectorConnection(result.connection);
       setApiKey("");
+      void queryClient.invalidateQueries({ queryKey: ["app-services"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+    }
+  });
+
+  const disableConnectorMutation = useMutation({
+    mutationFn: () => {
+      if (!activeConnection) {
+        throw new Error("Aucune connexion sélectionnée.");
+      }
+      return disableConnectorConnection({
+        connectionId: activeConnection.id,
+        request: {
+          rationale: "Connector disabled from Synarch app."
+        }
+      });
+    },
+    onSuccess: (result) => {
+      setLastConnectorConnection(result.connection);
       void queryClient.invalidateQueries({ queryKey: ["app-services"] });
       void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
       void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
@@ -804,11 +825,32 @@ export default function SynarchAppPage() {
                 {activeConnection ? (
                   <ConnectionStatus connection={activeConnection} service={selectedService} />
                 ) : null}
+                {activeConnection && activeConnection.status !== "disabled" ? (
+                  <button
+                    type="button"
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-risk/30 bg-white px-3 text-sm font-semibold text-risk hover:bg-risk-soft disabled:opacity-60"
+                    disabled={disableConnectorMutation.isPending}
+                    onClick={() => disableConnectorMutation.mutate()}
+                    title="Désactiver la connexion et supprimer le secret local associé"
+                  >
+                    <X className="h-4 w-4" />
+                    <span>
+                      {disableConnectorMutation.isPending ? "Désactivation" : "Désactiver"}
+                    </span>
+                  </button>
+                ) : null}
                 {connectMutation.isError ? (
                   <p className="text-xs text-risk">
                     {connectMutation.error instanceof Error
                       ? connectMutation.error.message
                       : "Connexion impossible."}
+                  </p>
+                ) : null}
+                {disableConnectorMutation.isError ? (
+                  <p className="text-xs text-risk">
+                    {disableConnectorMutation.error instanceof Error
+                      ? disableConnectorMutation.error.message
+                      : "Désactivation impossible."}
                   </p>
                 ) : null}
               </form>
@@ -1707,6 +1749,20 @@ function ConnectionStatus({
   connection: ConnectorConnectionRecord;
   service: ServiceDefinition | null;
 }) {
+  if (connection.status === "disabled") {
+    return (
+      <div className="rounded-md border border-risk/20 bg-risk-soft p-3 text-xs text-risk">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold">Désactivé</span>
+          <span>{connection.mode}</span>
+        </div>
+        <p className="mt-1 text-risk">
+          La connexion est inactive et son secret local n&apos;est plus référencé.
+        </p>
+        <p className="mt-1 text-risk">Mis à jour: {formatDate(connection.updated_at)}</p>
+      </div>
+    );
+  }
   if (connection.status === "needs_oauth") {
     return (
       <div className="rounded-md border border-warn/20 bg-warn-soft p-3 text-xs text-warn">
