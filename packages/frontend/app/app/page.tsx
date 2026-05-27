@@ -56,6 +56,8 @@ import {
   type ServiceHealthReport,
   type SystemReadinessItem,
   type SystemReadinessStatus,
+  type TaskRunBatchResult,
+  type TaskRunResult,
   type WebProviderStatus
 } from "../../lib/gateway-api";
 import {
@@ -1227,6 +1229,15 @@ export default function SynarchAppPage() {
                 value={(connectionsQuery.data ?? []).filter((item) => item.status === "active").length}
               />
             </div>
+            <RunReadyResultPanel
+              batch={
+                runProjectMutation.data?.project_id === effectiveProjectId
+                  ? runProjectMutation.data
+                  : null
+              }
+              running={runProjectMutation.isPending}
+              error={runProjectMutation.error}
+            />
             <div className="grid gap-4 border-t border-border p-4 lg:grid-cols-2">
               <BriefPanel brief={selectedBrief} loading={briefsQuery.isLoading} />
               <ActionPanel
@@ -1262,13 +1273,6 @@ export default function SynarchAppPage() {
               onHumanResponseChange={handleHumanResponseChange}
               onHumanResolution={handleHumanResolution}
             />
-            {runProjectMutation.isError ? (
-              <p className="border-t border-border px-4 py-3 text-sm text-risk">
-                {runProjectMutation.error instanceof Error
-                  ? runProjectMutation.error.message
-                  : "Exécution impossible."}
-              </p>
-            ) : null}
           </section>
 
           <aside className="flex min-w-0 flex-col gap-4">
@@ -2067,6 +2071,175 @@ function ActionPanel({
   );
 }
 
+function taskRunCost(run: TaskRunResult): number {
+  return run.cost_records.reduce((total, cost) => total + cost.total_cost, 0);
+}
+
+function costRecordedAt(cost: { recorded_at?: string | null; created_at?: string | null }): string {
+  return cost.recorded_at ?? cost.created_at ?? "";
+}
+
+function runBatchCost(batch: TaskRunBatchResult): number {
+  return batch.runs.reduce((total, run) => total + taskRunCost(run), 0);
+}
+
+function runBatchCurrency(batch: TaskRunBatchResult): string {
+  for (const run of batch.runs) {
+    const currency = run.cost_records[0]?.currency;
+    if (currency) {
+      return currency;
+    }
+  }
+  return "USD";
+}
+
+function RunReadyResultPanel({
+  batch,
+  running,
+  error
+}: {
+  batch: TaskRunBatchResult | null;
+  running: boolean;
+  error: unknown;
+}) {
+  if (!running && !batch && !error) {
+    return null;
+  }
+
+  const currency = batch ? runBatchCurrency(batch) : "USD";
+  const totalCost = batch ? runBatchCost(batch) : 0;
+
+  return (
+    <section className="border-t border-border px-4 py-4">
+      <div className="rounded-md border border-border bg-white">
+        <div className="flex flex-col gap-2 border-b border-border px-3 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold">Dernière exécution</h3>
+            <p className="truncate text-xs text-muted">
+              {running
+                ? "Lancement des tâches prêtes..."
+                : batch
+                  ? `${batch.trace_id} / ${batch.stop_reason}`
+                  : "Aucune exécution terminée."}
+            </p>
+          </div>
+          {batch ? (
+            <div className="flex flex-wrap gap-2 text-xs">
+              <span className="rounded-md bg-ok-soft px-2 py-1 text-ok ring-1 ring-ok/15">
+                runs: {batch.runs.length}
+              </span>
+              <span className="rounded-md bg-warn-soft px-2 py-1 text-warn ring-1 ring-warn/15">
+                skipped: {batch.skipped_task_ids.length}
+              </span>
+              <span className="rounded-md bg-info-soft px-2 py-1 text-info ring-1 ring-info/15">
+                credentials: {batch.credential_access_requests.length}
+              </span>
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-muted ring-1 ring-border">
+                {formatCurrency(totalCost, currency)}
+              </span>
+            </div>
+          ) : null}
+        </div>
+        {running ? (
+          <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            <span>Exécution en cours.</span>
+          </div>
+        ) : null}
+        {error ? (
+          <p className="px-3 py-3 text-sm text-risk">
+            {error instanceof Error ? error.message : "Exécution impossible."}
+          </p>
+        ) : null}
+        {batch ? (
+          <div className="divide-y divide-border">
+            {batch.runs.length === 0 ? (
+              <p className="px-3 py-3 text-sm text-muted">
+                Aucun run exécuté. Consulte les tâches sautées ou les actions opérateur.
+              </p>
+            ) : (
+              batch.runs.slice(0, 4).map((run) => {
+                const cost = taskRunCost(run);
+                const toolNames = run.tool_results.map((tool) => tool.tool_name);
+                return (
+                  <article key={run.task.id} className="px-3 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold">{run.task.title}</p>
+                        <p className="truncate text-xs text-muted">
+                          {run.task.id} / {run.agent_result.agent_id}
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(run.task.status)}`}
+                      >
+                        {run.task.status}
+                      </span>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-xs text-muted">
+                      {run.agent_result.summary}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1">
+                      <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                        mémoire {run.memory_context.items.length} / {run.memory_context.tokens_used}
+                        tokens
+                      </span>
+                      <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                        sous-tâches {run.created_sub_tasks.length}
+                      </span>
+                      <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                        lifecycle {run.lifecycle_requests_created.length}
+                      </span>
+                      <span className="rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                        coût {formatCurrency(cost, run.cost_records[0]?.currency ?? currency)}
+                      </span>
+                    </div>
+                    {toolNames.length > 0 ? (
+                      <p className="mt-2 truncate text-[11px] text-muted">
+                        tools: {toolNames.join(", ")}
+                      </p>
+                    ) : null}
+                  </article>
+                );
+              })
+            )}
+            {batch.skipped_tasks.length > 0 ? (
+              <div className="bg-warn-soft px-3 py-3">
+                <p className="mb-2 text-xs font-semibold text-warn">Tâches sautées</p>
+                <div className="grid gap-2">
+                  {batch.skipped_tasks.slice(0, 5).map((skip) => (
+                    <div key={skip.task_id} className="rounded-md bg-white px-2 py-2">
+                      <p className="truncate text-xs font-semibold text-warn">
+                        {skip.category} / {skip.task_id}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-muted">{skip.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            {batch.credential_access_requests.length > 0 ? (
+              <div className="bg-info-soft px-3 py-3">
+                <p className="mb-2 text-xs font-semibold text-info">Demandes credentials créées</p>
+                <div className="grid gap-2">
+                  {batch.credential_access_requests.slice(0, 5).map((request) => (
+                    <div key={request.id} className="rounded-md bg-white px-2 py-2">
+                      <p className="truncate text-xs font-semibold text-info">
+                        {request.tool_name} / {request.agent_id}
+                      </p>
+                      <p className="mt-1 line-clamp-2 text-[11px] text-muted">{request.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 function ProjectTimelinePanel({
   timeline,
   loading,
@@ -2108,7 +2281,7 @@ function ProjectTimelinePanel({
     .sort((left, right) => right.created_at.localeCompare(left.created_at))
     .slice(0, 4);
   const latestCosts = [...timeline.cost_records]
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))
+    .sort((left, right) => costRecordedAt(right).localeCompare(costRecordedAt(left)))
     .slice(0, 3);
   const currency = timeline.currency || "USD";
 

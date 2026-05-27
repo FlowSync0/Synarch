@@ -1243,6 +1243,10 @@ function traceIdForCost(costRecord: { trace_id?: string | null }): string {
   return costRecord.trace_id ?? "no-trace";
 }
 
+function costRecordedAt(costRecord: { recorded_at?: string | null; created_at?: string | null }): string {
+  return costRecord.recorded_at ?? costRecord.created_at ?? "";
+}
+
 function traceIdForConnectorRecord(record: { trace_id?: string | null }): string {
   return record.trace_id ?? "no-trace";
 }
@@ -2174,6 +2178,7 @@ export default function DashboardPage() {
     }
     for (const costRecord of projectTimelineQuery.data.cost_records) {
       const traceId = traceIdForCost(costRecord);
+      const recordedAtMs = new Date(costRecordedAt(costRecord)).getTime();
       const row =
         traces.get(traceId) ??
         {
@@ -2186,7 +2191,9 @@ export default function DashboardPage() {
         };
       row.costCount += 1;
       row.totalCost += costRecord.total_cost;
-      row.lastTimestamp = Math.max(row.lastTimestamp, new Date(costRecord.created_at).getTime());
+      row.lastTimestamp = Number.isFinite(recordedAtMs)
+        ? Math.max(row.lastTimestamp, recordedAtMs)
+        : row.lastTimestamp;
       traces.set(traceId, row);
     }
     return [...traces.values()].sort((left, right) => right.lastTimestamp - left.lastTimestamp);

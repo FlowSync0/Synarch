@@ -1978,6 +1978,29 @@ class SubTaskAgentRuntimeClient:
         )
 
 
+class UnknownAgentSubTaskRuntimeClient:
+    def __init__(self) -> None:
+        self.requests: list[AgentTaskRequest] = []
+
+    def run_task(self, request: AgentTaskRequest) -> AgentResult:
+        self.requests.append(request)
+        return AgentResult(
+            agent_id=request.world_view.agent_id,
+            task_id=request.task.id,
+            status=TaskStatus.completed,
+            actions_taken=["Proposed a task for a not-yet-created specialist"],
+            sub_tasks_created=[
+                TaskDraft(
+                    title="Draft specialist-only task",
+                    description="This should not break task persistence.",
+                    assigned_agent_id="agent-not-yet-created",
+                    acceptance_criteria=["The task is safely assigned to an existing agent."],
+                )
+            ],
+            summary="Proposed a sub-task for a missing agent.",
+        )
+
+
 class LifecycleProposingAgentRuntimeClient:
     def __init__(self) -> None:
         self.requests: list[AgentTaskRequest] = []
@@ -6353,6 +6376,60 @@ def test_run_next_task_persists_agent_created_sub_tasks() -> None:
         parent_task.id,
         parent_task.id,
     ]
+
+
+def test_run_next_task_reassigns_sub_task_from_unknown_agent_to_parent_agent() -> None:
+    state_client = FakeStateClient()
+    parent_task = TaskRecord(
+        id="task_parent_unknown_agent",
+        project_id="project_unknown_subtask_agent",
+        title="Plan safe delegation",
+        assigned_agent_id="agent-ops-sourcing",
+        acceptance_criteria=["Missing specialists cannot break persistence."],
+    )
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_unknown_subtask_agent",
+            title="Unknown subtask agent",
+            goal="Keep AI-generated subtask assignments inside known agents.",
+            owner_agent_id="agent-direction",
+        )
+    )
+    state_client.tasks.append(parent_task)
+    runner = TaskRunner(
+        state=state_client,
+        control_plane=FakeControlPlaneClient(
+            {
+                "agent-ops-sourcing": LocalWorldView(
+                    agent_id="agent-ops-sourcing",
+                    role="Ops sourcing",
+                    division="ops",
+                    peer_agent_ids=["agent-direction"],
+                )
+            }
+        ),
+        memory=FakeMemoryClient(),
+        runtime=UnknownAgentSubTaskRuntimeClient(),
+    )
+    app.dependency_overrides[get_task_runner] = lambda: runner
+
+    try:
+        response = TestClient(app).post(
+            "/tasks/run-next",
+            headers={"X-Synarch-Trace-Id": "trace_unknown_subtask_agent"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    created_sub_task = payload["created_sub_tasks"][0]
+    assert created_sub_task["assigned_agent_id"] == "agent-ops-sourcing"
+    assert created_sub_task["parent_task_id"] == parent_task.id
+    event_payload = payload["sub_task_events"][0]["payload"]
+    assert event_payload["assigned_agent_id"] == "agent-ops-sourcing"
+    assert event_payload["original_assigned_agent_id"] == "agent-not-yet-created"
+    assert event_payload["assignment_fallback_reason"] == "unknown_agent"
 
 
 def test_run_next_task_persists_agent_proposed_lifecycle_request() -> None:

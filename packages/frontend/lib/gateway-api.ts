@@ -222,7 +222,8 @@ export type CostRecord = {
   total_cost: number;
   currency: string;
   trace_id?: string | null;
-  created_at: string;
+  recorded_at: string;
+  created_at?: string | null;
 };
 
 export type MemoryStatus = "proposed" | "approved" | "rejected";

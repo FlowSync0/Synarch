@@ -942,8 +942,18 @@ class TaskRunner:
         events: list[EventRecord] = []
         task_ids_by_title: dict[str, str] = {}
         for index, draft in enumerate(agent_result.sub_tasks_created, start=1):
+            normalized_draft = sub_task_draft_with_safe_agent(
+                parent_task,
+                world_view,
+                draft,
+            )
+            original_assigned_agent_id = (
+                draft.assigned_agent_id
+                if normalized_draft.assigned_agent_id != draft.assigned_agent_id
+                else None
+            )
             created_task = self.state.create_task(
-                child_task_record(parent_task, draft, index, task_ids_by_title),
+                child_task_record(parent_task, normalized_draft, index, task_ids_by_title),
                 headers=headers,
             )
             created_tasks.append(created_task)
@@ -955,6 +965,7 @@ class TaskRunner:
                         parent_task=parent_task,
                         world_view=world_view,
                         trace_id=trace_id,
+                        original_assigned_agent_id=original_assigned_agent_id,
                     ),
                     headers=headers,
                 )
@@ -1231,6 +1242,27 @@ def child_task_record(
         parent_task_id=parent_task.id,
         sequence=sequence,
     )
+
+
+def sub_task_draft_with_safe_agent(
+    parent_task: TaskRecord,
+    world_view: LocalWorldView,
+    draft: TaskDraft,
+) -> TaskDraft:
+    if draft.assigned_agent_id in known_world_view_agent_ids(world_view):
+        return draft
+    return draft.model_copy(update={"assigned_agent_id": parent_task.assigned_agent_id})
+
+
+def known_world_view_agent_ids(world_view: LocalWorldView) -> set[str]:
+    agent_ids = {
+        world_view.agent_id,
+        *world_view.peer_agent_ids,
+        *world_view.direct_report_agent_ids,
+    }
+    if world_view.manager_agent_id is not None:
+        agent_ids.add(world_view.manager_agent_id)
+    return agent_ids
 
 
 def child_task_dependencies(
@@ -1901,19 +1933,24 @@ def sub_task_created_event(
     parent_task: TaskRecord,
     world_view: LocalWorldView,
     trace_id: str,
+    original_assigned_agent_id: str | None = None,
 ) -> EventRecord:
+    payload = {
+        "task_id": task.id,
+        "parent_task_id": parent_task.id,
+        "assigned_agent_id": task.assigned_agent_id,
+        "depends_on": task.depends_on,
+        "acceptance_criteria": task.acceptance_criteria,
+        "sequence": task.sequence,
+    }
+    if original_assigned_agent_id is not None:
+        payload["original_assigned_agent_id"] = original_assigned_agent_id
+        payload["assignment_fallback_reason"] = "unknown_agent"
     return EventRecord(
         type=EventType.task_created,
         source_agent_id=world_view.agent_id,
         target=task.project_id,
-        payload={
-            "task_id": task.id,
-            "parent_task_id": parent_task.id,
-            "assigned_agent_id": task.assigned_agent_id,
-            "depends_on": task.depends_on,
-            "acceptance_criteria": task.acceptance_criteria,
-            "sequence": task.sequence,
-        },
+        payload=payload,
         trace_id=trace_id,
     )
 
