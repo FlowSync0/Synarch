@@ -224,15 +224,17 @@ make work-queue-tick SYNARCH_WORK_QUEUE_NAME=reminders
 
 `python -m synarch_state_service.work_queue_worker --loop` can run continuously, or through
 `docker compose --profile worker up -d work-queue-worker`. The first supported payload actions are
-`noop` and `log`; unknown actions are failed through the durable queue path and dead-lettered instead
-of being executed speculatively.
+`noop`, `log`, and `project.reminder.emit`; unknown actions are failed through the durable queue path
+and dead-lettered instead of being executed speculatively. `project.reminder.emit` validates
+`project_id` and `message`, writes a durable `project.reminder` event, then completes the queue item
+with the emitted event id.
 Each local or Docker worker tick records a durable `worker_heartbeats` row and a
 `worker.heartbeat` audit log when state-service is reachable. Heartbeats include worker kind,
 target, status, heartbeat count, last tick summary, last error, and last seen timestamp.
 The `/app` workspace includes a work-queue panel that reads these same records through the Next
-state-service proxy, displays per-status counts, and can enqueue safe `log` items for operator
-smoke checks. The same panel can retry dead-lettered/failed items and dead-letter queued/running
-items. `/app` also shows the latest worker heartbeat statuses.
+state-service proxy, displays per-status counts, can enqueue project reminders, and can enqueue safe
+`log` items for operator smoke checks. The same panel can retry dead-lettered/failed items and
+dead-letter queued/running items. `/app` also shows the latest worker heartbeat statuses.
 
 Run one connector-job batch with:
 

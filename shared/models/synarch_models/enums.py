@@ -39,6 +39,7 @@ class EventType(StrEnum):
     project_complexity_reported = "project_complexity.reported"
     project_split_requested = "project_split.requested"
     project_split_applied = "project_split.applied"
+    project_reminder = "project.reminder"
     task_created = "task.created"
     task_started = "task.started"
     task_heartbeat = "task.heartbeat"

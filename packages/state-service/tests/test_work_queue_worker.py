@@ -88,6 +88,155 @@ def test_run_work_queue_tick_claims_and_completes_supported_item(
     assert result["work_queue"]["failed_count"] == 0
 
 
+def test_run_work_queue_tick_emits_project_reminder_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_requests: list[Request] = []
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        seen_requests.append(request)
+        if request.full_url.endswith("/work-queue/recover-expired-leases"):
+            return FakeResponse(
+                {
+                    "recovered_item_ids": [],
+                    "dead_lettered_item_ids": [],
+                    "inspected_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        if request.full_url.endswith("/work-queue/claim"):
+            return FakeResponse(
+                {
+                    "queue_name": "reminders",
+                    "worker_id": "worker-test",
+                    "claimed_items": [
+                        {
+                            "id": "work-reminder-1",
+                            "queue_name": "reminders",
+                            "payload": {
+                                "action": "project.reminder.emit",
+                                "project_id": "project_demo",
+                                "message": "Relancer le fournisseur mardi matin.",
+                            },
+                        }
+                    ],
+                    "claimed_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        if request.full_url.endswith("/events"):
+            assert request_payload(request) == {
+                "type": "project.reminder",
+                "target": "project_demo",
+                "payload": {
+                    "project_id": "project_demo",
+                    "message": "Relancer le fournisseur mardi matin.",
+                    "source_work_queue_item_id": "work-reminder-1",
+                },
+                "trace_id": "trace_work_queue_reminder",
+            }
+            return FakeResponse(
+                {
+                    "id": "event-reminder-1",
+                    "type": "project.reminder",
+                    "target": "project_demo",
+                    "payload": {
+                        "project_id": "project_demo",
+                        "message": "Relancer le fournisseur mardi matin.",
+                        "source_work_queue_item_id": "work-reminder-1",
+                    },
+                    "trace_id": "trace_work_queue_reminder",
+                }
+            )
+        if request.full_url.endswith("/work-queue/items/work-reminder-1/complete"):
+            assert request_payload(request)["result"] == {
+                "action": "project.reminder.emit",
+                "project_id": "project_demo",
+                "message": "Relancer le fournisseur mardi matin.",
+                "event_id": "event-reminder-1",
+                "event_type": "project.reminder",
+                "emitted": True,
+            }
+            return FakeResponse({"id": "work-reminder-1", "status": "completed"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(work_queue_worker, "urlopen", fake_urlopen)
+
+    result = work_queue_worker.run_work_queue_tick(
+        state_service_url="http://state-service:8020",
+        queue_name="reminders",
+        worker_id="worker-test",
+        limit=1,
+        lease_seconds=30,
+        trace_id="trace_work_queue_reminder",
+        timeout_seconds=9.0,
+    )
+
+    assert [request.full_url for request in seen_requests] == [
+        "http://state-service:8020/work-queue/recover-expired-leases",
+        "http://state-service:8020/work-queue/claim",
+        "http://state-service:8020/events",
+        "http://state-service:8020/work-queue/items/work-reminder-1/complete",
+    ]
+    assert result["work_queue"]["completed_count"] == 1
+    assert result["work_queue"]["failed_count"] == 0
+
+
+def test_run_work_queue_tick_dead_letters_invalid_project_reminder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failed_payloads: list[dict[str, object]] = []
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        if request.full_url.endswith("/work-queue/recover-expired-leases"):
+            return FakeResponse(
+                {
+                    "recovered_item_ids": [],
+                    "dead_lettered_item_ids": [],
+                    "inspected_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        if request.full_url.endswith("/work-queue/claim"):
+            return FakeResponse(
+                {
+                    "queue_name": "reminders",
+                    "worker_id": "worker-test",
+                    "claimed_items": [
+                        {
+                            "id": "work-reminder-invalid",
+                            "queue_name": "reminders",
+                            "payload": {
+                                "action": "project.reminder.emit",
+                                "project_id": "project_demo",
+                            },
+                        }
+                    ],
+                    "claimed_at": "2026-01-01T00:00:00Z",
+                }
+            )
+        if request.full_url.endswith("/work-queue/items/work-reminder-invalid/fail"):
+            failed_payloads.append(request_payload(request))
+            return FakeResponse({"id": "work-reminder-invalid", "status": "dead_lettered"})
+        raise AssertionError(f"Unexpected request: {request.full_url}")
+
+    monkeypatch.setattr(work_queue_worker, "urlopen", fake_urlopen)
+
+    result = work_queue_worker.run_work_queue_tick(
+        state_service_url="http://state-service:8020",
+        queue_name="reminders",
+        worker_id="worker-test",
+        limit=1,
+        lease_seconds=30,
+        trace_id="trace_work_queue_invalid_reminder",
+        timeout_seconds=9.0,
+    )
+
+    assert result["work_queue"]["completed_count"] == 0
+    assert result["work_queue"]["failed_count"] == 1
+    assert failed_payloads[0]["dead_letter"] is True
+    assert "project.reminder.emit requires non-empty message" in str(
+        failed_payloads[0]["error"]
+    )
+
+
 def test_run_work_queue_tick_fails_unsupported_action(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

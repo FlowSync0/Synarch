@@ -74,10 +74,68 @@ def record_worker_heartbeat(
     )
 
 
-def execute_work_item(item: dict[str, Any]) -> dict[str, Any]:
+def required_payload_string(
+    payload: dict[str, Any],
+    key: str,
+    *,
+    action: str,
+) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or value.strip() == "":
+        raise ValueError(f"{action} requires non-empty {key}")
+    return value.strip()
+
+
+def emit_project_reminder_event(
+    item: dict[str, Any],
+    *,
+    state_service_url: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
     payload = item.get("payload")
     if not isinstance(payload, dict):
         raise ValueError("Work item payload must be an object")
+    action = "project.reminder.emit"
+    project_id = required_payload_string(payload, "project_id", action=action)
+    message = required_payload_string(payload, "message", action=action)
+    event = post_json(
+        state_url(state_service_url, "/events"),
+        {
+            "type": "project.reminder",
+            "target": project_id,
+            "payload": {
+                "project_id": project_id,
+                "message": message,
+                "source_work_queue_item_id": item["id"],
+            },
+            "trace_id": headers["X-Synarch-Trace-Id"],
+        },
+        timeout_seconds=timeout_seconds,
+        headers=headers,
+    )
+    return {
+        "action": action,
+        "project_id": project_id,
+        "message": message,
+        "event_id": event.get("id"),
+        "event_type": event.get("type"),
+        "emitted": True,
+    }
+
+
+def execute_work_item(
+    item: dict[str, Any],
+    *,
+    state_service_url: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    payload = item.get("payload")
+    if not isinstance(payload, dict):
+        raise ValueError("Work item payload must be an object")
+    if not isinstance(item.get("id"), str):
+        raise ValueError("Work item id must be a string")
     action = payload.get("action", "noop")
     if action in {None, "noop"}:
         return {
@@ -89,6 +147,13 @@ def execute_work_item(item: dict[str, Any]) -> dict[str, Any]:
             "action": "log",
             "message": str(payload.get("message", "")),
         }
+    if action == "project.reminder.emit":
+        return emit_project_reminder_event(
+            item,
+            state_service_url=state_service_url,
+            headers=headers,
+            timeout_seconds=timeout_seconds,
+        )
     raise ValueError(f"Unsupported work queue action: {action}")
 
 
@@ -135,7 +200,12 @@ def run_work_queue_tick(
             continue
         item_id = item["id"]
         try:
-            result = execute_work_item(item)
+            result = execute_work_item(
+                item,
+                state_service_url=state_service_url,
+                headers=headers,
+                timeout_seconds=timeout_seconds,
+            )
             completed = post_json(
                 state_url(state_service_url, f"/work-queue/items/{item_id}/complete"),
                 {

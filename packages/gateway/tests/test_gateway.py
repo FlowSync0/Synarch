@@ -9010,6 +9010,58 @@ def test_project_briefs_surface_next_actions_and_reminders() -> None:
     ]
 
 
+def test_project_briefs_surface_project_reminder_events() -> None:
+    state_client = FakeStateClient()
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_demo",
+            title="Demo project",
+            goal="Keep execution visible.",
+            owner_agent_id="agent-direction",
+            created_at=now,
+        )
+    )
+    state_client.events.extend(
+        [
+            EventRecord(
+                id="event-reminder",
+                type=EventType.project_reminder,
+                target="project_demo",
+                payload={
+                    "project_id": "project_demo",
+                    "message": "Relancer le fournisseur mardi matin.",
+                },
+                timestamp=now + timedelta(minutes=2),
+            ),
+            EventRecord(
+                id="event-other-reminder",
+                type=EventType.project_reminder,
+                target="project_other",
+                payload={
+                    "project_id": "project_other",
+                    "message": "Should be excluded.",
+                },
+                timestamp=now + timedelta(minutes=3),
+            ),
+        ]
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/projects/briefs",
+            params={"project_id": "project_demo"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    brief = response.json()[0]
+    assert [event["id"] for event in brief["latest_events"]] == ["event-reminder"]
+    assert brief["reminders"] == ["Reminder: Relancer le fournisseur mardi matin."]
+
+
 def test_operator_actions_aggregate_open_human_and_system_work() -> None:
     state_client = FakeStateClient()
     now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)

@@ -60,6 +60,7 @@ import {
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
 const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
+type WorkQueueAction = "project_reminder" | "log";
 
 const readinessClass: Record<SystemReadinessStatus, string> = {
   ready: "bg-ok-soft text-ok ring-ok/15",
@@ -168,8 +169,10 @@ export default function SynarchAppPage() {
   const [lastConnectorConnection, setLastConnectorConnection] =
     useState<ConnectorConnectionRecord | null>(null);
   const [apiKey, setApiKey] = useState("");
-  const [workQueueName, setWorkQueueName] = useState("default");
+  const [workQueueName, setWorkQueueName] = useState("reminders");
+  const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
   const [workQueueMessage, setWorkQueueMessage] = useState("");
+  const [workQueueRunAfter, setWorkQueueRunAfter] = useState("");
   const [humanResponsesById, setHumanResponsesById] = useState<Record<string, string>>({});
   const [scopeSelectionsByService, setScopeSelectionsByService] = useState<
     Record<string, string[]>
@@ -187,7 +190,8 @@ export default function SynarchAppPage() {
   });
   const workQueueQuery = useQuery({
     queryKey: ["app-work-queue", workQueueName],
-    queryFn: () => listWorkQueueItems(workQueueName.trim() || undefined)
+    queryFn: () => listWorkQueueItems(workQueueName.trim() || undefined),
+    refetchInterval: 15_000
   });
   const workerHeartbeatsQuery = useQuery({
     queryKey: ["app-worker-heartbeats"],
@@ -214,11 +218,13 @@ export default function SynarchAppPage() {
   const briefsQuery = useQuery({
     queryKey: ["app-project-briefs", effectiveProjectId],
     queryFn: () => listProjectBriefs(effectiveProjectId ?? undefined),
-    enabled: effectiveProjectId !== null
+    enabled: effectiveProjectId !== null,
+    refetchInterval: 15_000
   });
   const actionsQuery = useQuery({
     queryKey: ["app-operator-actions", effectiveProjectId],
-    queryFn: () => listOperatorActions(effectiveProjectId ?? undefined)
+    queryFn: () => listOperatorActions(effectiveProjectId ?? undefined),
+    refetchInterval: 15_000
   });
 
   const connectorServices = useMemo(
@@ -261,6 +267,10 @@ export default function SynarchAppPage() {
     () => visibleHumanAssistanceRequests(humanAssistanceQuery.data ?? [], effectiveProjectId),
     [humanAssistanceQuery.data, effectiveProjectId]
   );
+  const canSubmitWorkQueue =
+    workQueueName.trim().length > 0 &&
+    (workQueueAction === "log" ||
+      (effectiveProjectId !== null && workQueueMessage.trim().length > 0));
 
   const invalidateOperatorState = () => {
     void queryClient.invalidateQueries({ queryKey: ["app-credential-access-requests"] });
@@ -331,8 +341,27 @@ export default function SynarchAppPage() {
   });
 
   const createWorkQueueMutation = useMutation({
-    mutationFn: () =>
-      createWorkQueueItem({
+    mutationFn: () => {
+      if (workQueueAction === "project_reminder") {
+        if (!effectiveProjectId) {
+          throw new Error("Aucun projet sélectionné.");
+        }
+        if (workQueueMessage.trim().length === 0) {
+          throw new Error("Message de rappel requis.");
+        }
+        return createWorkQueueItem({
+          queue_name: workQueueName.trim() || "reminders",
+          payload: {
+            action: "project.reminder.emit",
+            project_id: effectiveProjectId,
+            message: workQueueMessage.trim()
+          },
+          priority: 50,
+          max_attempts: 3,
+          run_after_at: workQueueRunAfter ? new Date(workQueueRunAfter).toISOString() : undefined
+        });
+      }
+      return createWorkQueueItem({
         queue_name: workQueueName.trim() || "default",
         payload: {
           action: "log",
@@ -340,10 +369,13 @@ export default function SynarchAppPage() {
         },
         priority: 100,
         max_attempts: 1
-      }),
+      });
+    },
     onSuccess: () => {
       setWorkQueueMessage("");
+      setWorkQueueRunAfter("");
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
     }
   });
 
@@ -834,13 +866,19 @@ export default function SynarchAppPage() {
               items={workQueueQuery.data ?? []}
               loading={workQueueQuery.isLoading}
               queueName={workQueueName}
+              action={workQueueAction}
               message={workQueueMessage}
+              runAfter={workQueueRunAfter}
+              selectedProjectTitle={selectedProject?.title ?? null}
               submitting={createWorkQueueMutation.isPending}
               reviewing={reviewWorkQueueMutation.isPending}
+              canSubmit={canSubmitWorkQueue}
               error={createWorkQueueMutation.error}
               reviewError={reviewWorkQueueMutation.error}
               onQueueNameChange={setWorkQueueName}
+              onActionChange={setWorkQueueAction}
               onMessageChange={setWorkQueueMessage}
+              onRunAfterChange={setWorkQueueRunAfter}
               onSubmit={handleWorkQueueSubmit}
               onReview={handleWorkQueueReview}
             />
@@ -1333,26 +1371,38 @@ function WorkQueuePanel({
   items,
   loading,
   queueName,
+  action,
   message,
+  runAfter,
+  selectedProjectTitle,
   submitting,
   reviewing,
+  canSubmit,
   error,
   reviewError,
   onQueueNameChange,
+  onActionChange,
   onMessageChange,
+  onRunAfterChange,
   onSubmit,
   onReview
 }: {
   items: WorkQueueItem[];
   loading: boolean;
   queueName: string;
+  action: WorkQueueAction;
   message: string;
+  runAfter: string;
+  selectedProjectTitle: string | null;
   submitting: boolean;
   reviewing: boolean;
+  canSubmit: boolean;
   error: unknown;
   reviewError: unknown;
   onQueueNameChange: (value: string) => void;
+  onActionChange: (value: WorkQueueAction) => void;
   onMessageChange: (value: string) => void;
+  onRunAfterChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onReview: (itemId: string, action: "retry" | "dead_letter") => void;
 }) {
@@ -1371,25 +1421,64 @@ function WorkQueuePanel({
         <ListChecks className="h-4 w-4 text-accent" />
       </div>
       <form className="flex flex-col gap-3 p-4" onSubmit={onSubmit}>
+        <div className="grid grid-cols-2 rounded-md border border-border bg-slate-50 p-1">
+          <button
+            type="button"
+            className={`h-8 rounded text-xs font-semibold ${
+              action === "project_reminder" ? "bg-white text-ink shadow-soft" : "text-muted"
+            }`}
+            onClick={() => onActionChange("project_reminder")}
+          >
+            Rappel projet
+          </button>
+          <button
+            type="button"
+            className={`h-8 rounded text-xs font-semibold ${
+              action === "log" ? "bg-white text-ink shadow-soft" : "text-muted"
+            }`}
+            onClick={() => onActionChange("log")}
+          >
+            Log
+          </button>
+        </div>
         <input
+          aria-label="Nom de queue"
           className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
           value={queueName}
           onChange={(event) => onQueueNameChange(event.target.value)}
-          placeholder="default"
+          placeholder={action === "project_reminder" ? "reminders" : "default"}
         />
+        {action === "project_reminder" ? (
+          <div className="rounded-md border border-border bg-slate-50 px-3 py-2 text-xs text-muted">
+            <span className="font-medium text-ink">Projet:</span>{" "}
+            {selectedProjectTitle ?? "aucun projet sélectionné"}
+          </div>
+        ) : null}
         <input
+          aria-label="Message de queue"
           className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
           value={message}
           onChange={(event) => onMessageChange(event.target.value)}
-          placeholder="message"
+          placeholder={action === "project_reminder" ? "rappel à créer" : "message"}
         />
+        {action === "project_reminder" ? (
+          <input
+            aria-label="Date du rappel"
+            type="datetime-local"
+            className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+            value={runAfter}
+            onChange={(event) => onRunAfterChange(event.target.value)}
+          />
+        ) : null}
         <button
           type="submit"
           className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm font-semibold text-white disabled:opacity-60"
-          disabled={submitting || queueName.trim().length === 0}
+          disabled={submitting || !canSubmit}
         >
           <Plus className="h-4 w-4" />
-          <span>{submitting ? "Création" : "Ajouter"}</span>
+          <span>
+            {submitting ? "Création" : action === "project_reminder" ? "Planifier" : "Ajouter"}
+          </span>
         </button>
         {error ? (
           <p className="text-xs text-risk">
@@ -1473,6 +1562,11 @@ function WorkQueuePanel({
 function workQueuePayloadLabel(payload: Record<string, unknown>): string {
   const action = typeof payload.action === "string" ? payload.action : "payload";
   const message = typeof payload.message === "string" ? payload.message : "";
+  if (action === "project.reminder.emit") {
+    const projectId = typeof payload.project_id === "string" ? payload.project_id : null;
+    const prefix = projectId ? `rappel projet / ${projectId}` : "rappel projet";
+    return message ? `${prefix}: ${message}` : prefix;
+  }
   return message ? `${action}: ${message}` : action;
 }
 

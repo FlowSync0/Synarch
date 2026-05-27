@@ -5300,6 +5300,7 @@ def build_project_brief(
         human_assistance_requests=human_assistance_requests[:3],
         latest_events=events[:5],
         reminders=project_brief_reminders(
+            project_events=events,
             next_tasks=next_tasks,
             review_task_count=len(review_tasks),
             blocked_connector_job_count=len(blocked_connector_jobs),
@@ -5394,12 +5395,13 @@ def project_latest_events(
 
 def project_brief_reminders(
     *,
+    project_events: list[EventRecord],
     next_tasks: list[TaskRecord],
     review_task_count: int,
     blocked_connector_job_count: int,
     human_assistance_request_count: int,
 ) -> list[str]:
-    reminders: list[str] = []
+    reminders: list[str] = project_reminder_messages(project_events)
     if human_assistance_request_count > 0:
         reminders.append(f"Answer {human_assistance_request_count} human assistance request(s).")
     if review_task_count > 0:
@@ -5412,9 +5414,21 @@ def project_brief_reminders(
         review_task_count == 0
         and blocked_connector_job_count == 0
         and human_assistance_request_count == 0
+        and not reminders
     ):
         reminders.append("No queued next task; split the project into concrete work.")
     return reminders
+
+
+def project_reminder_messages(events: list[EventRecord]) -> list[str]:
+    reminders: list[str] = []
+    for event in events:
+        if event.type != EventType.project_reminder:
+            continue
+        message = event.payload.get("message")
+        if isinstance(message, str) and message.strip():
+            reminders.append(f"Reminder: {message.strip()}")
+    return reminders[:3]
 
 
 def project_brief_next_action(
