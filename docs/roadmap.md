@@ -314,6 +314,8 @@ Progress:
   a queue selector for operations.
 - Done: humans can retry or dead-letter generic work-queue items through traceable
   `work_queue.reviewed` decisions, including `/app` operator controls.
+- Done: `/app` shows recent `work_queue.*` audit evidence for the selected durable queue and its
+  visible items, including operator/worker actor IDs and trace IDs.
 - Done: state-service persists worker heartbeat records with PostgreSQL migration and
   `worker.heartbeat` audit logs; scheduler, connector-job, memory, and work-queue workers publish
   heartbeats that `/app` shows as latest worker statuses and selected queue worker coverage.

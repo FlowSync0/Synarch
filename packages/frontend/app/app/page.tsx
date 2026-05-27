@@ -505,6 +505,35 @@ function connectorAuditLogsForSelection(
     .sort((left, right) => right.created_at.localeCompare(left.created_at));
 }
 
+function workQueueAuditLogsForSelection(
+  auditLogs: AuditLogRecord[],
+  queueName: string,
+  items: WorkQueueItem[]
+): AuditLogRecord[] {
+  const itemIds = new Set(items.map((item) => item.id));
+  return [...auditLogs]
+    .filter((auditLog) => {
+      if (!auditLog.action.startsWith("work_queue.")) {
+        return false;
+      }
+      if (auditPayloadString(auditLog, "queue_name") === queueName) {
+        return true;
+      }
+      if (auditLog.target_type === "work_queue" && auditLog.target_id === queueName) {
+        return true;
+      }
+      if (
+        auditLog.target_type === "work_queue" &&
+        auditLog.target_id === "all" &&
+        auditLog.action === "work_queue.leases_recovered"
+      ) {
+        return true;
+      }
+      return auditLog.target_type === "work_queue_item" && itemIds.has(auditLog.target_id);
+    })
+    .sort((left, right) => right.created_at.localeCompare(left.created_at));
+}
+
 export default function SynarchAppPage() {
   const queryClient = useQueryClient();
   const operatorId = getOperatorId();
@@ -698,6 +727,11 @@ export default function SynarchAppPage() {
     auditLogsQuery.data ?? [],
     selectedService,
     activeConnection
+  );
+  const selectedWorkQueueAuditLogs = workQueueAuditLogsForSelection(
+    auditLogsQuery.data ?? [],
+    workQueueName.trim() || "default",
+    workQueueQuery.data ?? []
   );
   const connectorCounts = connectorConnectionCounts(connectionsQuery.data ?? []);
   const availableConnectorModes = selectedService
@@ -921,6 +955,7 @@ export default function SynarchAppPage() {
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["app-project-briefs"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-audit-logs"] });
     }
   });
 
@@ -938,6 +973,7 @@ export default function SynarchAppPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue"] });
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-audit-logs"] });
     }
   });
 
@@ -949,6 +985,7 @@ export default function SynarchAppPage() {
       void queryClient.invalidateQueries({ queryKey: ["app-work-queue-summary"] });
       void queryClient.invalidateQueries({ queryKey: ["app-worker-heartbeats"] });
       void queryClient.invalidateQueries({ queryKey: ["app-readiness"] });
+      void queryClient.invalidateQueries({ queryKey: ["app-audit-logs"] });
     }
   });
 
@@ -1708,8 +1745,10 @@ export default function SynarchAppPage() {
               items={workQueueQuery.data ?? []}
               summaries={workQueueSummaryQuery.data ?? []}
               workerHeartbeats={workerHeartbeatsQuery.data ?? []}
+              auditLogs={selectedWorkQueueAuditLogs}
               loading={workQueueQuery.isLoading}
               summaryLoading={workQueueSummaryQuery.isLoading}
+              auditLoading={auditLogsQuery.isLoading}
               queueName={workQueueName}
               statusFilter={workQueueStatusFilter}
               action={workQueueAction}
@@ -1724,6 +1763,7 @@ export default function SynarchAppPage() {
               error={createWorkQueueMutation.error}
               reviewError={reviewWorkQueueMutation.error}
               recoveryError={recoverWorkQueueLeasesMutation.error}
+              auditError={auditLogsQuery.error}
               recoveryResult={workQueueRecoveryResult}
               onQueueNameChange={setWorkQueueName}
               onStatusFilterChange={setWorkQueueStatusFilter}
@@ -4821,8 +4861,10 @@ function WorkQueuePanel({
   items,
   summaries,
   workerHeartbeats,
+  auditLogs,
   loading,
   summaryLoading,
+  auditLoading,
   queueName,
   statusFilter,
   action,
@@ -4837,6 +4879,7 @@ function WorkQueuePanel({
   error,
   reviewError,
   recoveryError,
+  auditError,
   recoveryResult,
   onQueueNameChange,
   onStatusFilterChange,
@@ -4850,8 +4893,10 @@ function WorkQueuePanel({
   items: WorkQueueItem[];
   summaries: WorkQueueSummary[];
   workerHeartbeats: WorkerHeartbeatRecord[];
+  auditLogs: AuditLogRecord[];
   loading: boolean;
   summaryLoading: boolean;
+  auditLoading: boolean;
   queueName: string;
   statusFilter: WorkQueueStatusFilter;
   action: WorkQueueAction;
@@ -4866,6 +4911,7 @@ function WorkQueuePanel({
   error: unknown;
   reviewError: unknown;
   recoveryError: unknown;
+  auditError: unknown;
   recoveryResult: WorkQueueRecoveryResult | null;
   onQueueNameChange: (value: string) => void;
   onStatusFilterChange: (value: WorkQueueStatusFilter) => void;
@@ -5071,6 +5117,11 @@ function WorkQueuePanel({
           <p className="mt-2 line-clamp-2 text-xs text-risk">{selectedSummary.latest_error}</p>
         ) : null}
       </div>
+      <WorkQueueAuditPanel
+        auditLogs={auditLogs}
+        loading={auditLoading}
+        error={auditError}
+      />
       <div className="divide-y divide-border">
         {loading ? (
           <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
@@ -5172,6 +5223,101 @@ function WorkQueuePanel({
         )}
       </div>
     </section>
+  );
+}
+
+function WorkQueueAuditPanel({
+  auditLogs,
+  loading,
+  error
+}: {
+  auditLogs: AuditLogRecord[];
+  loading: boolean;
+  error: unknown;
+}) {
+  const visibleLogs = auditLogs.slice(0, 5);
+
+  return (
+    <div data-testid="work-queue-audit-panel" className="border-t border-border px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase text-muted">Audit queue</p>
+          <p className="truncate text-[11px] text-muted">
+            work_queue.* lié à cette queue et ses items.
+          </p>
+        </div>
+        <span className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+          {auditLogs.length}
+        </span>
+      </div>
+
+      {loading ? (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-muted">
+          Chargement audits queue...
+        </p>
+      ) : error ? (
+        <p className="rounded-md bg-risk-soft px-3 py-2 text-xs text-risk">
+          {error instanceof Error ? error.message : "Audits queue indisponibles."}
+        </p>
+      ) : visibleLogs.length === 0 ? (
+        <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-muted">
+          Aucun audit récent pour cette queue.
+        </p>
+      ) : (
+        <div className="grid gap-2">
+          {visibleLogs.map((auditLog) => {
+            const action = auditPayloadString(auditLog, "action");
+            const previousStatus = auditPayloadString(auditLog, "previous_status");
+            const nextStatus = auditPayloadString(auditLog, "next_status");
+            const status = auditPayloadString(auditLog, "status");
+            const queue = auditPayloadString(auditLog, "queue_name");
+            return (
+              <article
+                key={auditLog.id}
+                className="rounded-md border border-border bg-white px-3 py-2"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-ink">
+                      {auditLog.action}
+                    </p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted">
+                      {auditLog.actor_type}:{auditLog.actor_id} / {formatDate(auditLog.created_at)}
+                    </p>
+                  </div>
+                  {auditLog.trace_id ? (
+                    <span className="max-w-28 shrink-0 truncate rounded-md bg-slate-50 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {auditLog.trace_id}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {queue ? (
+                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {queue}
+                    </span>
+                  ) : null}
+                  {action ? (
+                    <span className="rounded-md bg-info-soft px-2 py-1 text-[11px] text-info ring-1 ring-info/15">
+                      {action}
+                    </span>
+                  ) : null}
+                  {previousStatus || nextStatus ? (
+                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] text-muted ring-1 ring-border">
+                      {previousStatus ?? "n/a"} {"->"} {nextStatus ?? status ?? "n/a"}
+                    </span>
+                  ) : status ? (
+                    <span className={`rounded-md px-2 py-1 text-[11px] ring-1 ${statusClass(status)}`}>
+                      {status}
+                    </span>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -135,6 +135,8 @@ requests, and blocked connector jobs into one project-focused queue.
 The `/app` durable queue panel reads `GET /api/state-service/work-queue/summary`, backed by
 state-service `/work-queue/summary`, so operators can select a queue from live counts instead of
 typing queue names from memory.
+The same panel reads state-service audit logs and shows recent `work_queue.*` evidence for the
+selected queue and visible durable items, including operator/worker actor IDs and trace IDs.
 
 Connector setup now goes through Gateway `POST /connectors/{service_id}/connections`. API keys are
 written once into the local SecretVault directory and state-service only receives `secret_ref` plus a
