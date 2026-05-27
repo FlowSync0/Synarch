@@ -68,6 +68,10 @@ import {
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
 const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
 type WorkQueueAction = "project_reminder" | "log";
+type TaskReviewMutationVariables = {
+  taskId: string;
+  decision: { action: "retry" | "cancel" | "update" };
+};
 
 const readinessClass: Record<SystemReadinessStatus, string> = {
   ready: "bg-ok-soft text-ok ring-ok/15",
@@ -252,6 +256,11 @@ export default function SynarchAppPage() {
   const humanAssistanceQuery = useQuery({
     queryKey: ["app-human-assistance-requests"],
     queryFn: listHumanAssistanceRequests,
+    refetchInterval: 15_000
+  });
+  const globalActionsQuery = useQuery({
+    queryKey: ["app-operator-actions", "all"],
+    queryFn: () => listOperatorActions(),
     refetchInterval: 15_000
   });
 
@@ -659,6 +668,8 @@ export default function SynarchAppPage() {
                 void workerHeartbeatsQuery.refetch();
                 void workQueueSummaryQuery.refetch();
                 void workQueueQuery.refetch();
+                void actionsQuery.refetch();
+                void globalActionsQuery.refetch();
               }}
               title="Rafraîchir l'état système"
             >
@@ -667,6 +678,18 @@ export default function SynarchAppPage() {
             </button>
           </div>
         </header>
+
+        <GlobalActionCenterPanel
+          actions={globalActionsQuery.data ?? []}
+          projects={projectsQuery.data ?? []}
+          loading={globalActionsQuery.isLoading}
+          selectedProjectId={effectiveProjectId}
+          taskReviewPending={taskReviewMutation.isPending}
+          taskReviewVariables={taskReviewMutation.variables}
+          taskReviewError={taskReviewMutation.error}
+          onSelectProject={setSelectedProjectId}
+          onTaskReviewDecision={handleTaskReviewDecision}
+        />
 
         <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)_420px]">
           <aside className="flex min-w-0 flex-col gap-4">
@@ -1180,6 +1203,170 @@ function MetricBlock({ label, value }: { label: string; value: number }) {
   );
 }
 
+function GlobalActionCenterPanel({
+  actions,
+  projects,
+  loading,
+  selectedProjectId,
+  taskReviewPending,
+  taskReviewVariables,
+  taskReviewError,
+  onSelectProject,
+  onTaskReviewDecision
+}: {
+  actions: OperatorAction[];
+  projects: ProjectRecord[];
+  loading: boolean;
+  selectedProjectId: string | null;
+  taskReviewPending: boolean;
+  taskReviewVariables?: TaskReviewMutationVariables;
+  taskReviewError: unknown;
+  onSelectProject: (projectId: string) => void;
+  onTaskReviewDecision: (action: OperatorAction, reviewAction: "retry" | "cancel") => void;
+}) {
+  const projectsById = new Map(projects.map((project) => [project.id, project]));
+  const actionCounts = actions.reduce<Record<OperatorAction["kind"], number>>(
+    (counts, action) => {
+      counts[action.kind] = (counts[action.kind] ?? 0) + 1;
+      return counts;
+    },
+    {
+      connector_job_review: 0,
+      credential_access: 0,
+      human_assistance: 0,
+      task_review: 0
+    }
+  );
+  const orderedActions = [...actions]
+    .sort((left, right) => {
+      const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
+      if (priorityDelta !== 0) {
+        return priorityDelta;
+      }
+      return right.created_at.localeCompare(left.created_at);
+    })
+    .slice(0, 8);
+
+  return (
+    <section className="rounded-md border border-border bg-panel shadow-soft">
+      <div className="flex flex-col gap-3 border-b border-border px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold">Centre d&apos;actions global</h2>
+          <p className="text-xs text-muted">
+            Toutes les décisions bloquantes, indépendamment du projet sélectionné.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-md bg-warn-soft px-2 py-1 text-warn ring-1 ring-warn/15">
+            total: {actions.length}
+          </span>
+          <span className="rounded-md bg-risk-soft px-2 py-1 text-risk ring-1 ring-risk/15">
+            reviews: {actionCounts.task_review}
+          </span>
+          <span className="rounded-md bg-info-soft px-2 py-1 text-info ring-1 ring-info/15">
+            credentials: {actionCounts.credential_access}
+          </span>
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-muted ring-1 ring-border">
+            connecteurs: {actionCounts.connector_job_review}
+          </span>
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-muted ring-1 ring-border">
+            humain: {actionCounts.human_assistance}
+          </span>
+        </div>
+      </div>
+
+      {loading ? (
+        <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
+      ) : actions.length === 0 ? (
+        <p className="px-4 py-3 text-sm text-ok">Aucune action ouverte.</p>
+      ) : (
+        <div className="grid gap-0 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+          {orderedActions.map((action) => {
+            const project = action.project_id ? projectsById.get(action.project_id) : null;
+            const taskId = action.task_id ?? action.target_id;
+            const taskReviewActive =
+              taskReviewPending && taskReviewVariables?.taskId === taskId;
+            return (
+              <article key={action.id} className="min-w-0 px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold">{action.title}</p>
+                    <p className="truncate text-xs text-muted">
+                      {project?.title ?? action.project_id ?? "sans projet"} / {action.agent_id ?? "agent"}
+                    </p>
+                  </div>
+                  <span
+                    className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] ring-1 ${statusClass(action.status)}`}
+                  >
+                    {action.kind}
+                  </span>
+                </div>
+                <p className="mt-2 line-clamp-2 text-xs text-muted">
+                  {action.recommended_action}
+                </p>
+                <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+                  {action.project_id ? (
+                    <button
+                      type="button"
+                      className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs font-medium disabled:opacity-50 ${
+                        selectedProjectId === action.project_id
+                          ? "border-accent bg-accent-soft text-accent"
+                          : "border-border text-ink hover:bg-slate-50"
+                      }`}
+                      onClick={() => onSelectProject(action.project_id ?? "")}
+                    >
+                      <Workflow className="h-3.5 w-3.5" />
+                      <span>{selectedProjectId === action.project_id ? "Projet ouvert" : "Ouvrir projet"}</span>
+                    </button>
+                  ) : null}
+                  {action.kind === "task_review" ? (
+                    <>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-2 text-xs font-medium text-ink disabled:opacity-50"
+                        disabled={taskReviewPending}
+                        onClick={() => onTaskReviewDecision(action, "retry")}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        <span>
+                          {taskReviewActive && taskReviewVariables?.decision.action === "retry"
+                            ? "Retry"
+                            : "Réessayer"}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-risk/30 px-2 text-xs font-medium text-risk disabled:opacity-50"
+                        disabled={taskReviewPending}
+                        onClick={() => onTaskReviewDecision(action, "cancel")}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                        <span>
+                          {taskReviewActive && taskReviewVariables?.decision.action === "cancel"
+                            ? "Annulation"
+                            : "Annuler"}
+                        </span>
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      {taskReviewError ? (
+        <p className="border-t border-border px-4 py-2 text-xs text-risk">
+          {taskReviewError instanceof Error
+            ? taskReviewError.message
+            : "Décision de review impossible."}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 function BriefPanel({ brief, loading }: { brief: ProjectBrief | null; loading: boolean }) {
   if (loading) {
     return <PanelEmpty icon={<Workflow className="h-4 w-4" />} text="Chargement du brief..." />;
@@ -1232,7 +1419,7 @@ function ActionPanel({
   actions: OperatorAction[];
   loading: boolean;
   taskReviewPending: boolean;
-  taskReviewVariables?: { taskId: string; decision: { action: "retry" | "cancel" | "update" } };
+  taskReviewVariables?: TaskReviewMutationVariables;
   taskReviewError: unknown;
   onTaskReviewDecision: (action: OperatorAction, reviewAction: "retry" | "cancel") => void;
 }) {
