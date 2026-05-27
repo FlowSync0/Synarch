@@ -119,6 +119,7 @@ type WorkQueueAction = "project_reminder" | "log";
 type WorkQueueStatusFilter = WorkQueueStatus | "all";
 type WorkerHealthFilter = WorkerHeartbeatStatus | "all" | "problem" | "stale";
 type ReadinessFilter = SystemReadinessStatus | "all" | "attention";
+type GlobalActionFilter = OperatorAction["kind"] | "all";
 type TaskReviewMutationVariables = {
   taskId: string;
   decision: { action: "retry" | "cancel" | "update" };
@@ -1566,6 +1567,7 @@ function GlobalActionCenterPanel({
   onHumanResponseChange: (requestId: string, response: string) => void;
   onHumanResolution: (requestId: string, status: "answered" | "dismissed") => void;
 }) {
+  const [actionFilter, setActionFilter] = useState<GlobalActionFilter>("all");
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   const actionCounts = actions.reduce<Record<OperatorAction["kind"], number>>(
     (counts, action) => {
@@ -1580,23 +1582,38 @@ function GlobalActionCenterPanel({
     }
   );
   const orderedActions = [...actions]
-    .filter((action) => !["credential_access", "human_assistance"].includes(action.kind))
+    .filter((action) => {
+      if (["credential_access", "human_assistance"].includes(action.kind)) {
+        return false;
+      }
+      return actionFilter === "all" || action.kind === actionFilter;
+    })
     .sort((left, right) => {
       const priorityDelta = priorityRank(right.priority) - priorityRank(left.priority);
       if (priorityDelta !== 0) {
         return priorityDelta;
       }
       return right.created_at.localeCompare(left.created_at);
-    })
-    .slice(0, 8);
-  const globalCredentialRows = credentialRequests.slice(0, 4);
-  const globalHumanRows = humanRequests.slice(0, 4);
+    });
+  const globalCredentialRows =
+    actionFilter === "all" || actionFilter === "credential_access" ? credentialRequests : [];
+  const globalHumanRows =
+    actionFilter === "all" || actionFilter === "human_assistance" ? humanRequests : [];
   const hasRows =
     orderedActions.length > 0 || globalCredentialRows.length > 0 || globalHumanRows.length > 0;
   const totalOpenCount =
     actions.length +
     Math.max(0, credentialRequests.length - actionCounts.credential_access) +
     Math.max(0, humanRequests.length - actionCounts.human_assistance);
+  const actionFilterCounts: Record<GlobalActionFilter, number> = {
+    all: totalOpenCount,
+    task_review: actionCounts.task_review,
+    credential_access: credentialRequests.length || actionCounts.credential_access,
+    connector_job_review: actionCounts.connector_job_review,
+    human_assistance: humanRequests.length || actionCounts.human_assistance
+  };
+  const visibleOpenCount =
+    orderedActions.length + globalCredentialRows.length + globalHumanRows.length;
 
   return (
     <section className="rounded-md border border-border bg-panel shadow-soft">
@@ -1625,11 +1642,47 @@ function GlobalActionCenterPanel({
           </span>
         </div>
       </div>
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 text-xs text-muted">
+            Affichées: {visibleOpenCount} / {totalOpenCount}
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {(
+              [
+                "all",
+                "task_review",
+                "credential_access",
+                "connector_job_review",
+                "human_assistance"
+              ] as GlobalActionFilter[]
+            ).map((filter) => {
+              const selected = actionFilter === filter;
+              return (
+                <button
+                  key={filter}
+                  type="button"
+                  className={`h-8 shrink-0 rounded-md border px-2 text-xs font-semibold ${
+                    selected
+                      ? "border-accent bg-accent-soft text-accent"
+                      : "border-border bg-white text-muted hover:bg-slate-50"
+                  }`}
+                  onClick={() => setActionFilter(filter)}
+                >
+                  {filter}: {actionFilterCounts[filter]}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
 
       {loading ? (
         <p className="px-4 py-3 text-sm text-muted">Chargement...</p>
       ) : !hasRows ? (
-        <p className="px-4 py-3 text-sm text-ok">Aucune action ouverte.</p>
+        <p className="px-4 py-3 text-sm text-ok">
+          {actionFilter === "all" ? "Aucune action ouverte." : "Aucune action pour ce filtre."}
+        </p>
       ) : (
         <>
           {globalCredentialRows.length > 0 ? (
@@ -1681,7 +1734,7 @@ function GlobalActionCenterPanel({
             </div>
           ) : null}
           {orderedActions.length > 0 ? (
-            <div className="grid gap-0 divide-y divide-border lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+            <div className="grid max-h-[760px] gap-0 divide-y divide-border overflow-auto lg:grid-cols-2 lg:divide-x lg:divide-y-0">
               {orderedActions.map((action) => {
                 const project = action.project_id ? projectsById.get(action.project_id) : null;
                 const taskId = action.task_id ?? action.target_id;
