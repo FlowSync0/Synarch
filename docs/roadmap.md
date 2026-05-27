@@ -342,6 +342,8 @@ Progress:
 - Done: `/app` shows a per-connector readiness checklist for service, mode, SecretVault, scopes,
   and connection state; API-key and OAuth setup are blocked in the UI until SecretVault can store
   the resulting secret.
+- Done: `/app` shows recent `connector_connection.*` audit evidence for the selected connector,
+  including trace IDs and safe secret-reference/deletion flags without exposing secret values.
 - Done: state-service can create active cron/webhook connector jobs, record bounded job runs, and
   stop jobs through traceable `connector_job.*` events and audit logs.
 - Done: state-service can tick active connector jobs with a bounded limit, recording completed,
