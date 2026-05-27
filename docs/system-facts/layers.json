@@ -10,6 +10,7 @@
       "Project detail can launch the next ready task for the selected project through the ready-batch runner",
       "Project brief next-action control routes the user into run, review, connector, assistance, or planning flows",
       "Readiness panel shows manual configuration and operator actions from Gateway /readiness",
+      "Action center shows open task review, credential, human assistance, and blocked connector actions from Gateway /operator-actions",
       "Sample metrics still present"
     ],
     "main_gap": "No live cost dashboard.",

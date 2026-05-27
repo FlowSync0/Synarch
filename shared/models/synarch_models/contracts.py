@@ -55,6 +55,28 @@ class SystemReadinessReport(SynarchModel):
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class OperatorAction(SynarchModel):
+    id: str
+    kind: Literal[
+        "human_assistance",
+        "task_review",
+        "credential_access",
+        "connector_job_review",
+    ]
+    title: str
+    reason: str
+    recommended_action: str
+    priority: Priority = Priority.medium
+    status: str
+    target_id: str
+    project_id: str | None = None
+    task_id: str | None = None
+    agent_id: str | None = None
+    service_id: str | None = None
+    created_at: datetime
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class GoalEnvelope(SynarchModel):
     goal: str = Field(min_length=1)
     priority: Priority = Priority.medium

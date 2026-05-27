@@ -102,6 +102,8 @@ GoalEnvelope
   -> Frontend project brief next-action control routes to run, review, connector, assistance, or planning flows
   -> Gateway `/readiness` returns actionable ready/warning/blocked items without mutating state
   -> Frontend readiness panel shows manual config and operator actions from the Gateway report
+  -> Gateway `/operator-actions` aggregates task review, credential, human assistance, and blocked connector work
+  -> Frontend action center can focus the selected project on the required operator action
   -> Event Service timeline
 ```
 

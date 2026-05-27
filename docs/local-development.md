@@ -120,6 +120,10 @@ The dashboard reads the same report through `GET /api/gateway/readiness`. Each i
 `ready`, `warning`, or `blocked` and includes the manual action to perform when configuration or
 human review is required.
 
+The dashboard action center reads `GET /api/gateway/operator-actions`, backed by Gateway
+`/operator-actions`. It aggregates open task reviews, credential requests, human assistance
+requests, and blocked connector jobs into one project-focused queue.
+
 Manual configuration that commonly matters before unattended use:
 
 - `OPENROUTER_API_KEY` plus `AGENT_RUNTIME_MODE=model_gateway`,

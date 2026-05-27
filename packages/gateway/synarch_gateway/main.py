@@ -66,6 +66,8 @@ from synarch_models import (
     MemoryRelationProposalResult,
     MemoryStatus,
     MemoryStatusUpdate,
+    OperatorAction,
+    Priority,
     ProjectBrief,
     ProjectBriefAction,
     ProjectIntent,
@@ -2558,6 +2560,182 @@ def operator_action_readiness_item(
         "ready",
         "No open review, credential, human-assistance, or blocked connector action is waiting.",
         evidence=evidence,
+    )
+
+
+@app.get("/operator-actions", response_model=list[OperatorAction])
+def list_operator_actions(
+    project_id: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    state_client: StateClient = Depends(get_state_client),
+) -> list[OperatorAction]:
+    try:
+        return sorted_operator_actions(
+            build_operator_actions(state_client, project_id=project_id),
+        )[:limit]
+    except StateServiceRequestError as error:
+        raise HTTPException(status_code=error.status_code, detail=error.detail) from error
+    except StateServiceUnavailable as error:
+        raise HTTPException(status_code=502, detail="State service unavailable") from error
+
+
+def build_operator_actions(
+    state_client: StateClient,
+    *,
+    project_id: str | None = None,
+) -> list[OperatorAction]:
+    actions: list[OperatorAction] = []
+    actions.extend(
+        task_review_operator_action(task)
+        for task in state_client.list_task_review_queue(project_id=project_id)
+    )
+    actions.extend(
+        credential_access_operator_action(request)
+        for request in state_client.list_credential_access_requests(
+            project_id=project_id,
+            status=ApprovalStatus.requested.value,
+        )
+    )
+    actions.extend(
+        human_assistance_operator_action(request)
+        for request in state_client.list_human_assistance_requests(
+            project_id=project_id,
+            status=HumanAssistanceStatus.requested.value,
+        )
+    )
+    actions.extend(
+        connector_job_operator_action(job)
+        for job in state_client.list_connector_jobs(
+            project_id=project_id,
+            last_run_status=ConnectorJobRunStatus.blocked.value,
+        )
+    )
+    return actions
+
+
+def task_review_operator_action(task: TaskRecord) -> OperatorAction:
+    priority = Priority.high if task.status == TaskStatus.blocked else Priority.medium
+    reason = task.dead_letter_reason or task_review_operator_reason(task)
+    return OperatorAction(
+        id=f"operator_action_task_review_{task.id}",
+        kind="task_review",
+        title=task.title,
+        reason=reason,
+        recommended_action="Retry, cancel, or update the task from the review queue.",
+        priority=priority,
+        status=str(task.status),
+        target_id=task.id,
+        project_id=task.project_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        created_at=task.dead_lettered_at or task.created_at,
+        evidence={
+            "attempt_count": task.attempt_count,
+            "max_attempts": task.max_attempts,
+            "required_tools": task.required_tools,
+            "retry_after_at": task.retry_after_at,
+        },
+    )
+
+
+def task_review_operator_reason(task: TaskRecord) -> str:
+    if task.result and isinstance(task.result.get("error"), str):
+        return str(task.result["error"])
+    return f"Task is {task.status}; a human or manager decision is required."
+
+
+def credential_access_operator_action(
+    request: CredentialAccessRequest,
+) -> OperatorAction:
+    return OperatorAction(
+        id=f"operator_action_credential_access_{request.id}",
+        kind="credential_access",
+        title=f"{request.tool_name} credential access",
+        reason=request.reason,
+        recommended_action="Approve or reject the credential request; apply a grant if approved.",
+        priority=Priority.high,
+        status=str(request.status),
+        target_id=request.id,
+        project_id=request.project_id,
+        task_id=request.task_id,
+        agent_id=request.agent_id,
+        service_id=request.candidate_service_ids[0] if request.candidate_service_ids else None,
+        created_at=request.created_at,
+        evidence={
+            "tool_name": request.tool_name,
+            "requested_scopes": request.requested_scopes,
+            "candidate_service_ids": request.candidate_service_ids,
+        },
+    )
+
+
+def human_assistance_operator_action(
+    request: HumanAssistanceRequest,
+) -> OperatorAction:
+    return OperatorAction(
+        id=f"operator_action_human_assistance_{request.id}",
+        kind="human_assistance",
+        title=request.title,
+        reason=request.description or f"{request.kind} input is required.",
+        recommended_action=(
+            "Answer or dismiss the human assistance request, then continue the task."
+        ),
+        priority=request.urgency,
+        status=str(request.status),
+        target_id=request.id,
+        project_id=request.project_id,
+        task_id=request.task_id,
+        agent_id=request.agent_id,
+        created_at=request.created_at,
+        evidence={
+            "kind": request.kind,
+            "urgency": request.urgency,
+            "request_evidence": request.evidence,
+        },
+    )
+
+
+def connector_job_operator_action(job: ConnectorJobRecord) -> OperatorAction:
+    return OperatorAction(
+        id=f"operator_action_connector_job_{job.id}",
+        kind="connector_job_review",
+        title=job.purpose,
+        reason="Latest connector job run is blocked and needs human review.",
+        recommended_action=(
+            "Inspect the blocked run, resolve the blocker, then resume or stop the job."
+        ),
+        priority=Priority.high,
+        status=ConnectorJobRunStatus.blocked.value,
+        target_id=job.id,
+        project_id=job.project_id,
+        task_id=job.task_id,
+        agent_id=job.owner_agent_id,
+        service_id=job.service_id,
+        created_at=job.updated_at,
+        evidence={
+            "job_status": job.status,
+            "kind": job.kind,
+            "next_run_at": job.next_run_at,
+            "metadata": job.metadata,
+        },
+    )
+
+
+def sorted_operator_actions(actions: list[OperatorAction]) -> list[OperatorAction]:
+    priority_rank = {
+        Priority.critical: 0,
+        Priority.high: 1,
+        Priority.medium: 2,
+        Priority.low: 3,
+    }
+    return sorted(
+        actions,
+        key=lambda action: (
+            priority_rank.get(Priority(action.priority), 4),
+            action.created_at,
+            action.kind,
+            action.id,
+        ),
     )
 
 

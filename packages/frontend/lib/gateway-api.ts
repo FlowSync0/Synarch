@@ -173,6 +173,29 @@ export type SystemReadinessReport = {
   generated_at: string;
 };
 
+export type OperatorActionKind =
+  | "human_assistance"
+  | "task_review"
+  | "credential_access"
+  | "connector_job_review";
+
+export type OperatorAction = {
+  id: string;
+  kind: OperatorActionKind;
+  title: string;
+  reason: string;
+  recommended_action: string;
+  priority: GoalPriority;
+  status: string;
+  target_id: string;
+  project_id?: string | null;
+  task_id?: string | null;
+  agent_id?: string | null;
+  service_id?: string | null;
+  created_at: string;
+  evidence: Record<string, unknown>;
+};
+
 export type CostRecord = {
   id: string;
   project_id?: string | null;
@@ -499,6 +522,18 @@ export async function listProjectBriefs(projectId?: string): Promise<ProjectBrie
     cache: "no-store"
   });
   return parseJsonResponse<ProjectBrief[]>(response);
+}
+
+export async function listOperatorActions(projectId?: string): Promise<OperatorAction[]> {
+  const params = new URLSearchParams();
+  if (projectId) {
+    params.set("project_id", projectId);
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/gateway/operator-actions${query ? `?${query}` : ""}`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<OperatorAction[]>(response);
 }
 
 export async function runTask(taskId: string): Promise<TaskRunResult> {

@@ -29,6 +29,7 @@ from synarch_models import (
     ModelCompletionResponse,
     ModelMessage,
     ModelUsage,
+    OperatorAction,
     ProjectComplexityAssessment,
     ProjectComplexityReport,
     ProjectRecord,
@@ -81,6 +82,30 @@ def test_system_readiness_report_captures_manual_action_items() -> None:
         "Set OPENROUTER_API_KEY before live AI runs."
     )
     assert payload["items"][0]["evidence"]["provider_id"] == "provider-local-runtime-stub"
+
+
+def test_operator_action_contract_preserves_target_and_evidence() -> None:
+    action = OperatorAction(
+        id="operator_action_human_human-1",
+        kind="human_assistance",
+        title="CAPTCHA supplier portal",
+        reason="Agent needs human verification before continuing.",
+        recommended_action="Answer the human assistance request, then retry the task.",
+        priority="high",
+        status="requested",
+        target_id="human-1",
+        project_id="project-1",
+        task_id="task-1",
+        agent_id="agent-ops",
+        created_at="2026-05-20T08:00:00Z",
+        evidence={"kind": "captcha"},
+    )
+
+    payload = action.model_dump(mode="json")
+
+    assert payload["priority"] == "high"
+    assert payload["target_id"] == "human-1"
+    assert payload["evidence"] == {"kind": "captcha"}
 
 
 def test_memory_compaction_policy_request_defaults() -> None:

@@ -8435,6 +8435,128 @@ def test_project_briefs_surface_next_actions_and_reminders() -> None:
     ]
 
 
+def test_operator_actions_aggregate_open_human_and_system_work() -> None:
+    state_client = FakeStateClient()
+    now = datetime(2026, 5, 20, 8, 0, tzinfo=UTC)
+    state_client.projects.append(
+        ProjectRecord(
+            id="project_action_center",
+            title="Action center project",
+            goal="Keep blockers visible.",
+            owner_agent_id="agent-direction",
+            created_at=now,
+        )
+    )
+    state_client.tasks.extend(
+        [
+            TaskRecord(
+                id="task-review",
+                project_id="project_action_center",
+                title="Review blocked sourcing task",
+                status=TaskStatus.blocked,
+                assigned_agent_id="agent-ops",
+                dead_letter_reason="Supplier portal requires manual review.",
+                dead_lettered_at=now + timedelta(minutes=2),
+                created_at=now,
+            ),
+            TaskRecord(
+                id="task-other-project",
+                project_id="project_other",
+                title="Other blocked task",
+                status=TaskStatus.blocked,
+                assigned_agent_id="agent-dev",
+                created_at=now,
+            ),
+        ]
+    )
+    state_client.credential_access_requests.append(
+        CredentialAccessRequest(
+            id="credential-action",
+            project_id="project_action_center",
+            task_id="task-review",
+            agent_id="agent-ops",
+            tool_name="web.extract",
+            requested_scopes=["web:supplier"],
+            candidate_service_ids=["connector-web-local"],
+            reason="Need browser access for supplier portal.",
+            created_at=now + timedelta(minutes=3),
+        )
+    )
+    state_client.human_assistance_requests.append(
+        HumanAssistanceRequest(
+            id="human-action",
+            project_id="project_action_center",
+            task_id="task-review",
+            agent_id="agent-ops",
+            kind="captcha",
+            title="CAPTCHA supplier portal",
+            description="Human verification is required.",
+            urgency="critical",
+            requested_by_id="agent-ops",
+            created_at=now + timedelta(minutes=4),
+        )
+    )
+    state_client.connector_jobs.append(
+        ConnectorJobRecord(
+            id="job-action",
+            service_id="service-mail",
+            project_id="project_action_center",
+            task_id="task-review",
+            owner_agent_id="agent-ops",
+            kind="cron",
+            purpose="Follow up supplier answer.",
+            created_by_type="agent",
+            created_by_id="agent-ops",
+            created_at=now,
+            updated_at=now + timedelta(minutes=5),
+        )
+    )
+    state_client.connector_job_runs.append(
+        ConnectorJobRunRecord(
+            id="job-run-action",
+            job_id="job-action",
+            service_id="service-mail",
+            project_id="project_action_center",
+            task_id="task-review",
+            owner_agent_id="agent-ops",
+            status="blocked",
+            triggered_by_type="service",
+            triggered_by_id="gateway-scheduler",
+            error="Human review required.",
+            completed_at=now + timedelta(minutes=5),
+        )
+    )
+    app.dependency_overrides[get_state_client] = lambda: state_client
+
+    try:
+        response = TestClient(app).get(
+            "/operator-actions",
+            params={"project_id": "project_action_center"},
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [action["kind"] for action in payload] == [
+        "human_assistance",
+        "task_review",
+        "credential_access",
+        "connector_job_review",
+    ]
+    assert [action["target_id"] for action in payload] == [
+        "human-action",
+        "task-review",
+        "credential-action",
+        "job-action",
+    ]
+    assert payload[0]["priority"] == "critical"
+    assert payload[0]["recommended_action"] == (
+        "Answer or dismiss the human assistance request, then continue the task."
+    )
+    assert all(action["project_id"] == "project_action_center" for action in payload)
+
+
 def test_update_memory_item_status_records_gateway_event() -> None:
     state_client = FakeStateClient()
     memory_client = FakeMemoryClient()

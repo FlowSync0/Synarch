@@ -56,6 +56,7 @@ import {
   decideTaskReview,
   getProjectTimeline,
   getSystemReadiness,
+  listOperatorActions,
   listCredentialAccessRequests,
   listHumanAssistanceRequests,
   listProjectBriefs,
@@ -77,6 +78,7 @@ import {
   type HumanAssistanceRequest,
   type MemoryItem,
   type MemoryStatus,
+  type OperatorAction,
   type ProjectBrief,
   type ProjectTimeline,
   type SystemReadinessStatus,
@@ -915,6 +917,45 @@ function readinessTone(status: SystemReadinessStatus): Tone {
     return "risk";
   }
   return "warn";
+}
+
+function operatorActionTone(action: OperatorAction): Tone {
+  if (action.priority === "critical") {
+    return "risk";
+  }
+  if (action.priority === "high" || action.kind === "connector_job_review") {
+    return "warn";
+  }
+  if (action.kind === "task_review") {
+    return "info";
+  }
+  return "accent";
+}
+
+function operatorActionIcon(action: OperatorAction): typeof AlertTriangle {
+  if (action.kind === "human_assistance") {
+    return AlertTriangle;
+  }
+  if (action.kind === "credential_access") {
+    return KeyRound;
+  }
+  if (action.kind === "connector_job_review") {
+    return PlugZap;
+  }
+  return Workflow;
+}
+
+function operatorActionButtonLabel(kind: OperatorAction["kind"]): string {
+  if (kind === "human_assistance") {
+    return "Answer";
+  }
+  if (kind === "credential_access") {
+    return "Access";
+  }
+  if (kind === "connector_job_review") {
+    return "Job";
+  }
+  return "Review";
 }
 
 function projectRow(project: ProjectRecord): ProjectViewModel {
@@ -2043,6 +2084,30 @@ export default function DashboardPage() {
     enabled: effectiveSelectedProjectId.length > 0,
     refetchInterval: 10_000
   });
+  const operatorActionsQuery = useQuery({
+    queryKey: ["operator-actions", effectiveSelectedProjectId],
+    queryFn: () => listOperatorActions(effectiveSelectedProjectId || undefined),
+    refetchInterval: 10_000
+  });
+  const operatorActionRows = operatorActionsQuery.data ?? [];
+  const operatorActionMode = operatorActionsQuery.isLoading
+    ? "syncing"
+    : operatorActionsQuery.isError
+      ? "sample"
+      : "live";
+  const operatorActionModeLabel = {
+    live: "Live API",
+    syncing: "Syncing",
+    sample: "No actions"
+  }[operatorActionMode];
+  const operatorActionModeDetail =
+    operatorActionMode === "live"
+      ? `${operatorActionRows.length} open action(s)${
+          effectiveSelectedProjectId ? ` for ${effectiveSelectedProjectId}` : ""
+        }`
+      : operatorActionMode === "syncing"
+        ? "Loading operator actions from gateway"
+        : "Gateway operator action queue unavailable";
   const selectedProjectBrief = projectBriefsQuery.data?.[0] ?? null;
   const selectedProjectHumanAssistanceRequestById = new Map<string, HumanAssistanceRequest>();
   if (effectiveSelectedProjectId) {
@@ -2724,6 +2789,38 @@ export default function DashboardPage() {
     }
     setIsGoalFormOpen(true);
   };
+  const focusOperatorAction = (action: OperatorAction) => {
+    if (action.project_id) {
+      setSelectedProjectId(action.project_id);
+      setRunReadyDraft((draft) => ({
+        ...draft,
+        projectId: action.project_id ?? draft.projectId
+      }));
+    }
+    if (action.task_id) {
+      setFocusedTimelineTaskId(action.task_id);
+    }
+    setSelectedTimelineTraceId("");
+    setSelectedTimelineEventId("");
+
+    if (action.kind === "human_assistance") {
+      window.setTimeout(() => {
+        projectHumanAssistanceRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        });
+      }, 0);
+      return;
+    }
+    if (action.kind === "task_review") {
+      setEditingTaskId(action.target_id);
+      return;
+    }
+    if (action.kind === "connector_job_review") {
+      setSelectedConnectorJobId(action.target_id);
+      setSelectedConnectorTraceId("");
+    }
+  };
   const effectiveToolName = availableToolOptions.includes(toolCallDraft.toolName)
     ? toolCallDraft.toolName
     : (availableToolOptions[0] ?? toolCallDraft.toolName);
@@ -3022,7 +3119,7 @@ export default function DashboardPage() {
         </div>
       ) : null}
 
-      <div className="mx-auto grid max-w-[1440px] gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[72px_minmax(0,1fr)_360px] xl:grid-cols-[88px_minmax(0,1fr)_400px]">
+      <div className="mx-auto grid max-w-[1440px] grid-cols-1 gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[72px_minmax(0,1fr)_360px] xl:grid-cols-[88px_minmax(0,1fr)_400px]">
         <nav className="hidden rounded-md border border-border bg-panel p-2 lg:block">
           <div className="flex flex-col gap-2">
             {[Command, Layers3, Clock3, Settings2].map((Icon, index) => (
@@ -3187,6 +3284,109 @@ export default function DashboardPage() {
             ) : readinessQuery.isLoading ? (
               <div className="px-4 py-3 text-xs text-muted">Lecture readiness...</div>
             ) : null}
+          </section>
+
+          <section className="rounded-md border border-border bg-panel">
+            <SectionHeader eyebrow="Operations" title="Action center" />
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-2">
+              <p className="min-w-0 truncate text-xs text-muted">{operatorActionModeDetail}</p>
+              <span
+                className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${dataModeClass[operatorActionMode]}`}
+              >
+                {operatorActionModeLabel}
+              </span>
+            </div>
+            {operatorActionsQuery.isError ? (
+              <div className="px-4 py-3 text-xs font-medium text-risk">
+                {operatorActionsQuery.error instanceof Error
+                  ? operatorActionsQuery.error.message
+                  : "Operator actions unavailable."}
+              </div>
+            ) : null}
+            <div className="grid gap-2 px-4 py-3 md:grid-cols-2">
+              {operatorActionRows.length === 0 && !operatorActionsQuery.isLoading ? (
+                <article className="rounded-md border border-border bg-white p-3">
+                  <p className="text-sm font-medium text-ink">No open operator action</p>
+                  <p className="mt-1 text-xs text-muted">
+                    Selected project has no human assistance, review, credential, or blocked job item.
+                  </p>
+                </article>
+              ) : null}
+              {operatorActionRows.map((action) => {
+                const Icon = operatorActionIcon(action);
+                return (
+                  <article
+                    key={action.id}
+                    className="min-w-0 rounded-md border border-border bg-white p-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <div
+                        className={`grid h-9 w-9 shrink-0 place-items-center rounded-md ring-1 ${toneSurface[operatorActionTone(action)]}`}
+                      >
+                        <Icon size={17} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <h3 className="truncate text-sm font-semibold text-ink">
+                              {action.title}
+                            </h3>
+                            <p className="mt-0.5 truncate text-[11px] text-muted">
+                              {action.kind} / {formatLifecycleAge(action.created_at)}
+                            </p>
+                          </div>
+                          <span
+                            className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ring-1 ${toneSurface[operatorActionTone(action)]}`}
+                          >
+                            {action.priority}
+                          </span>
+                        </div>
+                        <p className="mt-2 break-words text-xs text-muted">{action.reason}</p>
+                        <p className="mt-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-ink ring-1 ring-border">
+                          {action.recommended_action}
+                        </p>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {[action.project_id, action.task_id, action.agent_id, action.service_id]
+                            .filter((label): label is string => Boolean(label))
+                            .slice(0, 4)
+                            .map((label) => (
+                              <span
+                                key={`${action.id}-${label}`}
+                                className="max-w-full truncate rounded-md bg-slate-100 px-2 py-0.5 text-[11px] text-muted ring-1 ring-border"
+                              >
+                                {label}
+                              </span>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between gap-2">
+                      <details className="min-w-0 flex-1 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-muted ring-1 ring-border">
+                        <summary className="cursor-pointer text-[11px] font-semibold uppercase">
+                          Evidence
+                        </summary>
+                        <pre className="mt-2 max-h-28 overflow-auto rounded-md bg-slate-950 p-2 text-[11px] leading-5 text-slate-100">
+                          {formatPayload(action.evidence)}
+                        </pre>
+                      </details>
+                      <button
+                        className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-border bg-white px-2 text-xs font-medium text-accent transition hover:border-accent/40 hover:bg-accent-soft"
+                        type="button"
+                        onClick={() => focusOperatorAction(action)}
+                      >
+                        <ArrowUpRight size={13} />
+                        <span>{operatorActionButtonLabel(action.kind)}</span>
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+              {operatorActionsQuery.isLoading ? (
+                <article className="rounded-md border border-border bg-white p-3 text-xs text-muted">
+                  Loading operator actions...
+                </article>
+              ) : null}
+            </div>
           </section>
 
           <section className="rounded-md border border-border bg-panel">
