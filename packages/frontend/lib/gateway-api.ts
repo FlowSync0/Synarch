@@ -382,7 +382,7 @@ export type CredentialGrantApplication = {
   applied_at: string;
 };
 
-export type ConnectorConnectionMode = "no_key" | "api_key" | "oauth";
+export type ConnectorConnectionMode = "no_key" | "api_key" | "oauth" | "credentials";
 
 export type SecretReference = {
   ref: string;
@@ -394,6 +394,9 @@ export type SecretReference = {
 export type ConnectorConnectRequest = {
   mode: ConnectorConnectionMode;
   api_key?: string;
+  username?: string;
+  password?: string;
+  login_url?: string;
   credential_scopes: string[];
   project_id?: string | null;
   agent_id?: string | null;

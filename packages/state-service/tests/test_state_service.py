@@ -1262,6 +1262,43 @@ def test_connector_connection_records_secret_ref_without_secret_value() -> None:
     assert audits[0]["action"] == "connector_connection.created"
 
 
+def test_connector_connection_accepts_username_password_secret_ref() -> None:
+    client = TestClient(app)
+    assert client.post(
+        "/services",
+        json={
+            "id": "connector-meg-credentials-test",
+            "name": "MEG Credentials",
+            "kind": "tool_provider",
+            "capabilities": ["meg.operation"],
+            "credential_scopes": ["meg:login"],
+            "metadata": {"requires_credentials": True, "credential_form": "username_password"},
+        },
+    ).status_code == 201
+
+    connection_response = client.post(
+        "/connector-connections",
+        json={
+            "service_id": "connector-meg-credentials-test",
+            "mode": "credentials",
+            "credential_scopes": ["meg:login"],
+            "secret_ref": "local://connector/connector-meg/fp_secret",
+            "secret_fingerprint": "fp_secret",
+            "connected_by_type": "user",
+            "connected_by_id": "local-user",
+            "rationale": "Connect MEG credentials.",
+        },
+    )
+
+    assert connection_response.status_code == 201
+    payload = connection_response.json()
+    assert payload["connection"]["mode"] == "credentials"
+    assert payload["connection"]["status"] == "active"
+    assert payload["connection"]["secret_ref"] == "local://connector/connector-meg/fp_secret"
+    assert "meg-password" not in str(payload)
+    assert payload["service"]["metadata"]["configured"] is True
+
+
 def test_connector_connection_rejects_no_key_for_credential_scoped_service() -> None:
     client = TestClient(app)
     assert client.post(

@@ -327,6 +327,9 @@ Progress:
   recording `service_health.checked` and `services.health_checked` with the same trace ID.
 - Done: Gateway connector setup stores API keys in a local SecretVault and forwards only `secret_ref`
   plus fingerprint to state-service connector connection records.
+- Done: Gateway connector setup supports username/password credential bundles for browser-driven
+  services such as MEG, storing the bundle in SecretVault while state-service only receives
+  `secret_ref` plus fingerprint.
 - Done: Gateway connector deactivation deletes the referenced local SecretVault file when possible,
   clears the active `secret_ref`, and records `connector_connection.disabled` event/audit evidence;
   `/app` exposes the action for connected services.

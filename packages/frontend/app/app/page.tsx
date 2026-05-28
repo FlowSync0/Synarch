@@ -93,7 +93,7 @@ import {
 import { getOperatorId } from "../../lib/operator-context";
 
 const priorityOptions: GoalPriority[] = ["medium", "high", "critical", "low"];
-const connectorModes: ConnectorConnectionMode[] = ["api_key", "no_key", "oauth"];
+const connectorModes: ConnectorConnectionMode[] = ["api_key", "credentials", "no_key", "oauth"];
 const workQueueStatusOptions: WorkQueueStatus[] = [
   "queued",
   "running",
@@ -133,6 +133,11 @@ const connectorModeDetails: Record<
     label: "Clé API",
     description: "Stockage chiffré dans SecretVault.",
     submitLabel: "Stocker la clé"
+  },
+  credentials: {
+    label: "Identifiants",
+    description: "Compte + mot de passe stockés dans SecretVault.",
+    submitLabel: "Stocker les identifiants"
   },
   no_key: {
     label: "Sans clé",
@@ -335,6 +340,13 @@ function requiresOAuth(service: ServiceDefinition): boolean {
   return metadataBoolean(service, "requires_oauth") || hasOAuthAuthorizationLink(service);
 }
 
+function requiresCredentials(service: ServiceDefinition): boolean {
+  return (
+    metadataBoolean(service, "requires_credentials") ||
+    metadataString(service, "credential_form") === "username_password"
+  );
+}
+
 function manualConnectionUrl(service: ServiceDefinition | null): string | null {
   return metadataString(service, "manual_connection_url");
 }
@@ -350,14 +362,19 @@ function connectionSetupInstructions(service: ServiceDefinition | null): string 
 function connectorModesForService(service: ServiceDefinition): ConnectorConnectionMode[] {
   const modes: ConnectorConnectionMode[] = [];
   const oauthRequired = requiresOAuth(service);
+  const credentialsRequired = requiresCredentials(service);
+  if (credentialsRequired) {
+    modes.push("credentials");
+  }
   if (
     metadataBoolean(service, "requires_api_key") ||
-    (service.credential_scopes.length > 0 && !oauthRequired)
+    (service.credential_scopes.length > 0 && !oauthRequired && !credentialsRequired)
   ) {
     modes.push("api_key");
   }
   if (
     !metadataBoolean(service, "requires_api_key") &&
+    !credentialsRequired &&
     !oauthRequired &&
     service.credential_scopes.length === 0
   ) {
@@ -441,12 +458,15 @@ function secretVaultBadges(item: SystemReadinessItem): string[] {
 }
 
 function connectorNeedsSecretVault(mode: ConnectorConnectionMode): boolean {
-  return mode === "api_key" || mode === "oauth";
+  return mode === "api_key" || mode === "credentials" || mode === "oauth";
 }
 
 function connectorSecretVaultDetail(mode: ConnectorConnectionMode): string {
   if (mode === "api_key") {
     return "Clé API stockée chiffrée; l'interface ne conserve pas la valeur.";
+  }
+  if (mode === "credentials") {
+    return "Compte, mot de passe et URL stockés dans SecretVault; l'interface ne conserve pas les valeurs.";
   }
   if (mode === "oauth") {
     return "Code OAuth/callback stocké dans SecretVault après autorisation.";
@@ -462,7 +482,7 @@ function connectorSetupUrl(
   if (connection?.setup_url) {
     return connection.setup_url;
   }
-  if (mode === "api_key") {
+  if (mode === "api_key" || mode === "credentials") {
     return manualConnectionUrl(service);
   }
   return null;
@@ -551,6 +571,9 @@ export default function SynarchAppPage() {
   const [lastConnectorConnection, setLastConnectorConnection] =
     useState<ConnectorConnectionRecord | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [connectorUsername, setConnectorUsername] = useState("");
+  const [connectorPassword, setConnectorPassword] = useState("");
+  const [connectorLoginUrl, setConnectorLoginUrl] = useState("");
   const [workQueueName, setWorkQueueName] = useState("reminders");
   const [workQueueAction, setWorkQueueAction] = useState<WorkQueueAction>("project_reminder");
   const [workQueueStatusFilter, setWorkQueueStatusFilter] =
@@ -755,6 +778,8 @@ export default function SynarchAppPage() {
   const connectorSecretVaultReady = secretVaultCanStoreConnectorSecrets(secretVaultReadiness);
   const connectorSecretVaultBlocked =
     connectorNeedsSecretVault(effectiveConnectorMode) && !connectorSecretVaultReady;
+  const hasConnectorCredentials =
+    connectorUsername.trim().length > 0 && connectorPassword.trim().length > 0;
   const workQueueWorkerReadiness = readinessQuery.data?.items.find(
     (item) => item.id === "work_queue_worker"
   );
@@ -884,6 +909,14 @@ export default function SynarchAppPage() {
         request: {
           mode: effectiveConnectorMode,
           api_key: effectiveConnectorMode === "api_key" ? apiKey : undefined,
+          username:
+            effectiveConnectorMode === "credentials" ? connectorUsername.trim() : undefined,
+          password:
+            effectiveConnectorMode === "credentials" ? connectorPassword : undefined,
+          login_url:
+            effectiveConnectorMode === "credentials" && connectorLoginUrl.trim().length > 0
+              ? connectorLoginUrl.trim()
+              : undefined,
           credential_scopes: selectedScopes,
           project_id: effectiveProjectId,
           rationale: "Connector configured from Synarch app."
@@ -893,6 +926,9 @@ export default function SynarchAppPage() {
     onSuccess: (result) => {
       setLastConnectorConnection(result.connection);
       setApiKey("");
+      setConnectorUsername("");
+      setConnectorPassword("");
+      setConnectorLoginUrl("");
       void queryClient.invalidateQueries({ queryKey: ["app-services"] });
       void queryClient.invalidateQueries({ queryKey: ["app-connector-connections"] });
       void queryClient.invalidateQueries({ queryKey: ["app-web-providers"] });
@@ -1519,7 +1555,11 @@ export default function SynarchAppPage() {
                   service={selectedService}
                   connection={activeConnection}
                   mode={effectiveConnectorMode}
-                  hasApiKey={apiKey.trim().length > 0}
+                  hasSecretInput={
+                    effectiveConnectorMode === "credentials"
+                      ? hasConnectorCredentials
+                      : apiKey.trim().length > 0
+                  }
                 />
 
                 {connectorNeedsSecretVault(effectiveConnectorMode) ? (
@@ -1569,12 +1609,45 @@ export default function SynarchAppPage() {
                   />
                 ) : null}
 
+                {effectiveConnectorMode === "credentials" ? (
+                  <div className="grid gap-2">
+                    <input
+                      className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                      type="url"
+                      value={connectorLoginUrl}
+                      onChange={(event) => setConnectorLoginUrl(event.target.value)}
+                      placeholder="URL de connexion MEG"
+                      autoComplete="off"
+                    />
+                    <input
+                      className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                      type="text"
+                      value={connectorUsername}
+                      onChange={(event) => setConnectorUsername(event.target.value)}
+                      placeholder="Identifiant"
+                      autoComplete="username"
+                    />
+                    <input
+                      className="h-10 rounded-md border border-border bg-white px-3 text-sm outline-none focus:border-accent"
+                      type="password"
+                      value={connectorPassword}
+                      onChange={(event) => setConnectorPassword(event.target.value)}
+                      placeholder="Mot de passe"
+                      autoComplete="current-password"
+                    />
+                  </div>
+                ) : null}
+
                 <ConnectorReadinessChecklist
                   service={selectedService}
                   connection={activeConnection}
                   mode={effectiveConnectorMode}
                   selectedScopes={selectedScopes}
-                  hasApiKey={apiKey.trim().length > 0}
+                  hasSecretInput={
+                    effectiveConnectorMode === "credentials"
+                      ? hasConnectorCredentials
+                      : apiKey.trim().length > 0
+                  }
                   secretVaultReady={connectorSecretVaultReady}
                   secretVaultLoading={readinessQuery.isLoading}
                 />
@@ -1620,7 +1693,8 @@ export default function SynarchAppPage() {
                     !selectedService ||
                     connectMutation.isPending ||
                     connectorSecretVaultBlocked ||
-                    (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0)
+                    (effectiveConnectorMode === "api_key" && apiKey.trim().length === 0) ||
+                    (effectiveConnectorMode === "credentials" && !hasConnectorCredentials)
                   }
                   title={
                     connectorSecretVaultBlocked
@@ -3084,7 +3158,7 @@ function ConnectorReadinessChecklist({
   connection,
   mode,
   selectedScopes,
-  hasApiKey,
+  hasSecretInput,
   secretVaultReady,
   secretVaultLoading
 }: {
@@ -3092,7 +3166,7 @@ function ConnectorReadinessChecklist({
   connection: ConnectorConnectionRecord | null;
   mode: ConnectorConnectionMode;
   selectedScopes: string[];
-  hasApiKey: boolean;
+  hasSecretInput: boolean;
   secretVaultReady: boolean;
   secretVaultLoading: boolean;
 }) {
@@ -3101,7 +3175,7 @@ function ConnectorReadinessChecklist({
   const scopesReady = !scopesRequired || selectedScopes.length > 0;
   const secretRequired = connectorNeedsSecretVault(mode);
   const storedSecretReady = Boolean(connection?.secret_fingerprint);
-  const pendingSecretInput = mode === "api_key" && hasApiKey;
+  const pendingSecretInput = (mode === "api_key" || mode === "credentials") && hasSecretInput;
   const secretReady = !secretRequired || (secretVaultReady && (mode === "oauth" || storedSecretReady || pendingSecretInput));
   const connectionReady = connection?.status === "active";
   const authorizationPending = connection?.status === "needs_oauth";
@@ -3285,15 +3359,18 @@ function ConnectorSetupSteps({
   service,
   connection,
   mode,
-  hasApiKey
+  hasSecretInput
 }: {
   service: ServiceDefinition | null;
   connection: ConnectorConnectionRecord | null;
   mode: ConnectorConnectionMode;
-  hasApiKey: boolean;
+  hasSecretInput: boolean;
 }) {
   const secretReady =
-    mode === "no_key" || mode === "oauth" || hasApiKey || Boolean(connection?.secret_fingerprint);
+    mode === "no_key" ||
+    mode === "oauth" ||
+    hasSecretInput ||
+    Boolean(connection?.secret_fingerprint);
   const authorizationReady = connection?.status === "active";
   const authorizationPending = connection?.status === "needs_oauth";
   const steps = [
@@ -3308,6 +3385,8 @@ function ConnectorSetupSteps({
       detail:
         mode === "api_key"
           ? "Clé reçue puis stockée dans SecretVault"
+          : mode === "credentials"
+            ? "Identifiants reçus puis stockés dans SecretVault"
           : mode === "oauth"
             ? "Autorisation externe préparée par Synarch"
             : "Aucun secret nécessaire",

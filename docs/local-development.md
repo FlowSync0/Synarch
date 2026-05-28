@@ -170,6 +170,10 @@ In `/app`, the connector form shows a readiness checklist for service, mode, Sec
 and connection state. API-key and OAuth connection buttons stay disabled when SecretVault cannot
 store encrypted connector secrets, because the OAuth callback also writes the received code into the
 vault.
+Connectors that declare `metadata.requires_credentials=true` or
+`metadata.credential_form=username_password` use the `credentials` mode. The operator enters the
+login URL, username, and password in `/app`; Gateway stores that bundle in SecretVault and forwards
+only `secret_ref` plus fingerprint to state-service.
 The same connector panel shows recent `connector_connection.*` audit logs for the selected service
 with trace IDs, fingerprints, and secret-reference/deletion flags, but not the secret values.
 It asks state-service for a bounded `connector_connection.` audit stream instead of loading

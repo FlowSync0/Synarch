@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -7921,6 +7922,58 @@ def test_connect_service_stores_secret_in_vault_and_sends_only_secret_ref() -> N
         "fake://connectors/connector-firecrawl/fp_test"
     )
     assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_connect"
+
+
+def test_connect_service_stores_username_password_bundle_in_vault() -> None:
+    state_client = FakeStateClient()
+    state_client.services.append(
+        ServiceDefinition(
+            id="connector-meg",
+            name="MEG",
+            kind="tool_provider",
+            capabilities=["meg.operation"],
+            credential_scopes=["meg:login"],
+            metadata={"requires_credentials": True, "credential_form": "username_password"},
+        )
+    )
+    secret_vault = FakeSecretVault()
+    app.dependency_overrides[get_state_client] = lambda: state_client
+    app.dependency_overrides[get_secret_vault] = lambda: secret_vault
+
+    try:
+        response = TestClient(app).post(
+            "/connectors/connector-meg/connections",
+            headers={
+                "X-Synarch-Actor-Type": "user",
+                "X-Synarch-Actor-Id": "hugo",
+                "X-Synarch-Trace-Id": "trace_connector_credentials",
+            },
+            json={
+                "mode": "credentials",
+                "username": "aztec-user",
+                "password": "meg-password",
+                "login_url": "https://meg.example.com/login",
+                "rationale": "Connect MEG for Aztec accounting.",
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    stored_secret = json.loads(secret_vault.stored[0]["secret_value"])
+    assert stored_secret == {
+        "type": "username_password",
+        "username": "aztec-user",
+        "password": "meg-password",
+        "login_url": "https://meg.example.com/login",
+    }
+    assert payload["connection"]["mode"] == "credentials"
+    assert payload["connection"]["secret_ref"] == "fake://connectors/connector-meg/fp_test"
+    assert "aztec-user" not in str(payload)
+    assert "meg-password" not in str(payload)
+    assert state_client.connector_connections[0].mode == "credentials"
+    assert state_client.headers[-1]["x-synarch-trace-id"] == "trace_connector_credentials"
 
 
 def test_connect_service_rejects_no_key_for_credential_scoped_service() -> None:

@@ -451,8 +451,11 @@ def secret_vault_fernet_key(secret: str) -> bytes:
 
 
 class ConnectorConnectRequest(BaseModel):
-    mode: Literal["no_key", "api_key", "oauth"] = "api_key"
+    mode: Literal["no_key", "api_key", "oauth", "credentials"] = "api_key"
     api_key: str | None = Field(default=None, repr=False)
+    username: str | None = Field(default=None, repr=False)
+    password: str | None = Field(default=None, repr=False)
+    login_url: str | None = None
     credential_scopes: list[str] = Field(default_factory=list)
     project_id: str | None = None
     agent_id: str | None = None
@@ -1904,6 +1907,28 @@ def connect_service(
             secret_ref = secret_vault.store_connector_secret(
                 service_id=service_id,
                 secret_value=connection.api_key,
+                actor_id=actor_id,
+            )
+        if connection.mode == "credentials":
+            username = (connection.username or "").strip()
+            if not username or not connection.password:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "username and password are required for credential connector connections"
+                    ),
+                )
+            secret_ref = secret_vault.store_connector_secret(
+                service_id=service_id,
+                secret_value=json.dumps(
+                    {
+                        "type": "username_password",
+                        "username": username,
+                        "password": connection.password,
+                        "login_url": connection.login_url,
+                    },
+                    separators=(",", ":"),
+                ),
                 actor_id=actor_id,
             )
         if connection.mode == "oauth":

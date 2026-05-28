@@ -4311,6 +4311,11 @@ def validate_connector_connection_request(
             status_code=400,
             detail="API key connector connections require secret_ref",
         )
+    if connection_request.mode == "credentials" and connection_request.secret_ref is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Credential connector connections require secret_ref",
+        )
     if connection_request.mode == "oauth" and connection_request.setup_url is None:
         raise HTTPException(
             status_code=400,

@@ -325,7 +325,7 @@ class SecretReference(SynarchModel):
 class ConnectorConnectionRecord(SynarchModel):
     id: str = Field(default_factory=lambda: new_id("connector_connection"))
     service_id: str
-    mode: Literal["no_key", "api_key", "oauth"]
+    mode: Literal["no_key", "api_key", "oauth", "credentials"]
     status: Literal["active", "needs_oauth", "disabled"] = "active"
     credential_scopes: list[str] = Field(default_factory=list)
     secret_ref: str | None = None
@@ -772,7 +772,7 @@ class CredentialGrantApplication(SynarchModel):
 
 class ConnectorConnectionRequest(SynarchModel):
     service_id: str
-    mode: Literal["no_key", "api_key", "oauth"]
+    mode: Literal["no_key", "api_key", "oauth", "credentials"]
     credential_scopes: list[str] = Field(default_factory=list)
     secret_ref: str | None = None
     secret_fingerprint: str | None = None
